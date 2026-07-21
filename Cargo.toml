@@ -1,0 +1,46 @@
+[workspace]
+members = [
+    "crates/ffi-pam",
+    "crates/jw-agentd",
+    "crates/jw-authd",
+    "crates/jw-contracts",
+    "crates/jw-opsd",
+    "xtask",
+]
+resolver = "3"
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.96"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+unused_must_use = "deny"
+
+[workspace.lints.clippy]
+dbg_macro = "deny"
+expect_used = "deny"
+panic = "deny"
+todo = "deny"
+unimplemented = "deny"
+unwrap_used = "deny"
+
+[workspace.dependencies]
+axum = { version = "=0.8.9", default-features = false }
+base64 = { version = "=0.22.1", default-features = false }
+getrandom = { version = "=0.4.3", default-features = false }
+libc = { version = "=0.2.186", default-features = false }
+nix = { version = "=0.31.3", default-features = false }
+rusqlite = { version = "=0.40.1", default-features = false, features = ["libsqlite3-sys"] }
+serde = { version = "=1.0.229", default-features = false }
+serde_json = { version = "=1.0.151", default-features = false }
+sha2 = { version = "=0.11.0", default-features = false }
+subtle = { version = "=2.6.1", default-features = false }
+time = { version = "=0.3.54", default-features = false }
+tokio = { version = "=1.53.1", default-features = false }
+tower-http = { version = "=0.7.0", default-features = false }
+utoipa = { version = "=5.5.0", default-features = false }
+zeroize = { version = "=1.9.0", default-features = false }
+
+[profile.release]
+panic = "abort"

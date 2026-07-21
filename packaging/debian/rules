@@ -1,0 +1,11 @@
+#!/usr/bin/make -f
+
+%:
+	dh $@
+
+override_dh_auto_build:
+	cargo build --locked --release --workspace --exclude xtask
+	test -f apps/web/dist/index.html
+
+override_dh_strip:
+	dh_strip --no-automatic-dbgsym

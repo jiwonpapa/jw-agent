@@ -1,0 +1,15 @@
+[Unit]
+Description=JW Agent PAM authentication socket
+
+[Socket]
+ListenStream=/run/jw-agent/authd.sock
+Accept=yes
+SocketUser=jw-agent
+SocketGroup=jw-agent
+SocketMode=0600
+RemoveOnStop=yes
+Backlog=32
+MaxConnections=32
+
+[Install]
+WantedBy=sockets.target

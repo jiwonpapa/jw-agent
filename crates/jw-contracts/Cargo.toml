@@ -1,0 +1,15 @@
+[package]
+name = "jw-contracts"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+serde = { workspace = true, features = ["derive", "std"] }
+serde_json = { workspace = true, features = ["std"] }
+utoipa = { workspace = true, features = ["macros"] }
+zeroize = { workspace = true, features = ["alloc"] }

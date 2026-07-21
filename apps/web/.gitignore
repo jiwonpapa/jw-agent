@@ -1,0 +1,6 @@
+node_modules/
+dist/
+src/styles/generated.css
+playwright-report/
+test-results/
+coverage/

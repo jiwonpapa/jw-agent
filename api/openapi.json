@@ -1,0 +1,1192 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "jw-agentd",
+    "description": "",
+    "license": {
+      "name": ""
+    },
+    "version": "0.1.0"
+  },
+  "paths": {
+    "/api/v1/auth/login": {
+      "post": {
+        "tags": [],
+        "operationId": "login",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoginRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Authenticated session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Generic authentication failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Authentication rate limited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "PAM unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/logout": {
+      "post": {
+        "tags": [],
+        "operationId": "logout",
+        "responses": {
+          "204": {
+            "description": "Session revoked"
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "CSRF rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/reauth": {
+      "post": {
+        "tags": [],
+        "operationId": "reauthenticate",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReauthRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Rotated session and single-use reauthentication claim",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReauthView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Generic authentication failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "CSRF or subject mismatch",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Authentication rate limited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/session": {
+      "get": {
+        "tags": [],
+        "operationId": "session",
+        "responses": {
+          "200": {
+            "description": "Current session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/capabilities": {
+      "get": {
+        "tags": [],
+        "operationId": "capabilities",
+        "responses": {
+          "200": {
+            "description": "Read-only capability view",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CapabilityView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/health": {
+      "get": {
+        "tags": [],
+        "operationId": "health",
+        "responses": {
+          "200": {
+            "description": "Agent health",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Ingress policy rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/host": {
+      "get": {
+        "tags": [],
+        "operationId": "host",
+        "responses": {
+          "200": {
+            "description": "Host observation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HostObservation"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/integrations": {
+      "get": {
+        "tags": [],
+        "operationId": "integrations",
+        "responses": {
+          "200": {
+            "description": "Curated integration catalog",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IntegrationCatalogView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/services": {
+      "get": {
+        "tags": [],
+        "operationId": "services",
+        "responses": {
+          "200": {
+            "description": "Observed services",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServicesView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/services/nginx/sites": {
+      "get": {
+        "tags": [],
+        "operationId": "nginx_sites",
+        "responses": {
+          "200": {
+            "description": "Nginx site inventory",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NginxSitesView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/settings/access": {
+      "get": {
+        "tags": [],
+        "operationId": "access_settings",
+        "responses": {
+          "200": {
+            "description": "Access settings",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccessSettingsView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/settings/access/additional-auth": {
+      "put": {
+        "tags": [],
+        "operationId": "update_additional_auth",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateAdditionalAuthRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Updated access settings",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccessSettingsView"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role, CSRF, or claim rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "428": {
+            "description": "Recent PAM reauthentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "AccessSettingsView": {
+        "type": "object",
+        "required": [
+          "ingress",
+          "recoveryOrigin",
+          "additionalAuthPolicy",
+          "additionalAuthProvider",
+          "mutationApprovalAvailable",
+          "assurance"
+        ],
+        "properties": {
+          "additionalAuthPolicy": {
+            "$ref": "#/components/schemas/AdditionalAuthPolicy"
+          },
+          "additionalAuthProvider": {
+            "$ref": "#/components/schemas/AdditionalAuthProviderStatus"
+          },
+          "assurance": {
+            "$ref": "#/components/schemas/AssuranceView"
+          },
+          "ingress": {
+            "$ref": "#/components/schemas/IngressChannel"
+          },
+          "mutationApprovalAvailable": {
+            "type": "boolean"
+          },
+          "publicHost": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "recoveryOrigin": {
+            "type": "string"
+          }
+        }
+      },
+      "AdditionalAuthPolicy": {
+        "type": "string",
+        "enum": [
+          "disabled",
+          "risky_operations",
+          "all_mutations"
+        ]
+      },
+      "AdditionalAuthProviderStatus": {
+        "type": "string",
+        "enum": [
+          "not_implemented",
+          "not_configured",
+          "ready"
+        ]
+      },
+      "AssuranceLevel": {
+        "type": "string",
+        "enum": [
+          "g0_observe_only",
+          "g1_verified_action",
+          "g2_reversible_config",
+          "g3_restore_validated_data"
+        ]
+      },
+      "AssuranceView": {
+        "type": "object",
+        "required": [
+          "level",
+          "rollbackSupport",
+          "operationAvailable",
+          "scope",
+          "excludedEffects",
+          "applyVerifier",
+          "rollbackVerifier"
+        ],
+        "properties": {
+          "applyVerifier": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "excludedEffects": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "level": {
+            "$ref": "#/components/schemas/AssuranceLevel"
+          },
+          "operationAvailable": {
+            "type": "boolean"
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "rollbackSupport": {
+            "$ref": "#/components/schemas/RollbackSupport"
+          },
+          "rollbackVerifier": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "scope": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "CapabilityStatus": {
+        "type": "string",
+        "enum": [
+          "available",
+          "unavailable",
+          "unsupported"
+        ]
+      },
+      "CapabilityView": {
+        "type": "object",
+        "required": [
+          "opsd",
+          "readOnly",
+          "supportedOperations",
+          "forensicLockdown"
+        ],
+        "properties": {
+          "forensicLockdown": {
+            "type": "boolean"
+          },
+          "opsd": {
+            "$ref": "#/components/schemas/CapabilityStatus"
+          },
+          "readOnly": {
+            "type": "boolean"
+          },
+          "supportedOperations": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "DiskObservation": {
+        "type": "object",
+        "required": [
+          "totalBytes",
+          "availableBytes"
+        ],
+        "properties": {
+          "availableBytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "totalBytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "HealthStatus": {
+        "type": "string",
+        "enum": [
+          "ok",
+          "degraded"
+        ]
+      },
+      "HealthView": {
+        "type": "object",
+        "required": [
+          "status",
+          "version",
+          "ingress",
+          "pam",
+          "opsd"
+        ],
+        "properties": {
+          "ingress": {
+            "$ref": "#/components/schemas/IngressChannel"
+          },
+          "opsd": {
+            "$ref": "#/components/schemas/CapabilityStatus"
+          },
+          "pam": {
+            "$ref": "#/components/schemas/CapabilityStatus"
+          },
+          "status": {
+            "$ref": "#/components/schemas/HealthStatus"
+          },
+          "version": {
+            "type": "string"
+          }
+        }
+      },
+      "HostObservation": {
+        "type": "object",
+        "required": [
+          "observedAt",
+          "status",
+          "architecture"
+        ],
+        "properties": {
+          "architecture": {
+            "type": "string"
+          },
+          "hostname": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "kernelRelease": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "loadAverageOne": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "memory": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/MemoryObservation"
+              }
+            ]
+          },
+          "observedAt": {
+            "type": "string"
+          },
+          "osId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "osPrettyName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "osVersionId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "rootDisk": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/DiskObservation"
+              }
+            ]
+          },
+          "status": {
+            "$ref": "#/components/schemas/ObservationStatus"
+          },
+          "uptimeSeconds": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "IngressChannel": {
+        "type": "string",
+        "enum": [
+          "public",
+          "recovery"
+        ]
+      },
+      "IntegrationCatalogView": {
+        "type": "object",
+        "required": [
+          "observedAt",
+          "status",
+          "entries"
+        ],
+        "properties": {
+          "entries": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/IntegrationView"
+            }
+          },
+          "observedAt": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ObservationStatus"
+          }
+        }
+      },
+      "IntegrationCategory": {
+        "type": "string",
+        "enum": [
+          "security",
+          "provisioning",
+          "media",
+          "notification"
+        ]
+      },
+      "IntegrationId": {
+        "type": "string",
+        "enum": [
+          "vps_guard",
+          "g7_installer",
+          "g7_media_booster",
+          "g7_telegram_devops"
+        ]
+      },
+      "IntegrationInstallStatus": {
+        "type": "string",
+        "enum": [
+          "blocked",
+          "available"
+        ]
+      },
+      "IntegrationLifecycleStatus": {
+        "type": "string",
+        "enum": [
+          "unknown",
+          "not_installed",
+          "needs_setup",
+          "installed",
+          "partial"
+        ]
+      },
+      "IntegrationView": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "summary",
+          "category",
+          "lifecycleStatus",
+          "installStatus",
+          "detectedComponents",
+          "installBlockers",
+          "resourceClaims",
+          "setupSteps",
+          "sourceUrl",
+          "assurance"
+        ],
+        "properties": {
+          "assurance": {
+            "$ref": "#/components/schemas/AssuranceView"
+          },
+          "category": {
+            "$ref": "#/components/schemas/IntegrationCategory"
+          },
+          "detectedComponents": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "id": {
+            "$ref": "#/components/schemas/IntegrationId"
+          },
+          "installBlockers": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "installStatus": {
+            "$ref": "#/components/schemas/IntegrationInstallStatus"
+          },
+          "lifecycleStatus": {
+            "$ref": "#/components/schemas/IntegrationLifecycleStatus"
+          },
+          "name": {
+            "type": "string"
+          },
+          "resourceClaims": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "setupSteps": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "sourceUrl": {
+            "type": "string"
+          },
+          "summary": {
+            "type": "string"
+          }
+        }
+      },
+      "LoginRequest": {
+        "type": "object",
+        "required": [
+          "username",
+          "password"
+        ],
+        "properties": {
+          "password": {
+            "type": "string",
+            "format": "password",
+            "maxLength": 1024
+          },
+          "username": {
+            "type": "string",
+            "maxLength": 64
+          }
+        },
+        "additionalProperties": false
+      },
+      "MemoryObservation": {
+        "type": "object",
+        "required": [
+          "totalBytes",
+          "availableBytes"
+        ],
+        "properties": {
+          "availableBytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "totalBytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "NginxSiteObservation": {
+        "type": "object",
+        "required": [
+          "name",
+          "available",
+          "enabled",
+          "protected",
+          "assurance"
+        ],
+        "properties": {
+          "assurance": {
+            "$ref": "#/components/schemas/AssuranceView"
+          },
+          "available": {
+            "type": "boolean"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "name": {
+            "type": "string"
+          },
+          "protected": {
+            "type": "boolean"
+          }
+        }
+      },
+      "NginxSitesView": {
+        "type": "object",
+        "required": [
+          "observedAt",
+          "status",
+          "sites",
+          "truncated"
+        ],
+        "properties": {
+          "observedAt": {
+            "type": "string"
+          },
+          "sites": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NginxSiteObservation"
+            }
+          },
+          "status": {
+            "$ref": "#/components/schemas/ObservationStatus"
+          },
+          "truncated": {
+            "type": "boolean"
+          }
+        }
+      },
+      "ObservationStatus": {
+        "type": "string",
+        "enum": [
+          "observed",
+          "partial",
+          "not_installed",
+          "unsupported_platform"
+        ]
+      },
+      "ProblemDetails": {
+        "type": "object",
+        "required": [
+          "type",
+          "title",
+          "status",
+          "code"
+        ],
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "status": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "title": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string"
+          }
+        }
+      },
+      "ReauthPurpose": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "planHash",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "operation"
+                ]
+              },
+              "planHash": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "targetPolicy",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "security_policy_change"
+                ]
+              },
+              "targetPolicy": {
+                "$ref": "#/components/schemas/AdditionalAuthPolicy"
+              }
+            }
+          }
+        ]
+      },
+      "ReauthRequest": {
+        "type": "object",
+        "required": [
+          "password",
+          "purpose"
+        ],
+        "properties": {
+          "password": {
+            "type": "string",
+            "format": "password",
+            "maxLength": 1024
+          },
+          "purpose": {
+            "$ref": "#/components/schemas/ReauthPurpose"
+          }
+        },
+        "additionalProperties": false
+      },
+      "ReauthView": {
+        "type": "object",
+        "required": [
+          "session",
+          "reauthToken",
+          "expiresAt"
+        ],
+        "properties": {
+          "expiresAt": {
+            "type": "string"
+          },
+          "reauthToken": {
+            "type": "string",
+            "format": "password"
+          },
+          "session": {
+            "$ref": "#/components/schemas/SessionView"
+          }
+        }
+      },
+      "Role": {
+        "type": "string",
+        "enum": [
+          "admin",
+          "operator",
+          "viewer"
+        ]
+      },
+      "RollbackSupport": {
+        "type": "string",
+        "enum": [
+          "not_applicable",
+          "not_guaranteed",
+          "automatic_bounded",
+          "restore_validated"
+        ]
+      },
+      "ServiceSummary": {
+        "type": "object",
+        "required": [
+          "service",
+          "status",
+          "readOnly"
+        ],
+        "properties": {
+          "readOnly": {
+            "type": "boolean"
+          },
+          "service": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ObservationStatus"
+          }
+        }
+      },
+      "ServicesView": {
+        "type": "object",
+        "required": [
+          "observedAt",
+          "services"
+        ],
+        "properties": {
+          "observedAt": {
+            "type": "string"
+          },
+          "services": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ServiceSummary"
+            }
+          }
+        }
+      },
+      "SessionView": {
+        "type": "object",
+        "required": [
+          "subject",
+          "ingress",
+          "authenticatedAt",
+          "idleExpiresAt",
+          "absoluteExpiresAt",
+          "csrfToken",
+          "additionalAuthPolicy"
+        ],
+        "properties": {
+          "absoluteExpiresAt": {
+            "type": "string"
+          },
+          "additionalAuthPolicy": {
+            "$ref": "#/components/schemas/AdditionalAuthPolicy"
+          },
+          "authenticatedAt": {
+            "type": "string"
+          },
+          "csrfToken": {
+            "type": "string",
+            "format": "password"
+          },
+          "idleExpiresAt": {
+            "type": "string"
+          },
+          "ingress": {
+            "$ref": "#/components/schemas/IngressChannel"
+          },
+          "subject": {
+            "$ref": "#/components/schemas/Subject"
+          }
+        }
+      },
+      "Subject": {
+        "type": "object",
+        "required": [
+          "uid",
+          "username",
+          "role"
+        ],
+        "properties": {
+          "role": {
+            "$ref": "#/components/schemas/Role"
+          },
+          "uid": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "username": {
+            "type": "string"
+          }
+        }
+      },
+      "UpdateAdditionalAuthRequest": {
+        "type": "object",
+        "required": [
+          "policy"
+        ],
+        "properties": {
+          "policy": {
+            "$ref": "#/components/schemas/AdditionalAuthPolicy"
+          },
+          "reauthToken": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "password"
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "tags": [
+    {
+      "name": "jw-agent",
+      "description": "JW Agent local management API"
+    }
+  ]
+}

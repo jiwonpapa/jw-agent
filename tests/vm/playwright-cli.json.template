@@ -1,0 +1,12 @@
+{
+  "browser": {
+    "launchOptions": {
+      "headless": true,
+      "args": ["--host-resolver-rules=MAP jw-agent-p1.test __VM_IP__"]
+    },
+    "contextOptions": {
+      "ignoreHTTPSErrors": true,
+      "viewport": { "width": 1440, "height": 900 }
+    }
+  }
+}

@@ -1,0 +1,34 @@
+# Opt-in template. Replace every __PLACEHOLDER__ before enabling this vhost.
+limit_req_zone $binary_remote_addr zone=jw_agent_login:10m rate=10r/m;
+
+server {
+    listen 80;
+    listen [::]:80;
+    server_name __JW_AGENT_FQDN__;
+
+    return 308 https://$host$request_uri;
+}
+
+server {
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
+    server_name __JW_AGENT_FQDN__;
+
+    ssl_certificate __FULLCHAIN_PATH__;
+    ssl_certificate_key __PRIVATE_KEY_PATH__;
+
+    client_max_body_size 16k;
+    client_body_timeout 10s;
+    client_header_timeout 10s;
+    send_timeout 30s;
+
+    location ~ ^/api/v1/auth/(login|reauth)$ {
+        limit_req zone=jw_agent_login burst=5 nodelay;
+        limit_req_status 429;
+        include /usr/share/jw-agent/nginx/proxy-common.conf;
+    }
+
+    location / {
+        include /usr/share/jw-agent/nginx/proxy-common.conf;
+    }
+}

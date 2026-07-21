@@ -1,0 +1,12 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: jw-agent
+Source: https://github.com/jiwonpapa/jw-agent
+
+Files: *
+Copyright: 2026 JW Agent contributors
+License: LicenseRef-Pending
+
+License: LicenseRef-Pending
+ This P1 development snapshot has not been released under an open-source or
+ redistribution license. No permission is granted beyond rights provided by
+ applicable law. A release license must be selected explicitly before P3.

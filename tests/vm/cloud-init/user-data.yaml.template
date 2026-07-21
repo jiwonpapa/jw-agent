@@ -1,0 +1,20 @@
+#cloud-config
+hostname: jw-agent-p1
+preserve_hostname: false
+ssh_pwauth: false
+disable_root: true
+users:
+  - name: neojins
+    gecos: JW Agent VM Operator
+    groups: [adm, sudo]
+    shell: /bin/bash
+    sudo: ['ALL=(ALL) NOPASSWD:ALL']
+    lock_passwd: true
+    ssh_authorized_keys:
+      - __SSH_PUBLIC_KEY__
+package_update: false
+packages:
+  - qemu-guest-agent
+runcmd:
+  - systemctl enable --now qemu-guest-agent
+  - [cloud-init-per, once, jw-agent-ready, touch, /var/tmp/jw-agent-vm-ready]

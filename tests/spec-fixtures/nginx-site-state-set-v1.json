@@ -1,0 +1,35 @@
+{
+  "schemaVersion": 1,
+  "operationType": "nginx.site_state.set/v1",
+  "layoutId": "ubuntu-nginx-sites-v1",
+  "siteIdentityVector": {
+    "basename": "example.com",
+    "siteId": "ngs_tQ9Xog5xTe1fh8OsTIdiw6xr"
+  },
+  "cases": [
+    {
+      "id": "enable-success",
+      "availableDigest": "sha256:355da02c030cafce7f50bba6a64ec89983df42d6d1861cb9c9a8f38db15f674d",
+      "beforeLinkStateDigest": "sha256:a69e7381b4b12f0aaec7bad71ecbb76d7dfb010139c270643f1abc3713869064",
+      "targetState": "enabled",
+      "expectedTerminalState": "SUCCEEDED",
+      "expectedAssurance": "g2_reversible_config"
+    },
+    {
+      "id": "syntax-failure-rolls-back",
+      "availableDigest": "sha256:355da02c030cafce7f50bba6a64ec89983df42d6d1861cb9c9a8f38db15f674d",
+      "beforeLinkStateDigest": "sha256:a69e7381b4b12f0aaec7bad71ecbb76d7dfb010139c270643f1abc3713869064",
+      "targetState": "enabled",
+      "injectFailureAt": "NGINX_CONFIG_TEST",
+      "expectedTerminalState": "ROLLED_BACK",
+      "expectedAssurance": "g2_reversible_config"
+    },
+    {
+      "id": "protected-management-site-rejected",
+      "basename": "jw-agent-management.conf",
+      "targetState": "disabled",
+      "expectedTerminalState": "REJECTED",
+      "expectedError": "protected_resource"
+    }
+  ]
+}

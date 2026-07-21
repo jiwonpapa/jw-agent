@@ -1,0 +1,19 @@
+[package]
+name = "jw-authd"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+ffi-pam = { path = "../ffi-pam" }
+jw-contracts = { path = "../jw-contracts" }
+serde_json = { workspace = true, features = ["std"] }
+time = { workspace = true, features = ["formatting", "std"] }
+zeroize = { workspace = true, features = ["alloc"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+nix = { workspace = true, features = ["resource", "socket", "user"] }

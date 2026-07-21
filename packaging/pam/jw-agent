@@ -1,0 +1,5 @@
+#%PAM-1.0
+# Deliberately local-account-only for P1. authd separately applies JW Agent roles.
+auth required pam_faildelay.so delay=2000000
+auth required pam_unix.so try_first_pass
+account required pam_unix.so

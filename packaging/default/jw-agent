@@ -1,0 +1,10 @@
+# Public HTTPS remains disabled when this value is empty.
+JW_AGENT_PUBLIC_HOST=
+JW_AGENT_RECOVERY_ADDRESS=127.0.0.1:8787
+JW_AGENT_RECOVERY_ORIGIN=http://127.0.0.1:8787
+JW_AGENT_PROXY_SOCKET=/run/jw-agent-proxy/agentd.sock
+JW_AGENT_AUTH_SOCKET=/run/jw-agent/authd.sock
+JW_AGENT_OPS_SOCKET=/run/jw-agent/opsd.sock
+JW_AGENT_DATABASE=/var/lib/jw-agent/agentd/agentd.sqlite3
+JW_AGENT_WEB_ROOT=/usr/share/jw-agent/web
+JW_OPSD_SOCKET=/run/jw-agent/opsd.sock

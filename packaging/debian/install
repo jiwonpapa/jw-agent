@@ -1,0 +1,14 @@
+target/release/jw-agentd usr/lib/jw-agent/
+target/release/jw-authd usr/lib/jw-agent/
+target/release/jw-opsd usr/lib/jw-agent/
+apps/web/dist/* usr/share/jw-agent/web/
+packaging/default/jw-agent etc/default/
+packaging/nginx/jw-agent-management.conf.template usr/share/jw-agent/nginx/
+packaging/nginx/proxy-common.conf usr/share/jw-agent/nginx/
+packaging/pam/jw-agent etc/pam.d/
+packaging/systemd/jw-agentd.service usr/lib/systemd/system/
+packaging/systemd/jw-authd.socket usr/lib/systemd/system/
+packaging/systemd/jw-authd@.service usr/lib/systemd/system/
+packaging/systemd/jw-opsd.service usr/lib/systemd/system/
+packaging/sysusers/jw-agent.conf usr/lib/sysusers.d/
+packaging/tmpfiles/jw-agent.conf usr/lib/tmpfiles.d/

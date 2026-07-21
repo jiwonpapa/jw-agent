@@ -1,0 +1,21 @@
+jw-agent (0.1.0~p1.3) noble; urgency=medium
+
+  * Record the P1 source baseline as a license-pending development snapshot.
+  * Extend VM proof for native links, PAM policy, and SSH recovery isolation.
+
+ -- JW Agent Maintainers <maintainers@example.invalid>  Tue, 21 Jul 2026 16:35:17 +0900
+
+jw-agent (0.1.0~p1.2) noble; urgency=medium
+
+  * Prevent expired sessions from nesting login return targets.
+  * Keep same-origin login paths out of post-authentication redirects.
+
+ -- JW Agent Maintainers <maintainers@example.invalid>  Tue, 21 Jul 2026 15:28:00 +0900
+
+jw-agent (0.1.0~p1.1) noble; urgency=medium
+
+  * Initial Ubuntu 24.04 P1 verification package.
+  * Separate public proxy and privileged operation socket groups.
+  * Add bounded auth socket, strict public edge, and SPA fallback fixes.
+
+ -- JW Agent Maintainers <maintainers@example.invalid>  Tue, 21 Jul 2026 14:20:00 +0900

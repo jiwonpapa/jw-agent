@@ -1,0 +1,4 @@
+subjectAltName=DNS:__FQDN__
+basicConstraints=critical,CA:FALSE
+keyUsage=critical,digitalSignature
+extendedKeyUsage=serverAuth

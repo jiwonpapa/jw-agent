@@ -1,0 +1,8 @@
+network:
+  version: 2
+  ethernets:
+    jw_agent_lan:
+      match:
+        name: enp2s0
+      dhcp4: true
+      optional: true

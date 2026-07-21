@@ -1,0 +1,14 @@
+Source: jw-agent
+Section: admin
+Priority: optional
+Maintainer: JW Agent Maintainers <maintainers@example.invalid>
+Build-Depends: debhelper-compat (= 13), cargo, rustc, libpam0g-dev, libsqlite3-dev, pkg-config
+Standards-Version: 4.6.2
+Rules-Requires-Root: no
+
+Package: jw-agent
+Architecture: any
+Depends: ${misc:Depends}, ${shlibs:Depends}, libpam0g, libsqlite3-0, nginx, systemd, systemd-sysv
+Description: safe read-only Ubuntu server care console
+ JW Agent provides Linux PAM login, a server-side session console, host and
+ Nginx observation, a loopback recovery path, and an opt-in public HTTPS edge.

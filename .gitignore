@@ -1,0 +1,8 @@
+/target/
+/artifacts/
+/output/
+/apps/web/node_modules/
+/apps/web/dist/
+/apps/web/src/styles/generated.css
+.DS_Store
+*.swp
