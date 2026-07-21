@@ -2,7 +2,7 @@
 
 Ubuntu 24.04 LTS 서버의 **범용 서비스 설정·유지보수 작업을 안전하게 수행하는 단일 서버 우선 관리 콘솔**입니다.
 
-현재 단계는 `P2 Safe local operations`입니다. P1 기반 위에 durable safety kernel, Nginx site state와 활성 Nginx 설정 파일의 제한된 G2 편집을 Ubuntu VM에서 검증했습니다. Certbot·terminal·SFTP를 포함한 P2 전체 완료는 아직 주장하지 않습니다.
+현재 단계는 `P2 Safe local operations`입니다. durable safety kernel, Nginx G2 작업과 Certbot one-shot 권한 경계를 Ubuntu VM에서 검증했습니다. Certbot 발급·attach와 terminal·SFTP를 포함한 P2 전체 완료는 아직 주장하지 않습니다.
 
 이 저장소의 P1 기준점은 공개 개발 스냅샷이며 아직 오픈소스 릴리스가 아닙니다. `LICENSE`가 추가되기 전에는 사용·수정·재배포 권한을 부여하지 않으며, 정식 라이선스는 P3 release 준비에서 명시적으로 결정합니다.
 

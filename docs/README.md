@@ -34,6 +34,7 @@ Last reviewed: 2026-07-21
 - [공개 HTTPS ingress](20-architecture/public-ingress.md)
 - [중앙관제 후속 경계](20-architecture/central-future.md)
 - [Local maintenance surfaces ADR](90-specs/adr/0010-local-maintenance-surfaces.md)
+- [Certbot one-shot network runner ADR](90-specs/adr/0011-certbot-network-runner.md)
 
 ## 30 Domain
 

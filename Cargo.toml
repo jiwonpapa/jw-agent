@@ -3,6 +3,7 @@ members = [
     "crates/ffi-pam",
     "crates/jw-agentd",
     "crates/jw-authd",
+    "crates/jw-certd",
     "crates/jw-contracts",
     "crates/jw-opsd",
     "xtask",

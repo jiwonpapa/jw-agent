@@ -1,0 +1,35 @@
+[Unit]
+Description=JW Agent one-shot fixed Certbot worker
+Requires=jw-certd.socket
+
+[Service]
+Type=simple
+User=root
+Group=root
+ExecStart=/usr/lib/jw-agent/jw-certd
+StandardInput=socket
+StandardOutput=socket
+StandardError=journal
+TimeoutStartSec=13min
+UMask=0077
+NoNewPrivileges=yes
+PrivateDevices=yes
+PrivateTmp=yes
+StateDirectory=letsencrypt
+LogsDirectory=letsencrypt
+ProtectClock=yes
+ProtectControlGroups=yes
+ProtectHome=yes
+ProtectHostname=yes
+ProtectKernelLogs=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+ProtectSystem=strict
+ReadWritePaths=/etc/letsencrypt /var/lib/letsencrypt /var/log/letsencrypt /var/lib/jw-agent/acme-webroot /run/jw-agent-certd
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+SystemCallArchitectures=native

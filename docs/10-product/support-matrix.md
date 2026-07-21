@@ -32,7 +32,7 @@ Last reviewed: 2026-07-21
 - 버전 문자열만 보고 설정 layout을 추측하지 않습니다.
 - custom source build, containerized service, non-standard path는 write `UNSUPPORTED`입니다.
 - LDAP·SSSD·Kerberos·multi-prompt PAM은 별도 VM 증거 전 `UNVERIFIED`입니다.
-- P1은 Certbot command를 호출하지 않습니다. P2 guided issuance·renewal은 해당 capability와 VM gate 전까지 `UNSUPPORTED`입니다.
+- P2C one-shot runner와 renewal dry-run command boundary만 VM에서 검증했습니다. guided issuance·attach·renewal UI는 해당 operation fault gate 전까지 `UNSUPPORTED`입니다.
 - `nginx.site_state.set/v1`과 활성 standard-layout 리소스의 `service.config_file.set/v1`은 `SUPPORTED + VM_PASS + G2`입니다.
 - 비활성 site, 24 KiB 초과, UTF-8이 아닌 파일, NUL·보호 marker, 비표준 owner/mode·symlink·hardlink는 설정 편집 `UNSUPPORTED`입니다.
 - terminal·SFTP는 OpenSSH 발견, non-root account, same-origin WSS와 session policy가 모두 충족될 때만 capability를 반환합니다.

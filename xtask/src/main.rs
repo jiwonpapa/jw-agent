@@ -131,6 +131,7 @@ const REQUIRED_FOUNDATION_PATHS: &[&str] = &[
     "docs/90-specs/adr/0008-p1-storage-and-contract-generation.md",
     "docs/90-specs/adr/0009-p2-safety-kernel-decisions.md",
     "docs/90-specs/adr/0010-local-maintenance-surfaces.md",
+    "docs/90-specs/adr/0011-certbot-network-runner.md",
     "tests/spec-fixtures/nginx-site-state-set-v1.json",
 ];
 
@@ -146,6 +147,7 @@ const P1_REQUIRED_PATHS: &[&str] = &[
     "crates/jw-agentd/src/main.rs",
     "crates/jw-agentd/src/integration_catalog.rs",
     "crates/jw-authd/src/main.rs",
+    "crates/jw-certd/src/main.rs",
     "crates/jw-contracts/src/lib.rs",
     "crates/jw-opsd/src/main.rs",
     "packaging/debian/control",
@@ -158,6 +160,8 @@ const P1_REQUIRED_PATHS: &[&str] = &[
     "packaging/systemd/jw-agentd.service",
     "packaging/systemd/jw-authd.socket",
     "packaging/systemd/jw-authd@.service",
+    "packaging/systemd/jw-certd.socket",
+    "packaging/systemd/jw-certd@.service",
     "packaging/systemd/jw-opsd.service",
     "packaging/sysusers/jw-agent.conf",
     "packaging/tmpfiles/jw-agent.conf",
@@ -171,6 +175,8 @@ const P1_REQUIRED_PATHS: &[&str] = &[
 ];
 
 const P2_REQUIRED_PATHS: &[&str] = &[
+    "crates/jw-certd/src/lib.rs",
+    "crates/jw-contracts/src/certificate.rs",
     "crates/jw-contracts/src/operation.rs",
     "crates/jw-opsd/migrations/0001_initial.sql",
     "crates/jw-opsd/migrations/0002_managed_config.sql",
@@ -484,6 +490,17 @@ const GATES: &[Gate] = &[
         evidence: "checkpoint deletion disabled mutations and restoration recovered service",
         failure_policy: "fail lane if deleted evidence leaves mutation capability available",
         run: vm::gate_p2_forensic_lockdown,
+    },
+    Gate {
+        id: "VM-P2-CERTD-BOUNDARY",
+        owner: "Certificate Lifecycle Maintainer",
+        scope: "root-only one-shot Certbot runner framing, command class, and cleanup",
+        inputs: "installed P2C foundation package, certbot, root-only UDS, systemd sandbox",
+        lanes: P2_VM_LANES,
+        timeout_seconds: 120,
+        evidence: "non-root denial, expired rejection, bounded renewal dry-run evidence, and one-shot cleanup passed",
+        failure_policy: "fail lane on peer widening, invalid request execution, raw output response, or persistent worker/config",
+        run: vm::gate_p2_certd_boundary,
     },
     Gate {
         id: "VM-SECRET-SCAN",

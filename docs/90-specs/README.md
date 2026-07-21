@@ -41,6 +41,7 @@ Last reviewed: 2026-07-21
 - [ADR-0008 P1 storage and contract generation](adr/0008-p1-storage-and-contract-generation.md) — Accepted
 - [ADR-0009 P2 safety kernel decisions](adr/0009-p2-safety-kernel-decisions.md) — Accepted
 - [ADR-0010 Local maintenance surfaces and P2 entry](adr/0010-local-maintenance-surfaces.md) — Accepted
+- [ADR-0011 One-shot Certbot network runner](adr/0011-certbot-network-runner.md) — Accepted
 
 ## Spec template requirements
 

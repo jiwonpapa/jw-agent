@@ -8,7 +8,7 @@ Rules-Requires-Root: no
 
 Package: jw-agent
 Architecture: any
-Depends: ${misc:Depends}, ${shlibs:Depends}, libpam0g, libsqlite3-0, nginx, systemd, systemd-sysv
+Depends: ${misc:Depends}, ${shlibs:Depends}, certbot, libpam0g, libsqlite3-0, nginx, systemd, systemd-sysv
 Description: safe Ubuntu server care console with bounded rollback
  JW Agent provides Linux PAM login, a server-side session console, host and
  Nginx observation, typed reversible operations, a loopback recovery path, and

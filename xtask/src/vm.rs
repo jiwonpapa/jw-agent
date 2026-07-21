@@ -78,8 +78,10 @@ cmp -s "$tmpdir/etc/pam.d/jw-agent" /etc/pam.d/jw-agent
 ! grep -Eq '^[[:space:]]*(auth|account)[[:space:]].*pam_faillock' /etc/pam.d/jw-agent
 dpkg-query -W -f='${{db:Status-Abbrev}}' libpam0g | grep -q '^ii'
 dpkg-query -W -f='${{db:Status-Abbrev}}' libsqlite3-0 | grep -q '^ii'
+dpkg-query -W -f='${{db:Status-Abbrev}}' certbot | grep -q '^ii'
 ldd /usr/lib/jw-agent/jw-authd | grep -q 'libpam\.so\.0'
 ldd /usr/lib/jw-agent/jw-agentd | grep -q 'libsqlite3\.so\.0'
+test -x /usr/lib/jw-agent/jw-certd
 grep -Fq 'client_max_body_size 64k;' "$tmpdir/usr/share/jw-agent/nginx/jw-agent-management.conf.template"
 "#
     );
@@ -87,7 +89,7 @@ grep -Fq 'client_max_body_size 64k;' "$tmpdir/usr/share/jw-agent/nginx/jw-agent-
     require_success(&native, "native link and PAM package fixture", false)?;
 
     let script = r#"set -eu
-for unit in jw-agentd.service jw-opsd.service jw-authd.socket; do
+for unit in jw-agentd.service jw-opsd.service jw-authd.socket jw-certd.socket; do
     test "$(systemctl is-enabled "$unit")" = enabled
     test "$(systemctl is-active "$unit")" = active
 done
@@ -100,10 +102,15 @@ test "$(systemctl show -p ProtectSystem --value jw-agentd.service)" = strict
 test "$(systemctl show -p ProtectSystem --value jw-opsd.service)" = strict
 test "$(systemctl show -p MemoryDenyWriteExecute --value jw-agentd.service)" = yes
 test "$(systemctl show -p MemoryDenyWriteExecute --value jw-opsd.service)" = yes
+systemctl cat jw-opsd.service | grep -Fq 'IPAddressDeny=any'
+systemctl cat jw-certd@.service | grep -Fq 'RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6'
+! systemctl cat jw-certd@.service | grep -Fq 'IPAddressDeny=any'
 sudo test -S /run/jw-agent/authd.sock
+sudo test -S /run/jw-agent-certd/certd.sock
 sudo test -S /run/jw-agent/opsd.sock
 sudo test -S /run/jw-agent-proxy/agentd.sock
 test "$(sudo stat -c '%U:%G:%a' /run/jw-agent/authd.sock)" = jw-agent:jw-agent:600
+test "$(sudo stat -c '%U:%G:%a' /run/jw-agent-certd/certd.sock)" = root:root:600
 test "$(sudo stat -c '%U:%G:%a' /run/jw-agent/opsd.sock)" = root:jw-agent:660
 test "$(sudo stat -c '%U:%G:%a' /run/jw-agent)" = root:jw-agent:2750
 test "$(sudo stat -c '%U:%G:%a' /var/lib/jw-agent/opsd)" = root:root:700
@@ -123,6 +130,7 @@ test "$(systemctl show -p PrivateNetwork --value jw-opsd.service)" = yes
 test -z "$(sudo nsenter --target "$ops_pid" --net ss -H -ltnup)"
 test "$(ss -H -ltn 'sport = :8787' | awk '{print $4}')" = 127.0.0.1:8787
 test "$(find /proc -maxdepth 2 -name comm -readable -exec grep -l '^jw-authd$' {} + 2>/dev/null | wc -l)" -eq 0
+test "$(find /proc -maxdepth 2 -name comm -readable -exec grep -l '^jw-certd$' {} + 2>/dev/null | wc -l)" -eq 0
 "#;
     let result = config.ssh(script, None, timeout)?;
     require_success(&result, "package runtime boundary", false)
@@ -497,6 +505,28 @@ pub fn gate_p2_nginx_operation(_root: &Path, timeout: Duration) -> Result<(), St
             "{error}; fixture cleanup also failed: {cleanup_error}"
         )),
     }
+}
+
+pub fn gate_p2_certd_boundary(_root: &Path, timeout: Duration) -> Result<(), String> {
+    let config = VmConfig::load()?;
+    let script = r#"set -eu
+if sudo -u jw-agent python3 -c 'import socket; s=socket.socket(socket.AF_UNIX); s.connect("/run/jw-agent-certd/certd.sock")' 2>/dev/null; then
+    exit 1
+fi
+expired=$(sudo python3 -c 'import json,socket,struct; r={"protocolVersion":1,"requestId":"expired-request","deadlineUnixMs":1,"command":{"kind":"renew_dry_run"}}; p=json.dumps(r,separators=(",",":")).encode(); s=socket.socket(socket.AF_UNIX); s.connect("/run/jw-agent-certd/certd.sock"); s.sendall(struct.pack(">I",len(p))+p); f=s.makefile("rb"); h=f.read(4); print(f.read(struct.unpack(">I",h)[0]).decode())')
+printf '%s' "$expired" | grep -Fq '"kind":"rejected"'
+printf '%s' "$expired" | grep -Fq '"code":"deadline_expired"'
+renew=$(sudo python3 -c 'import json,socket,struct,time; r={"protocolVersion":1,"requestId":"renew-dry-run","deadlineUnixMs":int(time.time()*1000)+60000,"command":{"kind":"renew_dry_run"}}; p=json.dumps(r,separators=(",",":")).encode(); s=socket.socket(socket.AF_UNIX); s.connect("/run/jw-agent-certd/certd.sock"); s.sendall(struct.pack(">I",len(p))+p); f=s.makefile("rb"); h=f.read(4); print(f.read(struct.unpack(">I",h)[0]).decode())')
+printf '%s' "$renew" | grep -Fq '"kind":"completed"'
+printf '%s' "$renew" | grep -Fq '"commandClass":"renew_dry_run"'
+printf '%s' "$renew" | grep -Fq '"stdoutDigest":"sha256:'
+printf '%s' "$renew" | grep -Fq '"stderrDigest":"sha256:'
+! printf '%s' "$renew" | grep -Fq 'No renewals were attempted'
+! pgrep -x jw-certd >/dev/null
+! find /run/jw-agent-certd -maxdepth 1 -type f -name 'request-*.ini' | grep -q .
+"#;
+    let result = config.ssh(script, None, timeout)?;
+    require_success(&result, "Certbot runner boundary", false)
 }
 
 pub fn gate_p2_managed_config(_root: &Path, timeout: Duration) -> Result<(), String> {

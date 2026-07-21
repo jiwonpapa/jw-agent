@@ -364,6 +364,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "jw-certd"
+version = "0.2.0"
+dependencies = [
+ "jw-contracts",
+ "nix",
+ "serde_json",
+ "sha2",
+]
+
+[[package]]
 name = "jw-contracts"
 version = "0.2.0"
 dependencies = [

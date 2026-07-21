@@ -1,0 +1,16 @@
+[Unit]
+Description=JW Agent one-shot Certbot runner socket
+
+[Socket]
+ListenStream=/run/jw-agent-certd/certd.sock
+Accept=yes
+SocketUser=root
+SocketGroup=root
+SocketMode=0600
+DirectoryMode=0700
+RemoveOnStop=yes
+Backlog=4
+MaxConnections=2
+
+[Install]
+WantedBy=sockets.target
