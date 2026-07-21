@@ -8,19 +8,35 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use jw_contracts::{
-    AssuranceLevel, AssuranceView, CertificateInventoryView, CertificateSummaryView,
-    OPERATION_SCHEMA_VERSION, RollbackSupport, sha256_digest, validate_domain,
+    AssuranceLevel, AssuranceView, CertbotIssuePlanInput, CertificateEnvironment,
+    CertificateInventoryView, CertificateSummaryView, NginxSiteState, OPERATION_SCHEMA_VERSION,
+    RollbackSupport, sha256_digest, validate_domain,
 };
 use serde::Deserialize;
 use serde::Serialize;
 
 use crate::config::OpsPaths;
 use crate::error::OpsError;
+use crate::nginx::{NginxSite, discover_site, read_available_content};
 use crate::runner::{CommandClass, OperationRunner};
 
 const CERTIFICATE_MAX_BYTES: u64 = 256 * 1_024;
 const COMMAND_OUTPUT_MAX_BYTES: usize = 64 * 1_024;
 const OPENSSL_TIMEOUT: Duration = Duration::from_secs(5);
+const ACME_CHALLENGE_INCLUDE: &[u8] = b"include /usr/share/jw-agent/nginx/acme-challenge.conf;";
+
+pub const CERTBOT_ISSUE_IMPACT: [&str; 4] = [
+    "staging은 Let’s Encrypt 시험 CA에 실제 challenge를 요청하지만 인증서를 저장하지 않습니다.",
+    "production은 공개 CA 발급·rate-limit 기록을 만들며 이 외부 효과는 원복할 수 없습니다.",
+    "이번 작업은 인증서 발급까지만 수행하고 Nginx TLS 연결은 별도 G2 승인으로 남깁니다.",
+    "실행 결과 원문과 계정 이메일은 감사 로그에 남기지 않고 digest와 마스킹 값만 기록합니다.",
+];
+
+pub const CERTBOT_ISSUE_RECOVERY_PATH: [&str; 3] = [
+    "SSH에서 certbot certificates와 해당 domain의 renewal 상태를 확인합니다.",
+    "감사 영수증의 environment·command class·exit·timeout digest를 확인합니다.",
+    "발급 성공 후에는 별도 TLS attach 계획을 만들고, 실패하면 DNS·80 포트·webroot를 수정한 뒤 새 계획을 만듭니다.",
+];
 
 pub const CERTBOT_RENEW_IMPACT: [&str; 3] = [
     "Certbot이 ACME staging 서버에 실제 갱신 challenge를 요청할 수 있습니다.",
@@ -41,6 +57,102 @@ pub struct CertbotRenewPlanPayload {
     pub timer_enabled: bool,
     pub timer_active: bool,
     pub certificate_count: u32,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CertbotIssuePlanPayload {
+    pub primary_domain: String,
+    pub domains: Vec<String>,
+    pub account_email_proposal_relative_path: String,
+    pub account_email_proposal_digest: String,
+    pub masked_account_email: String,
+    pub environment: CertificateEnvironment,
+    pub site_id: String,
+    pub site_digest: String,
+    pub inventory_digest: String,
+    pub preflight_observed_at_ms: i64,
+    pub resolved_addresses: Vec<String>,
+    pub local_port_80_reachable: bool,
+    pub local_port_443_reachable: bool,
+    pub staging_evidence_valid: bool,
+    pub staging_evidence_key: String,
+}
+
+pub fn validate_issue_preconditions(
+    paths: &OpsPaths,
+    input: &CertbotIssuePlanInput,
+    now_ms: i64,
+) -> Result<NginxSite, OpsError> {
+    input.validate(now_ms).map_err(OpsError::Rejected)?;
+    let request = &input.request;
+    validate_issue_site(
+        paths,
+        &request.site_id,
+        &request.expected_site_digest,
+        &request.domains(),
+    )
+}
+
+pub fn validate_issue_site(
+    paths: &OpsPaths,
+    site_id: &str,
+    expected_site_digest: &str,
+    domains: &[String],
+) -> Result<NginxSite, OpsError> {
+    let site = discover_site(paths, site_id)?;
+    if !site.protected || site.state != NginxSiteState::Enabled {
+        return Err(OpsError::Rejected("unsupported_environment"));
+    }
+    if site.available_digest != expected_site_digest {
+        return Err(OpsError::Rejected("stale_site"));
+    }
+    let (content, _, _) = read_available_content(paths, &site.basename)?;
+    if !contains_bytes(&content, ACME_CHALLENGE_INCLUDE) || !server_names_cover(&content, domains) {
+        return Err(OpsError::Rejected("wrong_webroot"));
+    }
+    validate_directory(&paths.acme_webroot, paths.enforce_root_ownership)
+        .map_err(|_| OpsError::Rejected("wrong_webroot"))?;
+    Ok(site)
+}
+
+fn server_names_cover(content: &[u8], expected: &[String]) -> bool {
+    let Ok(text) = std::str::from_utf8(content) else {
+        return false;
+    };
+    let mut names = Vec::new();
+    for line in text.lines() {
+        let trimmed = line.trim();
+        let Some(value) = trimmed
+            .strip_prefix("server_name ")
+            .and_then(|value| value.strip_suffix(';'))
+        else {
+            continue;
+        };
+        for name in value.split_ascii_whitespace() {
+            if validate_domain(name).is_ok() {
+                names.push(name.to_owned());
+            }
+        }
+    }
+    names.sort();
+    names.dedup();
+    expected
+        .iter()
+        .all(|domain| names.binary_search(domain).is_ok())
+}
+
+fn contains_bytes(value: &[u8], needle: &[u8]) -> bool {
+    !needle.is_empty() && value.windows(needle.len()).any(|window| window == needle)
+}
+
+#[must_use]
+pub fn mask_account_email(email: &str) -> String {
+    let Some((local, domain)) = email.split_once('@') else {
+        return String::from("***");
+    };
+    let first: String = local.chars().take(1).collect();
+    format!("{first}***@{domain}")
 }
 
 #[derive(Serialize)]
@@ -409,6 +521,32 @@ pub fn renew_test_assurance() -> AssuranceView {
         rollback_verifier: Vec::new(),
         reason: Some(String::from(
             "로컬 설정을 바꾸지 않는 외부 갱신 검증이므로 자동 원복 대상이 없습니다.",
+        )),
+    }
+}
+
+#[must_use]
+pub fn issue_assurance() -> AssuranceView {
+    AssuranceView {
+        level: AssuranceLevel::G1VerifiedAction,
+        rollback_support: RollbackSupport::NotGuaranteed,
+        operation_available: true,
+        scope: vec![String::from(
+            "canonical domain에 대해 고정 webroot Certbot staging 또는 production 발급만 실행합니다.",
+        )],
+        excluded_effects: vec![
+            String::from("CA challenge·계정·발급·rate-limit 기록은 원복할 수 없습니다."),
+            String::from("Nginx TLS 연결은 이 작업에 포함하지 않고 별도 G2 계획으로 수행합니다."),
+        ],
+        apply_verifier: vec![
+            String::from("staging은 비저장 dry-run exit와 timeout을 digest-only로 확인합니다."),
+            String::from(
+                "production은 표준 lineage의 SAN·fingerprint·webroot renewal 설정을 다시 읽습니다.",
+            ),
+        ],
+        rollback_verifier: Vec::new(),
+        reason: Some(String::from(
+            "외부 CA 효과는 되돌릴 수 없어 발급 결과 검증만 보장합니다.",
         )),
     }
 }

@@ -480,6 +480,18 @@ pub enum OpsRequestBody {
     CertificateInventory {
         actor: Subject,
     },
+    PlanCertbotIssue {
+        actor: Subject,
+        plan: crate::CertbotIssuePlanInput,
+    },
+    ApproveCertbotIssue {
+        actor: Subject,
+        plan_id: String,
+        plan_hash: String,
+        idempotency_key: String,
+        external_effect_confirmed: bool,
+        local_attach_deferred_confirmed: bool,
+    },
     PlanCertbotRenewTest {
         actor: Subject,
         plan: crate::CertbotRenewTestPlanRequest,
@@ -544,9 +556,23 @@ impl OpsRequest {
         ) {
             return Err("external_effect_confirmation");
         }
+        if let OpsRequestBody::ApproveCertbotIssue {
+            external_effect_confirmed,
+            local_attach_deferred_confirmed,
+            ..
+        } = &self.body
+        {
+            if !external_effect_confirmed {
+                return Err("external_effect_confirmation");
+            }
+            if !local_attach_deferred_confirmed {
+                return Err("local_attach_deferred_confirmation");
+            }
+        }
         match &self.body {
             OpsRequestBody::Capabilities => Ok(()),
             OpsRequestBody::CertificateInventory { .. } => Ok(()),
+            OpsRequestBody::PlanCertbotIssue { plan, .. } => plan.validate(now_unix_ms),
             OpsRequestBody::PlanCertbotRenewTest { plan, .. } => plan.validate(),
             OpsRequestBody::ReadManagedConfig { resource_id, .. } => {
                 validate_identifier(resource_id, "ngc_", "resource_id")
@@ -566,6 +592,12 @@ impl OpsRequest {
                 ..
             }
             | OpsRequestBody::ApproveCertbotRenewTest {
+                plan_id,
+                plan_hash,
+                idempotency_key,
+                ..
+            }
+            | OpsRequestBody::ApproveCertbotIssue {
                 plan_id,
                 plan_hash,
                 idempotency_key,
@@ -606,6 +638,7 @@ pub struct OpsResponse {
 pub enum OpsResponseBody {
     Capabilities(OpsCapabilityResponse),
     CertificateInventory(crate::CertificateInventoryView),
+    CertbotIssuePlan(crate::CertbotIssuePlanView),
     CertbotRenewTestPlan(crate::CertbotRenewTestPlanView),
     ManagedConfigResource(ManagedConfigResourceView),
     NginxSiteStatePlan(NginxSiteStatePlanView),

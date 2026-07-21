@@ -1,5 +1,7 @@
 # Public HTTPS remains disabled when this value is empty.
 JW_AGENT_PUBLIC_HOST=
+# Comma-separated public origin IPs. Required only for guided Certbot issuance.
+JW_AGENT_PUBLIC_ADDRESSES=
 JW_AGENT_RECOVERY_ADDRESS=127.0.0.1:8787
 JW_AGENT_RECOVERY_ORIGIN=http://127.0.0.1:8787
 JW_AGENT_PROXY_SOCKET=/run/jw-agent-proxy/agentd.sock

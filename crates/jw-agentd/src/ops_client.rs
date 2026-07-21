@@ -4,11 +4,12 @@ use std::pin::Pin;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use jw_contracts::{
-    CertbotRenewTestPlanRequest, CertbotRenewTestPlanView, CertificateInventoryView,
-    IPC_PROTOCOL_VERSION, ManagedConfigApprovalIntent, ManagedConfigPlanRequest,
-    ManagedConfigPlanView, ManagedConfigResourceView, NginxSiteStatePlanRequest,
-    NginxSiteStatePlanView, OPS_FRAME_MAX_BYTES, OperationReceiptView, OpsCapabilityResponse,
-    OpsRequest, OpsRequestBody, OpsResponse, OpsResponseBody, Subject, decode_frame, encode_frame,
+    CertbotIssuePlanInput, CertbotIssuePlanView, CertbotRenewTestPlanRequest,
+    CertbotRenewTestPlanView, CertificateInventoryView, IPC_PROTOCOL_VERSION,
+    ManagedConfigApprovalIntent, ManagedConfigPlanRequest, ManagedConfigPlanView,
+    ManagedConfigResourceView, NginxSiteStatePlanRequest, NginxSiteStatePlanView,
+    OPS_FRAME_MAX_BYTES, OperationReceiptView, OpsCapabilityResponse, OpsRequest, OpsRequestBody,
+    OpsResponse, OpsResponseBody, Subject, decode_frame, encode_frame,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixStream;
@@ -30,6 +31,22 @@ pub trait OpsBroker: Send + Sync {
         &'a self,
         actor: Subject,
     ) -> OpsFuture<'a, CertificateInventoryView>;
+
+    fn plan_certbot_issue<'a>(
+        &'a self,
+        actor: Subject,
+        plan: CertbotIssuePlanInput,
+    ) -> OpsFuture<'a, CertbotIssuePlanView>;
+
+    fn approve_certbot_issue<'a>(
+        &'a self,
+        actor: Subject,
+        plan_id: String,
+        plan_hash: String,
+        idempotency_key: String,
+        external_effect_confirmed: bool,
+        local_attach_deferred_confirmed: bool,
+    ) -> OpsFuture<'a, OperationReceiptView>;
 
     fn plan_certbot_renew_test<'a>(
         &'a self,
@@ -151,6 +168,49 @@ impl OpsBroker for UdsOpsBroker {
                 return Err(OpsBrokerError::InvalidResponse);
             };
             Ok(inventory)
+        })
+    }
+
+    fn plan_certbot_issue<'a>(
+        &'a self,
+        actor: Subject,
+        plan: CertbotIssuePlanInput,
+    ) -> OpsFuture<'a, CertbotIssuePlanView> {
+        Box::pin(async move {
+            let body = self
+                .request(OpsRequestBody::PlanCertbotIssue { actor, plan })
+                .await?;
+            let OpsResponseBody::CertbotIssuePlan(plan) = body else {
+                return Err(OpsBrokerError::InvalidResponse);
+            };
+            Ok(plan)
+        })
+    }
+
+    fn approve_certbot_issue<'a>(
+        &'a self,
+        actor: Subject,
+        plan_id: String,
+        plan_hash: String,
+        idempotency_key: String,
+        external_effect_confirmed: bool,
+        local_attach_deferred_confirmed: bool,
+    ) -> OpsFuture<'a, OperationReceiptView> {
+        Box::pin(async move {
+            let body = self
+                .request(OpsRequestBody::ApproveCertbotIssue {
+                    actor,
+                    plan_id,
+                    plan_hash,
+                    idempotency_key,
+                    external_effect_confirmed,
+                    local_attach_deferred_confirmed,
+                })
+                .await?;
+            let OpsResponseBody::OperationReceipt(receipt) = body else {
+                return Err(OpsBrokerError::InvalidResponse);
+            };
+            Ok(receipt)
         })
     }
 

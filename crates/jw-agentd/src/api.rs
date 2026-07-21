@@ -21,11 +21,12 @@ use axum::{Json, Router};
 use futures_core::Stream;
 use jw_contracts::{
     AccessSettingsView, AdditionalAuthPolicy, AdditionalAuthProviderStatus, AssuranceLevel,
-    AssuranceView, AuthFailureClass, AuthPurpose, AuthRequest, AuthResult,
-    CERTBOT_RENEW_TEST_OPERATION, CapabilityStatus, CapabilityView,
-    CertbotRenewTestApprovalRequest, CertbotRenewTestPlanRequest, CertbotRenewTestPlanView,
-    CertificateInventoryView, CertificateSummaryView, HealthStatus, HealthView,
-    IPC_PROTOCOL_VERSION, IngressChannel, IntegrationCatalogView, LoginRequest,
+    AssuranceView, AuthFailureClass, AuthPurpose, AuthRequest, AuthResult, CERTBOT_ISSUE_OPERATION,
+    CERTBOT_RENEW_TEST_OPERATION, CapabilityStatus, CapabilityView, CertbotIssueApprovalRequest,
+    CertbotIssuePlanInput, CertbotIssuePlanRequest, CertbotIssuePlanView,
+    CertbotIssuePreflightEvidence, CertbotRenewTestApprovalRequest, CertbotRenewTestPlanRequest,
+    CertbotRenewTestPlanView, CertificateInventoryView, CertificateSummaryView, HealthStatus,
+    HealthView, IPC_PROTOCOL_VERSION, IngressChannel, IntegrationCatalogView, LoginRequest,
     MANAGED_CONFIG_OPERATION, ManagedConfigApprovalRequest, ManagedConfigPlanRequest,
     ManagedConfigPlanView, ManagedConfigResourceView, NGINX_SITE_STATE_OPERATION,
     NginxSiteStatePlanRequest, NginxSiteStatePlanView, NginxSitesView, ObservationStatus,
@@ -97,6 +98,8 @@ impl AppState {
         services,
         nginx_sites,
         certificates,
+        plan_certbot_issue,
+        approve_certbot_issue,
         plan_certbot_renew_test,
         approve_certbot_renew_test,
         integrations,
@@ -126,6 +129,9 @@ impl AppState {
         NginxSitesView,
         CertificateInventoryView,
         CertificateSummaryView,
+        CertbotIssuePlanRequest,
+        CertbotIssuePlanView,
+        CertbotIssueApprovalRequest,
         CertbotRenewTestPlanRequest,
         CertbotRenewTestPlanView,
         CertbotRenewTestApprovalRequest,
@@ -185,6 +191,14 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/v1/services", get(services))
         .route("/api/v1/services/nginx/sites", get(nginx_sites))
         .route("/api/v1/certificates", get(certificates))
+        .route(
+            "/api/v1/operations/certbot/issue/plans",
+            post(plan_certbot_issue),
+        )
+        .route(
+            "/api/v1/operations/certbot/issue/approvals",
+            post(approve_certbot_issue),
+        )
         .route(
             "/api/v1/operations/certbot/renew-test/plans",
             post(plan_certbot_renew_test),
@@ -517,9 +531,206 @@ async fn certificates(
         certbot_mutation_gate_reason(&state, &session.subject, session.additional_auth_policy).await
     {
         inventory.renew_test_operation_type = None;
+        inventory.issue_operation_type = None;
+        inventory.assurance.reason = Some(reason);
+    } else if let Some(reason) = certbot_issue_gate_reason(&state).await {
+        inventory.issue_operation_type = None;
         inventory.assurance.reason = Some(reason);
     }
     Ok(Json(inventory))
+}
+
+async fn certbot_issue_gate_reason(state: &AppState) -> Option<String> {
+    if state.config.public_host.is_none() || state.config.public_addresses.is_empty() {
+        return Some(String::from(
+            "신규 발급에는 JW_AGENT_PUBLIC_HOST와 JW_AGENT_PUBLIC_ADDRESSES 설정이 필요합니다.",
+        ));
+    }
+    match state.ops.capabilities().await {
+        Ok(capability)
+            if !capability.read_only
+                && capability
+                    .supported_operations
+                    .iter()
+                    .any(|operation| operation == CERTBOT_ISSUE_OPERATION) =>
+        {
+            None
+        }
+        Ok(_) => Some(String::from(
+            "이 빌드에서는 Certbot 신규 발급 fault gate가 아직 닫히지 않았습니다.",
+        )),
+        Err(_) => Some(String::from(
+            "권한 분리 서비스 상태를 확인할 수 없어 신규 발급이 차단되었습니다.",
+        )),
+    }
+}
+
+#[utoipa::path(post, path = "/api/v1/operations/certbot/issue/plans", request_body = CertbotIssuePlanRequest, responses(
+    (status = 200, description = "Immutable Certbot issuance plan", body = CertbotIssuePlanView),
+    (status = 400, description = "Invalid typed request", body = ProblemDetails),
+    (status = 401, description = "Authentication required", body = ProblemDetails),
+    (status = 403, description = "Role or CSRF rejected", body = ProblemDetails),
+    (status = 409, description = "DNS, listener, staging, stale, busy, or idempotency conflict", body = ProblemDetails),
+    (status = 423, description = "Forensic lockdown", body = ProblemDetails)
+))]
+async fn plan_certbot_issue(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(input): Json<CertbotIssuePlanRequest>,
+) -> Result<Json<CertbotIssuePlanView>, ApiProblem> {
+    input.validate().map_err(ApiProblem::bad_request)?;
+    let now = unix_milliseconds()?;
+    let (token, session) = current_session(&state, &headers, now)?;
+    require_csrf(&headers, token.as_str())?;
+    if certbot_issue_gate_reason(&state).await.is_some() {
+        return Err(ApiProblem::new(
+            StatusCode::CONFLICT,
+            "issuance_unavailable",
+        ));
+    }
+    if state.config.public_host.as_deref() != Some(input.primary_domain.as_str()) {
+        return Err(ApiProblem::new(StatusCode::CONFLICT, "invalid_domain"));
+    }
+    let preflight = observe_certbot_issue_preflight(&state, &input.domains(), now).await?;
+    let plan = state
+        .ops
+        .plan_certbot_issue(
+            session.subject,
+            CertbotIssuePlanInput {
+                request: input,
+                preflight,
+            },
+        )
+        .await
+        .map_err(map_ops_error)?;
+    Ok(Json(plan))
+}
+
+#[utoipa::path(post, path = "/api/v1/operations/certbot/issue/approvals", request_body = CertbotIssueApprovalRequest, responses(
+    (status = 202, description = "Certbot issuance accepted", body = OperationAcceptedView),
+    (status = 400, description = "Invalid approval shape", body = ProblemDetails),
+    (status = 401, description = "Authentication required", body = ProblemDetails),
+    (status = 403, description = "Claim, role, or CSRF rejected", body = ProblemDetails),
+    (status = 409, description = "Expired, stale, busy, or conflicting operation", body = ProblemDetails),
+    (status = 423, description = "Forensic lockdown", body = ProblemDetails),
+    (status = 428, description = "Additional authentication is configured but unavailable", body = ProblemDetails)
+))]
+async fn approve_certbot_issue(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(input): Json<CertbotIssueApprovalRequest>,
+) -> Result<(StatusCode, Json<OperationAcceptedView>), ApiProblem> {
+    input.validate_shape().map_err(ApiProblem::bad_request)?;
+    let now = unix_milliseconds()?;
+    let (token, session) = current_session(&state, &headers, now)?;
+    require_csrf(&headers, token.as_str())?;
+    if session.additional_auth_policy != AdditionalAuthPolicy::Disabled {
+        return Err(ApiProblem::new(
+            StatusCode::PRECONDITION_REQUIRED,
+            "additional_authentication_unavailable",
+        ));
+    }
+    if input.additional_auth_claim.is_some() {
+        return Err(ApiProblem::bad_request(
+            "additional_authentication_claim_unexpected",
+        ));
+    }
+    state
+        .store
+        .consume_operation_claim(
+            token.as_str(),
+            &session.subject,
+            &input.plan_hash,
+            &input.reauth_token,
+            now,
+        )
+        .map_err(map_operation_claim_error)?;
+    let actor = session.subject;
+    let receipt = state
+        .ops
+        .approve_certbot_issue(
+            actor.clone(),
+            input.plan_id,
+            input.plan_hash,
+            input.idempotency_key,
+            input.external_effect_confirmed,
+            input.local_attach_deferred_confirmed,
+        )
+        .await
+        .map_err(map_ops_error)?;
+    if receipt.operation_type != CERTBOT_ISSUE_OPERATION {
+        return Err(ApiProblem::internal());
+    }
+    let operation_id = receipt.operation_id.clone();
+    let accepted = OperationAcceptedView {
+        schema_version: receipt.schema_version,
+        operation_type: receipt.operation_type,
+        operation_id: operation_id.clone(),
+        plan_id: receipt.plan_id,
+        plan_hash: receipt.plan_hash,
+        actor: receipt.actor,
+        current_stage: receipt.terminal_state,
+        event_stream: format!("/api/v1/operations/{operation_id}/events"),
+    };
+    let ops = Arc::clone(&state.ops);
+    let _execution_task = tokio::spawn(async move {
+        let _execution_result = ops.execute_operation(actor, operation_id).await;
+    });
+    Ok((StatusCode::ACCEPTED, Json(accepted)))
+}
+
+async fn observe_certbot_issue_preflight(
+    state: &AppState,
+    domains: &[String],
+    now_ms: i64,
+) -> Result<CertbotIssuePreflightEvidence, ApiProblem> {
+    let mut expected = state.config.public_addresses.clone();
+    expected.sort();
+    expected.dedup();
+    if expected.is_empty() {
+        return Err(ApiProblem::new(
+            StatusCode::CONFLICT,
+            "public_address_unconfigured",
+        ));
+    }
+    for domain in domains {
+        let lookup = tokio::time::timeout(
+            Duration::from_secs(5),
+            tokio::net::lookup_host((domain.as_str(), 80)),
+        )
+        .await
+        .map_err(|_| ApiProblem::new(StatusCode::CONFLICT, "dns_resolution_failed"))?
+        .map_err(|_| ApiProblem::new(StatusCode::CONFLICT, "dns_resolution_failed"))?;
+        let mut resolved: Vec<_> = lookup.map(|address| address.ip()).collect();
+        resolved.sort();
+        resolved.dedup();
+        if resolved != expected {
+            return Err(ApiProblem::new(StatusCode::CONFLICT, "dns_mismatch"));
+        }
+    }
+    let local_port_80_reachable = local_tcp_reachable(80).await;
+    if !local_port_80_reachable {
+        return Err(ApiProblem::new(
+            StatusCode::CONFLICT,
+            "challenge_unreachable",
+        ));
+    }
+    Ok(CertbotIssuePreflightEvidence {
+        observed_at_unix_ms: now_ms,
+        resolved_addresses: expected.iter().map(ToString::to_string).collect(),
+        expected_addresses: expected.iter().map(ToString::to_string).collect(),
+        local_port_80_reachable,
+        local_port_443_reachable: local_tcp_reachable(443).await,
+    })
+}
+
+async fn local_tcp_reachable(port: u16) -> bool {
+    tokio::time::timeout(
+        Duration::from_secs(2),
+        tokio::net::TcpStream::connect(("127.0.0.1", port)),
+    )
+    .await
+    .is_ok_and(|result| result.is_ok())
 }
 
 async fn certbot_mutation_gate_reason(
@@ -990,7 +1201,7 @@ impl OperationEventStream {
             queue: VecDeque::new(),
             delay: Box::pin(tokio::time::sleep(Duration::ZERO)),
             pending: None,
-            deadline: Instant::now() + Duration::from_secs(180),
+            deadline: Instant::now() + Duration::from_secs(15 * 60),
             close_after_queue: false,
         }
     }
@@ -1724,6 +1935,26 @@ mod tests {
             Box::pin(async move { Err(OpsBrokerError::Unavailable) })
         }
 
+        fn plan_certbot_issue<'a>(
+            &'a self,
+            _actor: Subject,
+            _plan: jw_contracts::CertbotIssuePlanInput,
+        ) -> OpsFuture<'a, jw_contracts::CertbotIssuePlanView> {
+            Box::pin(async move { Err(OpsBrokerError::Unavailable) })
+        }
+
+        fn approve_certbot_issue<'a>(
+            &'a self,
+            _actor: Subject,
+            _plan_id: String,
+            _plan_hash: String,
+            _idempotency_key: String,
+            _external_effect_confirmed: bool,
+            _local_attach_deferred_confirmed: bool,
+        ) -> OpsFuture<'a, jw_contracts::OperationReceiptView> {
+            Box::pin(async move { Err(OpsBrokerError::Unavailable) })
+        }
+
         fn plan_certbot_renew_test<'a>(
             &'a self,
             _actor: Subject,
@@ -1815,6 +2046,11 @@ mod tests {
             recovery_address,
             recovery_origin: String::from("http://127.0.0.1:8787"),
             public_host: Some(String::from("server.example.com")),
+            public_addresses: vec![
+                "192.0.2.10"
+                    .parse()
+                    .map_err(|_| String::from("test public address is invalid"))?,
+            ],
             proxy_socket: PathBuf::from("/run/jw-agent-proxy/agentd.sock"),
             auth_socket: PathBuf::from("/run/jw-agent/authd.sock"),
             ops_socket: PathBuf::from("/run/jw-agent/opsd.sock"),

@@ -100,10 +100,14 @@ fn invocation_spec(command: &CertbotCommand, config_path: &Path) -> Result<Invoc
                 config_path.as_os_str().to_owned(),
                 OsString::from("--cert-name"),
                 OsString::from(primary_domain),
-                OsString::from("--keep-until-expiring"),
             ];
-            if *environment == CertificateEnvironment::Staging {
-                arguments.push(OsString::from("--test-cert"));
+            match environment {
+                CertificateEnvironment::Staging => {
+                    arguments.push(OsString::from("--dry-run"));
+                }
+                CertificateEnvironment::Production => {
+                    arguments.push(OsString::from("--keep-until-expiring"));
+                }
             }
             for domain in domains {
                 arguments.push(OsString::from("--domain"));
@@ -361,7 +365,13 @@ mod tests {
             specification
                 .arguments
                 .iter()
-                .any(|value| value == "--test-cert")
+                .any(|value| value == "--dry-run")
+        );
+        assert!(
+            !specification
+                .arguments
+                .iter()
+                .any(|value| value == "--test-cert" || value == "--keep-until-expiring")
         );
         assert!(
             specification

@@ -1,3 +1,12 @@
+jw-agent (0.2.0~p2.6) noble; urgency=medium
+
+  * Add guided Certbot staging and production issuance plans.
+  * Require DNS, listener, protected webroot, PAM, and two G1 confirmations.
+  * Keep account email in a root-only ephemeral proposal, never the ledger.
+  * Separate irreversible CA issuance from the future G2 Nginx attach step.
+
+ -- JW Agent Maintainers <maintainers@example.invalid>  Tue, 21 Jul 2026 23:55:00 +0900
+
 jw-agent (0.2.0~p2.5) noble; urgency=medium
 
   * Add planned and PAM-approved Certbot renewal dry-run operations.

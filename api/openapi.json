@@ -403,6 +403,172 @@
         }
       }
     },
+    "/api/v1/operations/certbot/issue/approvals": {
+      "post": {
+        "tags": [],
+        "operationId": "approve_certbot_issue",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CertbotIssueApprovalRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Certbot issuance accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperationAcceptedView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid approval shape",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Claim, role, or CSRF rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Expired, stale, busy, or conflicting operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "Forensic lockdown",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "428": {
+            "description": "Additional authentication is configured but unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/operations/certbot/issue/plans": {
+      "post": {
+        "tags": [],
+        "operationId": "plan_certbot_issue",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CertbotIssuePlanRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Immutable Certbot issuance plan",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CertbotIssuePlanView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid typed request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role or CSRF rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "DNS, listener, staging, stale, busy, or idempotency conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "Forensic lockdown",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/operations/certbot/renew-test/approvals": {
       "post": {
         "tags": [],
@@ -1289,6 +1455,214 @@
           }
         }
       },
+      "CertbotIssueApprovalRequest": {
+        "type": "object",
+        "required": [
+          "schemaVersion",
+          "planId",
+          "planHash",
+          "idempotencyKey",
+          "reauthToken",
+          "externalEffectConfirmed",
+          "localAttachDeferredConfirmed"
+        ],
+        "properties": {
+          "additionalAuthClaim": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "password"
+          },
+          "externalEffectConfirmed": {
+            "type": "boolean"
+          },
+          "idempotencyKey": {
+            "type": "string"
+          },
+          "localAttachDeferredConfirmed": {
+            "type": "boolean"
+          },
+          "planHash": {
+            "type": "string"
+          },
+          "planId": {
+            "type": "string"
+          },
+          "reauthToken": {
+            "type": "string",
+            "format": "password"
+          },
+          "schemaVersion": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        },
+        "additionalProperties": false
+      },
+      "CertbotIssuePlanRequest": {
+        "type": "object",
+        "required": [
+          "schemaVersion",
+          "operationType",
+          "primaryDomain",
+          "alternativeDomains",
+          "accountEmail",
+          "environment",
+          "siteId",
+          "expectedSiteDigest",
+          "expectedInventoryDigest",
+          "tosAgreed",
+          "idempotencyKey"
+        ],
+        "properties": {
+          "accountEmail": {
+            "type": "string"
+          },
+          "alternativeDomains": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "environment": {
+            "$ref": "#/components/schemas/CertificateEnvironment"
+          },
+          "expectedInventoryDigest": {
+            "type": "string"
+          },
+          "expectedSiteDigest": {
+            "type": "string"
+          },
+          "idempotencyKey": {
+            "type": "string"
+          },
+          "operationType": {
+            "type": "string"
+          },
+          "primaryDomain": {
+            "type": "string"
+          },
+          "schemaVersion": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "siteId": {
+            "type": "string"
+          },
+          "tosAgreed": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      },
+      "CertbotIssuePlanView": {
+        "type": "object",
+        "required": [
+          "schemaVersion",
+          "operationType",
+          "planId",
+          "planHash",
+          "createdAt",
+          "expiresAt",
+          "actor",
+          "primaryDomain",
+          "domains",
+          "maskedAccountEmail",
+          "environment",
+          "siteId",
+          "inventoryDigest",
+          "siteDigest",
+          "resolvedAddresses",
+          "localPort80Reachable",
+          "localPort443Reachable",
+          "stagingEvidenceValid",
+          "impact",
+          "recoveryPath",
+          "assurance"
+        ],
+        "properties": {
+          "actor": {
+            "$ref": "#/components/schemas/Subject"
+          },
+          "assurance": {
+            "$ref": "#/components/schemas/AssuranceView"
+          },
+          "createdAt": {
+            "type": "string"
+          },
+          "domains": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "environment": {
+            "$ref": "#/components/schemas/CertificateEnvironment"
+          },
+          "expiresAt": {
+            "type": "string"
+          },
+          "impact": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "inventoryDigest": {
+            "type": "string"
+          },
+          "localPort443Reachable": {
+            "type": "boolean"
+          },
+          "localPort80Reachable": {
+            "type": "boolean"
+          },
+          "maskedAccountEmail": {
+            "type": "string"
+          },
+          "operationType": {
+            "type": "string"
+          },
+          "planHash": {
+            "type": "string"
+          },
+          "planId": {
+            "type": "string"
+          },
+          "primaryDomain": {
+            "type": "string"
+          },
+          "recoveryPath": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "resolvedAddresses": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "schemaVersion": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "siteDigest": {
+            "type": "string"
+          },
+          "siteId": {
+            "type": "string"
+          },
+          "stagingEvidenceValid": {
+            "type": "boolean"
+          }
+        }
+      },
       "CertbotRenewTestApprovalRequest": {
         "type": "object",
         "required": [
@@ -1429,6 +1803,13 @@
             "type": "boolean"
           }
         }
+      },
+      "CertificateEnvironment": {
+        "type": "string",
+        "enum": [
+          "staging",
+          "production"
+        ]
       },
       "CertificateInventoryView": {
         "type": "object",

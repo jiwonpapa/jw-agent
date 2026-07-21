@@ -83,6 +83,8 @@ ldd /usr/lib/jw-agent/jw-authd | grep -q 'libpam\.so\.0'
 ldd /usr/lib/jw-agent/jw-agentd | grep -q 'libsqlite3\.so\.0'
 test -x /usr/lib/jw-agent/jw-certd
 grep -Fq 'client_max_body_size 64k;' "$tmpdir/usr/share/jw-agent/nginx/jw-agent-management.conf.template"
+grep -Fq 'include /usr/share/jw-agent/nginx/acme-challenge.conf;' "$tmpdir/usr/share/jw-agent/nginx/jw-agent-management.conf.template"
+grep -Fq 'd /var/lib/jw-agent 0751 root jw-agent -' "$tmpdir/usr/lib/tmpfiles.d/jw-agent.conf"
 "#
     );
     let native = config.ssh(&native_script, None, Duration::from_secs(20))?;
@@ -116,6 +118,10 @@ test "$(sudo stat -c '%U:%G:%a' /run/jw-agent)" = root:jw-agent:2750
 test "$(sudo stat -c '%U:%G:%a' /var/lib/jw-agent/opsd)" = root:root:700
 test "$(sudo stat -c '%U:%G:%a' /var/lib/jw-agent/opsd/snapshots)" = root:root:700
 test "$(sudo stat -c '%U:%G:%a' /var/lib/jw-agent/opsd/opsd.sqlite3)" = root:jw-agent:600
+test "$(sudo stat -c '%U:%G:%a' /var/lib/jw-agent)" = root:jw-agent:751
+test "$(sudo stat -c '%U:%G:%a' /var/lib/jw-agent/acme-webroot)" = root:root:755
+sudo -u www-data test -x /var/lib/jw-agent
+sudo -u www-data test -x /var/lib/jw-agent/acme-webroot
 test "$(stat -c '%U:%G:%a' /run/jw-agent-proxy)" = jw-agent:jw-agent-proxy:2750
 test "$(sudo stat -c '%U:%G:%a' /run/jw-agent-proxy/agentd.sock)" = jw-agent:jw-agent-proxy:660
 id -nG jw-agent | tr ' ' '\n' | grep -Fxq jw-agent-proxy
@@ -560,6 +566,7 @@ chmod 0600 /etc/letsencrypt/renewal/jw-agent-p1.test.conf
             timeout,
         )?;
         require_success(&restarted, "certificate inventory service restart", false)?;
+        wait_for_public_agent(&config, timeout)?;
         let session = P2ApiSession::login(&config, &password, timeout)?;
         let inventory = session.get(&config, "/api/v1/certificates", timeout)?;
         expect_http(&inventory, 200, "certificate inventory")?;
@@ -703,6 +710,143 @@ pub fn gate_p2_certbot_renew_operation(_root: &Path, timeout: Duration) -> Resul
             "{error}; Certbot renewal cleanup also failed: {cleanup_error}"
         )),
     }
+}
+
+pub fn gate_p2_certbot_issue_failure(_root: &Path, timeout: Duration) -> Result<(), String> {
+    let config = VmConfig::load()?;
+    let password = read_secret(&config.password_file)?;
+    cleanup_certbot_issue_fixture(&config, timeout)?;
+    let result = (|| {
+        prepare_certbot_issue_fixture(&config, timeout)?;
+        wait_for_public_agent(&config, timeout)?;
+        let mut session = P2ApiSession::login(&config, &password, timeout)?;
+        let receipt = session.operate_certbot_issue_staging_failure(
+            &config,
+            &password,
+            "jw-agent-vm-certbot@example.com",
+            timeout,
+        )?;
+        require_terminal(&receipt, "REJECTED", "Certbot staging issuance failure")?;
+        for expected in [
+            "\"resultCode\":\"certbot_staging_dry_run_started\"",
+            "\"resultCode\":\"certbot_issue_command_failed\"",
+            "\"resultCode\":\"issuance_failed\"",
+            "\"rollbackSupport\":\"not_guaranteed\"",
+        ] {
+            if !receipt.contains(expected) {
+                return Err(format!("Certbot issue failure receipt omitted {expected}"));
+            }
+        }
+        if receipt.contains("jw-agent-vm-certbot@example.com")
+            || receipt.contains("\"rollbackResult\":\"verified\"")
+        {
+            return Err(String::from(
+                "Certbot issue failure exposed the account email or claimed a false rollback",
+            ));
+        }
+        let inventory = session.get(&config, "/api/v1/certificates", timeout)?;
+        expect_http(&inventory, 200, "post-failure certificate inventory")?;
+        if json_string_field(&inventory.body, "inventoryDigest")?
+            != json_string_field(&receipt, "beforeDigest")?
+            || inventory.body.contains(&format!(
+                "\"primaryDomain\":{}",
+                json_string(&config.public_host)
+            ))
+        {
+            return Err(String::from(
+                "failed staging issuance changed the certificate inventory",
+            ));
+        }
+        let evidence = config.ssh(
+            r#"set -eu
+sudo find /var/lib/jw-agent/opsd/snapshots -type f -name certificate-inventory.json -user root -perm 0600 -print -quit | grep -q .
+! sudo sh -c 'find /var/lib/jw-agent/opsd -maxdepth 1 -type f -name "opsd.sqlite3*" -print0 | xargs -0 -r strings' | grep -Fq 'jw-agent-vm-certbot@example.com'
+! sudo journalctl -u jw-opsd.service -u jw-agentd.service -u 'jw-certd@*.service' --no-pager -o cat | grep -Fq 'jw-agent-vm-certbot@example.com'
+! sudo find /var/lib/jw-agent/opsd/proposals -type f -print -quit | grep -q .
+! pgrep -x jw-certd >/dev/null
+! find /run/jw-agent-certd -maxdepth 1 -type f -name 'request-*.ini' | grep -q .
+! sudo test -e /etc/letsencrypt/renewal/jw-agent-p1.test.conf"#,
+            None,
+            timeout,
+        )?;
+        require_success(&evidence, "Certbot issue failure evidence boundary", false)
+    })();
+    let cleanup = cleanup_certbot_issue_fixture(&config, timeout);
+    match (result, cleanup) {
+        (Ok(()), Ok(())) => Ok(()),
+        (Err(error), Ok(())) => Err(error),
+        (Ok(()), Err(cleanup_error)) => Err(cleanup_error),
+        (Err(error), Err(cleanup_error)) => Err(format!(
+            "{error}; Certbot issue fixture cleanup also failed: {cleanup_error}"
+        )),
+    }
+}
+
+fn prepare_certbot_issue_fixture(config: &VmConfig, timeout: Duration) -> Result<(), String> {
+    let script = r#"sudo sh -eu -c '
+test ! -e /var/tmp/jw-agent-vm-certbot-issue.active
+cp -a /etc/default/jw-agent /var/tmp/jw-agent-vm-certbot-issue.default
+cp -a /etc/nginx/sites-available/jw-agent-p1 /var/tmp/jw-agent-vm-certbot-issue.nginx
+cp -a /etc/hosts /var/tmp/jw-agent-vm-certbot-issue.hosts
+touch /var/tmp/jw-agent-vm-certbot-issue.active
+if grep -q "^JW_AGENT_PUBLIC_ADDRESSES=" /etc/default/jw-agent; then
+    sed -i "s|^JW_AGENT_PUBLIC_ADDRESSES=.*|JW_AGENT_PUBLIC_ADDRESSES=__ADDRESS__|" /etc/default/jw-agent
+else
+    printf "%s\n" "JW_AGENT_PUBLIC_ADDRESSES=__ADDRESS__" >> /etc/default/jw-agent
+fi
+sed -i "/# jw-agent-vm-certbot-issue$/d" /etc/hosts
+printf "%s\n" "__ADDRESS__ __HOST__ # jw-agent-vm-certbot-issue" >> /etc/hosts
+sed -i "0,/    server_name __HOST__;/s|    server_name __HOST__;|    server_name __HOST__;\\n\\n    include /usr/share/jw-agent/nginx/acme-challenge.conf;|" /etc/nginx/sites-available/jw-agent-p1
+sed -i "0,/    return 308 /s|    return 308 .*;|    location / { return 308 https://\$host\$request_uri; }|" /etc/nginx/sites-available/jw-agent-p1
+grep -Fq "include /usr/share/jw-agent/nginx/acme-challenge.conf;" /etc/nginx/sites-available/jw-agent-p1
+grep -Fq "location / { return 308 https://\$host\$request_uri; }" /etc/nginx/sites-available/jw-agent-p1 || { echo "HTTP redirect was not moved into a fallback location" >&2; exit 1; }
+install -d -o root -g root -m 0755 /var/lib/jw-agent/acme-webroot/.well-known/acme-challenge
+printf "%s\n" "jw-agent-vm-acme" > /var/lib/jw-agent/acme-webroot/.well-known/acme-challenge/preflight
+chmod 0644 /var/lib/jw-agent/acme-webroot/.well-known/acme-challenge/preflight
+nginx -t
+systemctl reload nginx.service
+systemctl reset-failed jw-agentd.service
+systemctl restart jw-agentd.service
+status=000
+attempt=0
+while test "$attempt" -lt 50; do
+    status=$(curl -sS -o /var/tmp/jw-agent-vm-acme-response -w "%{http_code}" -H "Host: __HOST__" http://127.0.0.1/.well-known/acme-challenge/preflight)
+    if test "$status" = 200 && grep -Fxq "jw-agent-vm-acme" /var/tmp/jw-agent-vm-acme-response; then
+        break
+    fi
+    attempt=$((attempt + 1))
+    sleep 0.1
+done
+if test "$status" != 200; then
+    echo "ACME webroot preflight returned HTTP $status" >&2
+    exit 1
+fi
+grep -Fxq "jw-agent-vm-acme" /var/tmp/jw-agent-vm-acme-response || { echo "ACME webroot preflight body mismatch" >&2; exit 1; }
+rm -f /var/tmp/jw-agent-vm-acme-response
+'"#
+        .replace("__HOST__", &config.public_host)
+        .replace("__ADDRESS__", &config.public_address.to_string());
+    let prepared = config.ssh(&script, None, timeout)?;
+    require_success(&prepared, "Certbot issue fixture preparation", false)
+}
+
+fn cleanup_certbot_issue_fixture(config: &VmConfig, timeout: Duration) -> Result<(), String> {
+    let script = r#"sudo sh -eu -c '
+if test -e /var/tmp/jw-agent-vm-certbot-issue.active; then
+    cp -a /var/tmp/jw-agent-vm-certbot-issue.default /etc/default/jw-agent
+    cp -a /var/tmp/jw-agent-vm-certbot-issue.nginx /etc/nginx/sites-available/jw-agent-p1
+    cp -a /var/tmp/jw-agent-vm-certbot-issue.hosts /etc/hosts
+    rm -f /var/tmp/jw-agent-vm-certbot-issue.default /var/tmp/jw-agent-vm-certbot-issue.nginx /var/tmp/jw-agent-vm-certbot-issue.hosts /var/tmp/jw-agent-vm-certbot-issue.active
+    rm -f /var/tmp/jw-agent-vm-acme-response
+    rm -f /var/lib/jw-agent/acme-webroot/.well-known/acme-challenge/preflight
+    nginx -t
+    systemctl reload nginx.service
+    systemctl reset-failed jw-agentd.service
+    systemctl restart jw-agentd.service
+fi
+'"#;
+    let cleaned = config.ssh(script, None, timeout)?;
+    require_success(&cleaned, "Certbot issue fixture cleanup", false)
 }
 
 pub fn gate_p2_managed_config(_root: &Path, timeout: Duration) -> Result<(), String> {
@@ -1338,6 +1482,140 @@ impl P2ApiSession {
         self.approve_managed_config(config, password, &plan, timeout)
     }
 
+    fn operate_certbot_issue_staging_failure(
+        &mut self,
+        config: &VmConfig,
+        password: &str,
+        account_email: &str,
+        timeout: Duration,
+    ) -> Result<String, String> {
+        let inventory = self.get(config, "/api/v1/certificates", timeout)?;
+        expect_http(&inventory, 200, "Certbot issue inventory")?;
+        let operation_type = json_string_field(&inventory.body, "issueOperationType")?;
+        if operation_type != "certbot.certificate.issue/v1" {
+            return Err(String::from(
+                "certificate inventory did not advertise typed issuance",
+            ));
+        }
+        let schema_version = u16::try_from(json_unsigned_field(&inventory.body, "schemaVersion")?)
+            .map_err(|_| String::from("certificate schema version overflow"))?;
+        let inventory_digest = json_string_field(&inventory.body, "inventoryDigest")?;
+        let sites = self.get(config, "/api/v1/services/nginx/sites", timeout)?;
+        expect_http(&sites, 200, "Certbot issue Nginx observation")?;
+        let site = json_issue_site_fields(&sites.body, "jw-agent-p1")?;
+        let idempotency_key = operation_idempotency_key()?;
+        let plan_body = format!(
+            "{{\"schemaVersion\":{},\"operationType\":{},\"primaryDomain\":{},\"alternativeDomains\":[],\"accountEmail\":{},\"environment\":\"staging\",\"siteId\":{},\"expectedSiteDigest\":{},\"expectedInventoryDigest\":{},\"tosAgreed\":true,\"idempotencyKey\":{}}}",
+            schema_version,
+            json_string(&operation_type),
+            json_string(&config.public_host),
+            json_string(account_email),
+            json_string(&site.site_id),
+            json_string(&site.available_digest),
+            json_string(&inventory_digest),
+            json_string(&idempotency_key),
+        );
+        let plan = public_api_request(
+            config,
+            "POST",
+            "/api/v1/operations/certbot/issue/plans",
+            &self.cookie_jar.path,
+            Some(&self.csrf_token),
+            Some(plan_body.as_bytes()),
+            timeout,
+        )?;
+        expect_http(&plan, 200, "Certbot staging issue plan")?;
+        if !plan.body.contains("\"level\":\"g1_verified_action\"")
+            || !plan.body.contains("\"rollbackSupport\":\"not_guaranteed\"")
+            || !plan.body.contains("\"localPort80Reachable\":true")
+            || !plan.body.contains(&format!(
+                "\"resolvedAddresses\":[{}]",
+                json_string(&config.public_address.to_string())
+            ))
+            || !plan
+                .body
+                .contains("\"maskedAccountEmail\":\"j***@example.com\"")
+            || plan.body.contains(account_email)
+        {
+            return Err(String::from(
+                "Certbot issue plan omitted preflight/G1 evidence or exposed the account email",
+            ));
+        }
+        let plan_id = json_string_field(&plan.body, "planId")?;
+        let plan_hash = json_string_field(&plan.body, "planHash")?;
+        let reauth_body = format!(
+            "{{\"password\":{},\"purpose\":{{\"kind\":\"operation\",\"planHash\":{}}}}}",
+            json_string(password),
+            json_string(&plan_hash),
+        );
+        thread::sleep(Duration::from_secs(7));
+        let reauth = public_api_request(
+            config,
+            "POST",
+            "/api/v1/auth/reauth",
+            &self.cookie_jar.path,
+            Some(&self.csrf_token),
+            Some(reauth_body.as_bytes()),
+            timeout,
+        )?;
+        expect_http(
+            &reauth,
+            200,
+            "Certbot issue exact-plan PAM reauthentication",
+        )?;
+        self.csrf_token = json_string_field(&reauth.body, "csrfToken")?;
+        let reauth_token = json_string_field(&reauth.body, "reauthToken")?;
+        let approval_body = format!(
+            "{{\"schemaVersion\":{},\"planId\":{},\"planHash\":{},\"idempotencyKey\":{},\"reauthToken\":{},\"externalEffectConfirmed\":true,\"localAttachDeferredConfirmed\":true}}",
+            schema_version,
+            json_string(&plan_id),
+            json_string(&plan_hash),
+            json_string(&idempotency_key),
+            json_string(&reauth_token),
+        );
+        let accepted = public_api_request(
+            config,
+            "POST",
+            "/api/v1/operations/certbot/issue/approvals",
+            &self.cookie_jar.path,
+            Some(&self.csrf_token),
+            Some(approval_body.as_bytes()),
+            timeout,
+        )?;
+        expect_http(&accepted, 202, "Certbot staging issue approval")?;
+        let operation_id = json_string_field(&accepted.body, "operationId")?;
+        let event_stream = json_string_field(&accepted.body, "eventStream")?;
+        if event_stream != format!("/api/v1/operations/{operation_id}/events") {
+            return Err(String::from(
+                "Certbot issue returned a non-canonical event stream",
+            ));
+        }
+        let operation_path = format!("/api/v1/operations/{operation_id}");
+        let started = Instant::now();
+        loop {
+            let current = self.get(config, &operation_path, timeout)?;
+            expect_http(&current, 200, "Certbot issue receipt")?;
+            let stage = json_string_field(&current.body, "terminalState")?;
+            if matches!(
+                stage.as_str(),
+                "SUCCEEDED"
+                    | "ROLLED_BACK"
+                    | "RECOVERY_REQUIRED"
+                    | "REJECTED"
+                    | "EXPIRED"
+                    | "CANCELLED_BEFORE_APPLY"
+            ) {
+                return Ok(current.body);
+            }
+            if started.elapsed() >= timeout {
+                return Err(String::from(
+                    "Certbot staging issue did not reach a terminal receipt before timeout",
+                ));
+            }
+            thread::sleep(Duration::from_millis(250));
+        }
+    }
+
     fn operate_certbot_renew_test(
         &mut self,
         config: &VmConfig,
@@ -1504,6 +1782,11 @@ struct ManagedConfigPlanFields {
     idempotency_key: String,
 }
 
+struct CertbotIssueSiteFields {
+    site_id: String,
+    available_digest: String,
+}
+
 fn json_site_object<'a>(body: &'a str, site_name: &str) -> Result<&'a str, String> {
     let marker = format!("\"name\":{}", json_string(site_name));
     let Some(marker_index) = body.find(&marker) else {
@@ -1543,6 +1826,19 @@ fn json_managed_config_site_fields(
             .map_err(|_| String::from("managed config schema version overflow"))?,
         operation_type: json_string_field(object, "managedConfigOperationType")?,
         resource_id: json_string_field(object, "managedConfigResourceId")?,
+    })
+}
+
+fn json_issue_site_fields(body: &str, site_name: &str) -> Result<CertbotIssueSiteFields, String> {
+    let object = json_site_object(body, site_name)?;
+    if !object.contains("\"protected\":true") || !object.contains("\"enabled\":true") {
+        return Err(String::from(
+            "Certbot issue site is not the enabled protected management vhost",
+        ));
+    }
+    Ok(CertbotIssueSiteFields {
+        site_id: json_string_field(object, "siteId")?,
+        available_digest: json_string_field(object, "availableDigest")?,
     })
 }
 

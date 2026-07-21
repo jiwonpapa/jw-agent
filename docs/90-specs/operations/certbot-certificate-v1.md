@@ -37,21 +37,20 @@ path, plugin name, command, environment variable와 key material은 입력받지
 ## Plan and preflight
 
 - public DNS A/AAAA와 host address 비교; mismatch·unknown은 production 차단
-- 80/443 listener, external challenge reachability, Nginx config, webroot ownership 확인
+- 80/443 local listener, Nginx config, fixed webroot ownership·실제 challenge file read-back 확인; 외부 도달성은 staging CA 실행 결과로 판정
 - existing certificate·SAN·expiry·renewal config와 conflicting managed site 발견
 - staging success evidence 없으면 production approval 차단
 - CA rate-limit·issuance 비가역성, expected downtime, local rollback 범위를 표시
-- certificate/Nginx resource와 global Certbot lock 획득
+- issue/renew은 global Certbot lock을 획득하고, attach만 certificate/Nginx resource lock을 추가 획득
 
 ## Execution
 
-1. ledger·snapshot continuity와 local managed Nginx fragment snapshot
-2. fixed `certbot certonly --webroot` command class를 bounded process runner로 실행
-3. certificate path·owner·mode·SAN·chain·expiry를 read-back; private key content는 읽거나 기록하지 않음
-4. managed Nginx TLS fragment plan 생성·별도 승인 확인
-5. atomic attach, `nginx -t`, reload, HTTPS/SNI health probe
-6. `certbot.timer` enabled/active와 renewal config를 read-back
-7. local attach까지 검증되면 terminal receipt
+1. ledger continuity와 sanitized certificate inventory snapshot
+2. staging은 비저장 `certbot certonly --webroot --dry-run`, production은 fixed issue command class를 bounded runner로 실행
+3. staging은 inventory 불변을, production은 certificate path·owner·mode·SAN·chain·expiry를 read-back; private key content는 읽거나 기록하지 않음
+4. issue receipt는 CA 외부효과와 “local attach 미수행”을 명시하고 종료
+5. 이후 별도 `certbot.certificate.attach/v1` 계획에서 managed Nginx TLS fragment snapshot·승인을 수행
+6. attach는 atomic replace, `nginx -t`, reload, HTTPS/SNI health와 `certbot.timer`·renewal config를 read-back
 
 production issuance가 성공한 뒤 local attach가 실패하면 certificate issuance 자체는 되돌릴 수 없습니다. local Nginx config만 이전 상태로 G2 원복하고 receipt는 CA effect와 local rollback을 분리해 기록합니다.
 
@@ -64,7 +63,7 @@ production issuance가 성공한 뒤 local attach가 실패하면 certificate is
 
 ## Secret and evidence
 
-account email은 표시·export 시 mask할 수 있으며 private key, ACME account secret, challenge token, full command output은 로그하지 않습니다. receipt는 domain, environment, command class, bounded/redacted result, certificate fingerprint/SAN/expiry, Nginx digest, timer/dry-run 상태와 rollback 결과만 기록합니다.
+account email 원문은 root `0600` 임시 proposal에만 두고 plan·승인·실패·성공·복구 뒤 삭제합니다. ledger·표시·export에는 digest와 mask만 남기며 private key, ACME account secret, challenge token, full command output은 로그하지 않습니다. receipt는 domain, environment, command class, bounded/redacted result, certificate fingerprint/SAN/expiry, Nginx digest, timer/dry-run 상태와 rollback 결과만 기록합니다.
 
 ## Typed errors
 
@@ -81,4 +80,4 @@ account email은 표시·export 시 mask할 수 있으며 private key, ACME acco
 - timer disabled/missing and renewal dry-run failure
 - no secret in argv evidence, DB, logs, browser storage or diagnostic export
 
-실제 public CA production test는 전용 disposable domain·VM·rate budget이 준비된 release lane에서만 수행합니다. 일반 VM lane은 staging ACME와 deterministic failure fixtures를 사용합니다.
+실제 public CA production test는 전용 disposable domain·VM·rate budget이 준비된 release lane에서만 수행합니다. 일반 VM lane은 private-LAN `.test` 호스트에서 실제 staging CA 실패, inventory 불변, 거짓 rollback 부재를 검증합니다.

@@ -20,9 +20,10 @@ JSON-envelope limit from the current template while decoded configuration conten
 remains capped at `24 KiB`.
 The current public edge still accepts an existing valid certificate path only.
 The P2C package contains the isolated one-shot runner, sanitized read-only
-certificate inventory, and a planned/PAM-approved renewal dry-run with G1
-receipts. Issuance and attachment are not advertised until their typed operation
-and VM fault lane pass.
+certificate inventory, a planned/PAM-approved renewal dry-run, and guided
+issuance with DNS/listener/webroot preflight and explicit G1 external-effect
+consent. The private-LAN CA-failure path is VM-proven; public-CA success and
+local Nginx attachment remain unverified and separately gated.
 
 The public proxy socket uses the dedicated `jw-agent-proxy` group and
 `/run/jw-agent-proxy`. Nginx is never added to the privileged `jw-agent` group

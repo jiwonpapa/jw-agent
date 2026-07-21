@@ -11,13 +11,14 @@ pub const DEFAULT_AUTH_SOCKET: &str = "/run/jw-agent/authd.sock";
 pub const DEFAULT_OPS_SOCKET: &str = "/run/jw-agent/opsd.sock";
 pub const DEFAULT_DATABASE: &str = "/var/lib/jw-agent/agentd/agentd.sqlite3";
 pub const DEFAULT_WEB_ROOT: &str = "/usr/share/jw-agent/web";
-pub const DEFAULT_OPERATION_TIMEOUT_SECONDS: u64 = 125;
+pub const DEFAULT_OPERATION_TIMEOUT_SECONDS: u64 = 14 * 60;
 
 #[derive(Clone, Debug)]
 pub struct AgentConfig {
     pub recovery_address: SocketAddr,
     pub recovery_origin: String,
     pub public_host: Option<String>,
+    pub public_addresses: Vec<IpAddr>,
     pub proxy_socket: PathBuf,
     pub auth_socket: PathBuf,
     pub ops_socket: PathBuf,
@@ -46,10 +47,12 @@ impl AgentConfig {
         if let Some(host) = &public_host {
             validate_public_host(host)?;
         }
+        let public_addresses = public_addresses()?;
         Ok(Self {
             recovery_address,
             recovery_origin,
             public_host,
+            public_addresses,
             proxy_socket: PathBuf::from(environment_or(
                 "JW_AGENT_PROXY_SOCKET",
                 DEFAULT_PROXY_SOCKET,
@@ -89,6 +92,34 @@ impl AgentConfig {
     }
 }
 
+fn public_addresses() -> Result<Vec<IpAddr>, String> {
+    let raw = environment_or("JW_AGENT_PUBLIC_ADDRESSES", "");
+    if raw.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut addresses = Vec::new();
+    for value in raw.split(',') {
+        if value.is_empty() || value.trim() != value {
+            return Err(String::from("JW_AGENT_PUBLIC_ADDRESSES is invalid"));
+        }
+        let address = value
+            .parse::<IpAddr>()
+            .map_err(|_| String::from("JW_AGENT_PUBLIC_ADDRESSES is invalid"))?;
+        if address.is_loopback() || address.is_unspecified() || address.is_multicast() {
+            return Err(String::from("JW_AGENT_PUBLIC_ADDRESSES is invalid"));
+        }
+        addresses.push(address);
+    }
+    addresses.sort();
+    addresses.dedup();
+    if addresses.len() > 8 {
+        return Err(String::from(
+            "JW_AGENT_PUBLIC_ADDRESSES has too many values",
+        ));
+    }
+    Ok(addresses)
+}
+
 fn operation_timeout() -> Result<Duration, String> {
     let raw = environment_or(
         "JW_AGENT_OPERATION_TIMEOUT_SECONDS",
@@ -97,9 +128,9 @@ fn operation_timeout() -> Result<Duration, String> {
     let seconds = raw
         .parse::<u64>()
         .map_err(|_| String::from("JW_AGENT_OPERATION_TIMEOUT_SECONDS is invalid"))?;
-    if !(30..=300).contains(&seconds) {
+    if !(30..=900).contains(&seconds) {
         return Err(String::from(
-            "JW_AGENT_OPERATION_TIMEOUT_SECONDS must be between 30 and 300",
+            "JW_AGENT_OPERATION_TIMEOUT_SECONDS must be between 30 and 900",
         ));
     }
     Ok(Duration::from_secs(seconds))

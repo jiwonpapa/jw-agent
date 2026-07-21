@@ -164,6 +164,38 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/operations/certbot/issue/approvals": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["approve_certbot_issue"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/operations/certbot/issue/plans": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["plan_certbot_issue"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/operations/certbot/renew-test/approvals": {
         parameters: {
             query?: never;
@@ -393,6 +425,57 @@ export interface components {
             readOnly: boolean;
             supportedOperations: string[];
         };
+        CertbotIssueApprovalRequest: {
+            /** Format: password */
+            additionalAuthClaim?: string | null;
+            externalEffectConfirmed: boolean;
+            idempotencyKey: string;
+            localAttachDeferredConfirmed: boolean;
+            planHash: string;
+            planId: string;
+            /** Format: password */
+            reauthToken: string;
+            /** Format: int32 */
+            schemaVersion: number;
+        };
+        CertbotIssuePlanRequest: {
+            accountEmail: string;
+            alternativeDomains: string[];
+            environment: components["schemas"]["CertificateEnvironment"];
+            expectedInventoryDigest: string;
+            expectedSiteDigest: string;
+            idempotencyKey: string;
+            operationType: string;
+            primaryDomain: string;
+            /** Format: int32 */
+            schemaVersion: number;
+            siteId: string;
+            tosAgreed: boolean;
+        };
+        CertbotIssuePlanView: {
+            actor: components["schemas"]["Subject"];
+            assurance: components["schemas"]["AssuranceView"];
+            createdAt: string;
+            domains: string[];
+            environment: components["schemas"]["CertificateEnvironment"];
+            expiresAt: string;
+            impact: string[];
+            inventoryDigest: string;
+            localPort443Reachable: boolean;
+            localPort80Reachable: boolean;
+            maskedAccountEmail: string;
+            operationType: string;
+            planHash: string;
+            planId: string;
+            primaryDomain: string;
+            recoveryPath: string[];
+            resolvedAddresses: string[];
+            /** Format: int32 */
+            schemaVersion: number;
+            siteDigest: string;
+            siteId: string;
+            stagingEvidenceValid: boolean;
+        };
         CertbotRenewTestApprovalRequest: {
             /** Format: password */
             additionalAuthClaim?: string | null;
@@ -430,6 +513,8 @@ export interface components {
             timerActive: boolean;
             timerEnabled: boolean;
         };
+        /** @enum {string} */
+        CertificateEnvironment: "staging" | "production";
         CertificateInventoryView: {
             assurance: components["schemas"]["AssuranceView"];
             certbotInstalled: boolean;
@@ -1144,6 +1229,153 @@ export interface operations {
             };
             /** @description Authentication required */
             401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    approve_certbot_issue: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CertbotIssueApprovalRequest"];
+            };
+        };
+        responses: {
+            /** @description Certbot issuance accepted */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OperationAcceptedView"];
+                };
+            };
+            /** @description Invalid approval shape */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Authentication required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Claim, role, or CSRF rejected */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Expired, stale, busy, or conflicting operation */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Forensic lockdown */
+            423: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Additional authentication is configured but unavailable */
+            428: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    plan_certbot_issue: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CertbotIssuePlanRequest"];
+            };
+        };
+        responses: {
+            /** @description Immutable Certbot issuance plan */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CertbotIssuePlanView"];
+                };
+            };
+            /** @description Invalid typed request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Authentication required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Role or CSRF rejected */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description DNS, listener, staging, stale, busy, or idempotency conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Forensic lockdown */
+            423: {
                 headers: {
                     [name: string]: unknown;
                 };

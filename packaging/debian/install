@@ -6,6 +6,7 @@ apps/web/dist/* usr/share/jw-agent/web/
 packaging/default/jw-agent etc/default/
 packaging/nginx/jw-agent-management.conf.template usr/share/jw-agent/nginx/
 packaging/nginx/proxy-common.conf usr/share/jw-agent/nginx/
+packaging/nginx/acme-challenge.conf usr/share/jw-agent/nginx/
 packaging/pam/jw-agent etc/pam.d/
 packaging/systemd/jw-agentd.service usr/lib/systemd/system/
 packaging/systemd/jw-authd.socket usr/lib/systemd/system/

@@ -301,6 +301,83 @@ const actionableCertificates = {
   renewTestOperationType: "certbot.certificate.renew_test/v1",
 };
 
+const actionableIssueCertificates = {
+  ...certificates,
+  issueOperationType: "certbot.certificate.issue/v1",
+  renewTestOperationType: "certbot.certificate.renew_test/v1",
+};
+
+const issueNginx = {
+  ...nginx,
+  sites: nginx.sites.map((site) =>
+    site.protected
+      ? {
+          ...site,
+          siteId: "ngs_managementFixture123456",
+          availableDigest: `sha256:${"b".repeat(64)}`,
+          enabledStateDigest,
+        }
+      : site,
+  ),
+};
+
+const certbotIssuePlan = {
+  schemaVersion: 1,
+  operationType: "certbot.certificate.issue/v1",
+  planId: "plan_certbot_issue_fixture",
+  planHash: `sha256:${"c".repeat(64)}`,
+  createdAt: "2026-07-21T02:11:00Z",
+  expiresAt: "2026-07-21T02:21:00Z",
+  actor: session.subject,
+  primaryDomain: "care.example.com",
+  domains: ["care.example.com"],
+  maskedAccountEmail: "o***@example.com",
+  environment: "staging",
+  siteId: "ngs_managementFixture123456",
+  inventoryDigest: certificates.inventoryDigest,
+  siteDigest: `sha256:${"b".repeat(64)}`,
+  resolvedAddresses: ["192.0.2.10"],
+  localPort80Reachable: true,
+  localPort443Reachable: true,
+  stagingEvidenceValid: false,
+  impact: [
+    "staging은 Let’s Encrypt 시험 CA에 실제 challenge를 요청하지만 인증서를 저장하지 않습니다.",
+    "이번 작업은 인증서 발급까지만 수행하고 Nginx TLS 연결은 별도 G2 승인으로 남깁니다.",
+  ],
+  recoveryPath: ["SSH에서 certbot certificates와 해당 domain의 renewal 상태를 확인합니다."],
+  assurance: {
+    ...verifiedActionAssurance,
+    scope: ["canonical domain에 대해 고정 webroot Certbot staging 또는 production 발급만 실행합니다."],
+    excludedEffects: ["CA challenge·계정·발급·rate-limit 기록은 원복할 수 없습니다."],
+  },
+};
+
+const certbotIssueReceipt: OperationReceiptView = {
+  ...operationReceipt,
+  operationType: "certbot.certificate.issue/v1",
+  planId: certbotIssuePlan.planId,
+  planHash: certbotIssuePlan.planHash,
+  beforeDigest: certificates.inventoryDigest,
+  afterDigest: certificates.inventoryDigest,
+  assurance: verifiedActionAssurance,
+  rollbackResult: null,
+  recoveryPath: [],
+  stages: [
+    { sequence: 1, stage: "APPROVED", recordedAt: "2026-07-21T02:12:00Z", resultCode: "approved", evidenceDigest: certbotIssuePlan.planHash },
+    { sequence: 2, stage: "SNAPSHOTTED", recordedAt: "2026-07-21T02:12:01Z", resultCode: "snapshot_durable", evidenceDigest: certificates.inventoryDigest },
+    { sequence: 3, stage: "APPLYING", recordedAt: "2026-07-21T02:12:02Z", resultCode: "certbot_staging_dry_run_started", evidenceDigest: certificates.inventoryDigest },
+    { sequence: 4, stage: "VALIDATING", recordedAt: "2026-07-21T02:12:03Z", resultCode: "certbot_issue_command_completed", evidenceDigest: certificates.inventoryDigest },
+    { sequence: 5, stage: "SUCCEEDED", recordedAt: "2026-07-21T02:12:04Z", resultCode: "staging_challenge_verified", evidenceDigest: certificates.inventoryDigest },
+  ],
+};
+
+const certbotIssueAccepted = {
+  ...operationAccepted,
+  operationType: "certbot.certificate.issue/v1",
+  planId: certbotIssuePlan.planId,
+  planHash: certbotIssuePlan.planHash,
+};
+
 const certbotRenewPlan = {
   schemaVersion: 1,
   operationType: "certbot.certificate.renew_test/v1",
@@ -425,8 +502,11 @@ async function mockApi(
     onConfigApproval?: (body: unknown) => void;
     onEvents?: () => void;
     certificateFixture?: Record<string, unknown>;
+    nginxFixture?: Record<string, unknown>;
     onCertbotPlan?: (body: unknown) => void;
     onCertbotApproval?: (body: unknown) => void;
+    onCertbotIssuePlan?: (body: unknown) => void;
+    onCertbotIssueApproval?: (body: unknown) => void;
   } = {},
 ): Promise<void> {
   let authenticated = initiallyAuthenticated;
@@ -460,7 +540,9 @@ async function mockApi(
     if (path === "/api/v1/certificates") {
       return route.fulfill({ json: operationOptions.certificateFixture ?? certificates });
     }
-    if (path === "/api/v1/services/nginx/sites") return route.fulfill({ json: nginx });
+    if (path === "/api/v1/services/nginx/sites") {
+      return route.fulfill({ json: operationOptions.nginxFixture ?? nginx });
+    }
     if (path === `/api/v1/config-resources/${configResourceId}` && request.method() === "GET") {
       return route.fulfill({ json: managedConfigResource });
     }
@@ -490,6 +572,15 @@ async function mockApi(
       operationOptions.onCertbotApproval?.(request.postDataJSON());
       activeReceipt = certbotRenewReceipt;
       return route.fulfill({ status: 202, json: certbotRenewAccepted });
+    }
+    if (path === "/api/v1/operations/certbot/issue/plans" && request.method() === "POST") {
+      operationOptions.onCertbotIssuePlan?.(request.postDataJSON());
+      return route.fulfill({ json: certbotIssuePlan });
+    }
+    if (path === "/api/v1/operations/certbot/issue/approvals" && request.method() === "POST") {
+      operationOptions.onCertbotIssueApproval?.(request.postDataJSON());
+      activeReceipt = certbotIssueReceipt;
+      return route.fulfill({ status: 202, json: certbotIssueAccepted });
     }
     if (path === "/api/v1/operations/op_fixture/events") {
       operationOptions.onEvents?.();
@@ -797,6 +888,57 @@ test("G1 Certbot renewal test requires plan, external-effect intent, and PAM app
   expect(approvalBody.externalEffectConfirmed).toBe(true);
   expect(JSON.stringify(approvalBodies)).not.toContain("fixture-password");
   expect(await page.locator("body").innerText()).not.toContain("PRIVATE KEY");
+  const hasOverflow = await page.evaluate(
+    () => document.documentElement.scrollWidth > document.documentElement.clientWidth,
+  );
+  expect(hasOverflow).toBe(false);
+  const accessibility = await new AxeBuilder({ page }).analyze();
+  expect(
+    accessibility.violations.filter((violation) =>
+      ["critical", "serious"].includes(violation.impact ?? ""),
+    ),
+  ).toEqual([]);
+});
+
+test("guided Certbot staging issue requires preflight, two intents, and PAM approval", async ({ page }) => {
+  const planBodies: unknown[] = [];
+  const approvalBodies: unknown[] = [];
+  await page.setViewportSize({ width: 390, height: 844 });
+  await mockApi(page, true, health, {
+    certificateFixture: actionableIssueCertificates,
+    nginxFixture: issueNginx,
+    onCertbotIssuePlan: (body) => planBodies.push(body),
+    onCertbotIssueApproval: (body) => approvalBodies.push(body),
+  });
+  await page.goto("/certificates");
+
+  await expect(page.getByRole("heading", { name: "신규 인증서 발급" })).toBeVisible();
+  await page.getByLabel("ACME 계정 이메일").fill("owner@example.com");
+  await page.getByLabel(/Let’s Encrypt 이용약관/).check();
+  await page.getByRole("button", { name: "발급 전 계획 만들기" }).dblclick();
+  await expect(page.getByRole("heading", { name: "care.example.com 발급 계획" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "G1 · CA 외부효과는 자동 원복 불가" })).toBeVisible();
+  await expect(page.getByText(/TLS 연결은 별도 G2 승인/).first()).toBeVisible();
+
+  const approval = page.getByRole("button", { name: "staging 발급 실행" });
+  await page.getByLabel("Linux 계정 비밀번호로 exact plan 승인").fill("fixture-password");
+  await expect(approval).toBeDisabled();
+  await page.getByLabel(/CA challenge·발급·rate-limit 외부효과/).check();
+  await expect(approval).toBeDisabled();
+  await page.getByLabel(/Nginx TLS 연결은 별도 G2 계획/).check();
+  await approval.dblclick();
+
+  await expect(page.getByRole("heading", { name: "인증서 발급 검증 완료" })).toBeVisible();
+  await expect(page.getByText(/TLS 연결은 아직 변경하지 않았습니다/)).toBeVisible();
+  expect(planBodies).toHaveLength(1);
+  expect(approvalBodies).toHaveLength(1);
+  const planBody = planBodies[0] as Record<string, unknown>;
+  const approvalBody = approvalBodies[0] as Record<string, unknown>;
+  expect(planBody.environment).toBe("staging");
+  expect(planBody.primaryDomain).toBe("care.example.com");
+  expect(approvalBody.externalEffectConfirmed).toBe(true);
+  expect(approvalBody.localAttachDeferredConfirmed).toBe(true);
+  expect(JSON.stringify(approvalBodies)).not.toContain("fixture-password");
   const hasOverflow = await page.evaluate(
     () => document.documentElement.scrollWidth > document.documentElement.clientWidth,
   );

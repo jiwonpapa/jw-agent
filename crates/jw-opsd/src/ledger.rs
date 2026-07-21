@@ -5,15 +5,19 @@ use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::Path;
 
 use jw_contracts::{
-    AssuranceView, CERTBOT_RENEW_TEST_OPERATION, CertbotRenewTestPlanView,
-    MANAGED_CONFIG_OPERATION, ManagedConfigPlanView, NGINX_SITE_STATE_OPERATION, NginxSiteState,
-    NginxSiteStatePlanView, OPERATION_SCHEMA_VERSION, OperationReceiptView, OperationStage,
-    OperationStageEvidenceView, Role, Subject,
+    AssuranceView, CERTBOT_ISSUE_OPERATION, CERTBOT_RENEW_TEST_OPERATION, CertbotIssuePlanView,
+    CertbotRenewTestPlanView, CertificateEnvironment, MANAGED_CONFIG_OPERATION,
+    ManagedConfigPlanView, NGINX_SITE_STATE_OPERATION, NginxSiteState, NginxSiteStatePlanView,
+    OPERATION_SCHEMA_VERSION, OperationReceiptView, OperationStage, OperationStageEvidenceView,
+    Role, Subject,
 };
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use serde::{Deserialize, Serialize};
 
-use crate::certificate::{CERTBOT_RENEW_RECOVERY_PATH, CertbotRenewPlanPayload};
+use crate::certificate::{
+    CERTBOT_ISSUE_IMPACT, CERTBOT_ISSUE_RECOVERY_PATH, CERTBOT_RENEW_RECOVERY_PATH,
+    CertbotIssuePlanPayload, CertbotRenewPlanPayload,
+};
 use crate::config::OpsPaths;
 use crate::digest::ledger_event_digest;
 use crate::error::OpsError;
@@ -47,6 +51,7 @@ pub struct StoredPlan {
     pub assurance: AssuranceView,
     pub managed_config: Option<ManagedConfigPlanPayload>,
     pub certbot_renew: Option<CertbotRenewPlanPayload>,
+    pub certbot_issue: Option<CertbotIssuePlanPayload>,
 }
 
 impl StoredPlan {
@@ -166,14 +171,16 @@ impl Ledger {
             .map_err(|error| OpsError::Storage(error.to_string()))?;
         let certificate_payload = serde_json::to_string(&plan.certbot_renew)
             .map_err(|error| OpsError::Storage(error.to_string()))?;
+        let certificate_issue_payload = serde_json::to_string(&plan.certbot_issue)
+            .map_err(|error| OpsError::Storage(error.to_string()))?;
         transaction.execute(
             "INSERT INTO plans (
                 plan_id, operation_type, plan_hash, actor_uid, actor_username, actor_role,
                 site_id, display_name, current_state, target_state, available_digest,
                 enabled_state_digest, created_at_ms, expires_at_ms, idempotency_key,
                 request_digest, resource_key, assurance_json, payload_json,
-                certificate_payload_json
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)",
+                certificate_payload_json, certificate_issue_payload_json
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21)",
             params![
                 plan.plan_id,
                 plan.operation_type,
@@ -195,6 +202,7 @@ impl Ledger {
                 assurance,
                 payload,
                 certificate_payload,
+                certificate_issue_payload,
             ],
         )?;
         transaction.execute(
@@ -271,7 +279,9 @@ impl Ledger {
                 params![plan.resource_key, operation_id, now_ms],
             )
             .map_err(|_| OpsError::Rejected("resource_busy"))?;
-        if plan.operation_type != CERTBOT_RENEW_TEST_OPERATION {
+        if plan.operation_type != CERTBOT_RENEW_TEST_OPERATION
+            && plan.operation_type != CERTBOT_ISSUE_OPERATION
+        {
             transaction
                 .execute(
                     "INSERT INTO resource_locks (resource_key, operation_id, acquired_at_ms)
@@ -418,21 +428,22 @@ impl Ledger {
         Ok(operations)
     }
 
-    pub fn expired_unexecuted_managed_plans(
+    pub fn expired_unexecuted_proposal_plans(
         &self,
         now_ms: i64,
     ) -> Result<Vec<StoredPlan>, OpsError> {
         let mut statement = self.connection.prepare(
             "SELECT plans.plan_id FROM plans
              LEFT JOIN operations ON operations.plan_id = plans.plan_id
-             WHERE plans.operation_type = ?1
-               AND plans.expires_at_ms <= ?2
+             WHERE plans.operation_type IN (?1, ?2)
+               AND plans.expires_at_ms <= ?3
                AND operations.operation_id IS NULL
              ORDER BY plans.expires_at_ms, plans.plan_id",
         )?;
-        let rows = statement.query_map(params![MANAGED_CONFIG_OPERATION, now_ms], |row| {
-            row.get::<_, String>(0)
-        })?;
+        let rows = statement.query_map(
+            params![MANAGED_CONFIG_OPERATION, CERTBOT_ISSUE_OPERATION, now_ms],
+            |row| row.get::<_, String>(0),
+        )?;
         let mut plans = Vec::new();
         for row in rows {
             plans.push(self.load_plan(&row?)?);
@@ -591,6 +602,84 @@ impl Ledger {
                 .collect(),
             assurance: plan.assurance.clone(),
         })
+    }
+
+    pub fn certbot_issue_plan_view(
+        &self,
+        plan: &StoredPlan,
+    ) -> Result<CertbotIssuePlanView, OpsError> {
+        if plan.operation_type != CERTBOT_ISSUE_OPERATION {
+            return Err(OpsError::Rejected("operation_type"));
+        }
+        let payload = plan
+            .certbot_issue
+            .as_ref()
+            .ok_or(OpsError::ForensicLockdown)?;
+        Ok(CertbotIssuePlanView {
+            schema_version: OPERATION_SCHEMA_VERSION,
+            operation_type: plan.operation_type.clone(),
+            plan_id: plan.plan_id.clone(),
+            plan_hash: plan.plan_hash.clone(),
+            created_at: format_time(plan.created_at_ms)?,
+            expires_at: format_time(plan.expires_at_ms)?,
+            actor: plan.actor.clone(),
+            primary_domain: payload.primary_domain.clone(),
+            domains: payload.domains.clone(),
+            masked_account_email: payload.masked_account_email.clone(),
+            environment: payload.environment,
+            site_id: payload.site_id.clone(),
+            inventory_digest: payload.inventory_digest.clone(),
+            site_digest: payload.site_digest.clone(),
+            resolved_addresses: payload.resolved_addresses.clone(),
+            local_port_80_reachable: payload.local_port_80_reachable,
+            local_port_443_reachable: payload.local_port_443_reachable,
+            staging_evidence_valid: payload.staging_evidence_valid,
+            impact: CERTBOT_ISSUE_IMPACT
+                .iter()
+                .map(ToString::to_string)
+                .collect(),
+            recovery_path: CERTBOT_ISSUE_RECOVERY_PATH
+                .iter()
+                .map(ToString::to_string)
+                .collect(),
+            assurance: plan.assurance.clone(),
+        })
+    }
+
+    pub fn has_recent_staging_evidence(
+        &self,
+        evidence_key: &str,
+        not_before_ms: i64,
+    ) -> Result<bool, OpsError> {
+        let mut statement = self.connection.prepare(
+            "SELECT plans.certificate_issue_payload_json
+             FROM plans
+             JOIN operations ON operations.plan_id = plans.plan_id
+             WHERE plans.operation_type = ?1
+               AND operations.stage = ?2
+               AND operations.updated_at_ms >= ?3
+             ORDER BY operations.updated_at_ms DESC",
+        )?;
+        let rows = statement.query_map(
+            params![
+                CERTBOT_ISSUE_OPERATION,
+                OperationStage::Succeeded.as_storage_value(),
+                not_before_ms
+            ],
+            |row| row.get::<_, String>(0),
+        )?;
+        for row in rows {
+            let encoded = row?;
+            let payload: Option<CertbotIssuePlanPayload> =
+                serde_json::from_str(&encoded).map_err(|_| OpsError::ForensicLockdown)?;
+            if payload.is_some_and(|value| {
+                value.environment == CertificateEnvironment::Staging
+                    && value.staging_evidence_key == evidence_key
+            }) {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 
     fn validate_continuity(&self) -> Result<(), OpsError> {
@@ -816,7 +905,7 @@ fn load_plan_from(connection: &Connection, plan_id: &str) -> Result<StoredPlan, 
                     display_name, current_state, target_state, available_digest,
                     enabled_state_digest, created_at_ms, expires_at_ms, idempotency_key,
                     request_digest, resource_key, assurance_json, payload_json,
-                    certificate_payload_json
+                    certificate_payload_json, certificate_issue_payload_json
              FROM plans WHERE plan_id = ?1",
             [plan_id],
             |row| {
@@ -841,6 +930,7 @@ fn load_plan_from(connection: &Connection, plan_id: &str) -> Result<StoredPlan, 
                     row.get::<_, String>(17)?,
                     row.get::<_, String>(18)?,
                     row.get::<_, String>(19)?,
+                    row.get::<_, String>(20)?,
                 ))
             },
         )
@@ -862,6 +952,8 @@ fn load_plan_from(connection: &Connection, plan_id: &str) -> Result<StoredPlan, 
                 serde_json::from_str(&row.18).map_err(|_| OpsError::ForensicLockdown)?;
             let certbot_renew: Option<CertbotRenewPlanPayload> =
                 serde_json::from_str(&row.19).map_err(|_| OpsError::ForensicLockdown)?;
+            let certbot_issue: Option<CertbotIssuePlanPayload> =
+                serde_json::from_str(&row.20).map_err(|_| OpsError::ForensicLockdown)?;
             Ok(StoredPlan {
                 operation_type: row.0,
                 plan_id: row.1,
@@ -885,6 +977,7 @@ fn load_plan_from(connection: &Connection, plan_id: &str) -> Result<StoredPlan, 
                 assurance,
                 managed_config,
                 certbot_renew,
+                certbot_issue,
             })
         })
 }
@@ -899,18 +992,28 @@ fn migrate(connection: &Connection) -> Result<(), OpsError> {
             connection.pragma_update(None, "user_version", 2)?;
             connection.execute_batch(include_str!("../migrations/0003_certbot_renew.sql"))?;
             connection.pragma_update(None, "user_version", 3)?;
+            connection.execute_batch(include_str!("../migrations/0004_certbot_issue.sql"))?;
+            connection.pragma_update(None, "user_version", 4)?;
         }
         1 => {
             connection.execute_batch(include_str!("../migrations/0002_managed_config.sql"))?;
             connection.pragma_update(None, "user_version", 2)?;
             connection.execute_batch(include_str!("../migrations/0003_certbot_renew.sql"))?;
             connection.pragma_update(None, "user_version", 3)?;
+            connection.execute_batch(include_str!("../migrations/0004_certbot_issue.sql"))?;
+            connection.pragma_update(None, "user_version", 4)?;
         }
         2 => {
             connection.execute_batch(include_str!("../migrations/0003_certbot_renew.sql"))?;
             connection.pragma_update(None, "user_version", 3)?;
+            connection.execute_batch(include_str!("../migrations/0004_certbot_issue.sql"))?;
+            connection.pragma_update(None, "user_version", 4)?;
         }
-        3 => {}
+        3 => {
+            connection.execute_batch(include_str!("../migrations/0004_certbot_issue.sql"))?;
+            connection.pragma_update(None, "user_version", 4)?;
+        }
+        4 => {}
         _ => return Err(OpsError::ForensicLockdown),
     }
     Ok(())
@@ -919,6 +1022,8 @@ fn migrate(connection: &Connection) -> Result<(), OpsError> {
 fn recovery_path_for(operation_type: &str) -> Vec<String> {
     let values: &[&str] = if operation_type == MANAGED_CONFIG_OPERATION {
         &MANAGED_CONFIG_RECOVERY_PATH
+    } else if operation_type == CERTBOT_ISSUE_OPERATION {
+        &CERTBOT_ISSUE_RECOVERY_PATH
     } else if operation_type == jw_contracts::CERTBOT_RENEW_TEST_OPERATION {
         &CERTBOT_RENEW_RECOVERY_PATH
     } else {
@@ -1267,6 +1372,7 @@ mod tests {
             },
             managed_config: None,
             certbot_renew: None,
+            certbot_issue: None,
         }
     }
 

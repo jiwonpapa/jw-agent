@@ -3,8 +3,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use jw_contracts::{
-    AssuranceLevel, AssuranceView, CERTBOT_RENEW_TEST_OPERATION, CertbotCommand,
-    CertbotCommandEvidence, CertbotRenewTestPlanRequest, CertbotRenewTestPlanView,
+    AssuranceLevel, AssuranceView, CERTBOT_ISSUE_OPERATION, CERTBOT_RENEW_TEST_OPERATION,
+    CertbotCommand, CertbotCommandEvidence, CertbotIssuePlanInput, CertbotIssuePlanView,
+    CertbotRenewTestPlanRequest, CertbotRenewTestPlanView, CertificateEnvironment,
     CertificateInventoryView, MANAGED_CONFIG_OPERATION, ManagedConfigApprovalIntent,
     ManagedConfigPlanRequest, ManagedConfigPlanView, ManagedConfigResourceView,
     NGINX_SITE_STATE_OPERATION, NginxSiteState, NginxSiteStatePlanRequest, OperationReceiptView,
@@ -15,7 +16,10 @@ use jw_contracts::{
 use serde::Serialize;
 
 use crate::certbot_runner::{CertbotRunner, UdsCertbotRunner};
-use crate::certificate::{CertbotRenewPlanPayload, certificate_inventory, renew_test_assurance};
+use crate::certificate::{
+    CertbotIssuePlanPayload, CertbotRenewPlanPayload, certificate_inventory, issue_assurance,
+    mask_account_email, renew_test_assurance, validate_issue_preconditions, validate_issue_site,
+};
 use crate::config::{OpsPaths, OpsPolicy};
 use crate::digest::canonical_digest;
 use crate::error::OpsError;
@@ -32,6 +36,8 @@ use crate::snapshot::{
     read_certificate_inventory_snapshot, read_managed_config_snapshot, read_nginx_snapshot,
     write_certificate_inventory_snapshot, write_managed_config_snapshot, write_nginx_snapshot,
 };
+
+const CERTBOT_STAGING_EVIDENCE_TTL_MS: i64 = 24 * 60 * 60 * 1_000;
 
 #[derive(Clone)]
 pub struct OpsService {
@@ -65,6 +71,22 @@ struct CertbotRenewPlanRequestDigest<'a> {
     operation_type: &'a str,
     actor: &'a Subject,
     request: &'a CertbotRenewTestPlanRequest,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CertbotIssuePlanRequestDigest<'a> {
+    operation_type: &'a str,
+    actor: &'a Subject,
+    request: &'a CertbotIssuePlanInput,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CertbotStagingEvidenceMaterial<'a> {
+    domains: &'a [String],
+    site_digest: &'a str,
+    resolved_addresses: &'a [String],
 }
 
 #[derive(Serialize)]
@@ -129,6 +151,41 @@ struct CertbotRenewPlanHashMaterial<'a> {
     certificate_count: u32,
     resource_key: &'a str,
     assurance: &'a AssuranceView,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CertbotIssuePlanHashMaterial<'a> {
+    schema_version: u16,
+    operation_type: &'a str,
+    plan_id: &'a str,
+    created_at_ms: i64,
+    expires_at_ms: i64,
+    actor: &'a Subject,
+    primary_domain: &'a str,
+    domains: &'a [String],
+    account_email_digest: &'a str,
+    masked_account_email: &'a str,
+    environment: CertificateEnvironment,
+    site_id: &'a str,
+    site_digest: &'a str,
+    inventory_digest: &'a str,
+    preflight_observed_at_ms: i64,
+    resolved_addresses: &'a [String],
+    local_port_80_reachable: bool,
+    local_port_443_reachable: bool,
+    staging_evidence_valid: bool,
+    staging_evidence_key: &'a str,
+    resource_key: &'a str,
+    assurance: &'a AssuranceView,
+}
+
+struct CertbotIssueApprovalInput<'a> {
+    plan_id: &'a str,
+    plan_hash: &'a str,
+    idempotency_key: &'a str,
+    external_effect_confirmed: bool,
+    local_attach_deferred_confirmed: bool,
 }
 
 #[derive(Serialize)]
@@ -210,6 +267,35 @@ impl OpsService {
             OpsRequestBody::CertificateInventory { .. } => self
                 .certificate_inventory(now_ms)
                 .map(OpsResponseBody::CertificateInventory),
+            OpsRequestBody::PlanCertbotIssue { actor, plan } => {
+                self.require_write_available()?;
+                require_operator(actor)?;
+                self.plan_certbot_issue(actor, plan, now_ms)
+                    .map(OpsResponseBody::CertbotIssuePlan)
+            }
+            OpsRequestBody::ApproveCertbotIssue {
+                actor,
+                plan_id,
+                plan_hash,
+                idempotency_key,
+                external_effect_confirmed,
+                local_attach_deferred_confirmed,
+            } => {
+                self.require_write_available()?;
+                require_operator(actor)?;
+                self.approve_certbot_issue(
+                    actor,
+                    CertbotIssueApprovalInput {
+                        plan_id,
+                        plan_hash,
+                        idempotency_key,
+                        external_effect_confirmed: *external_effect_confirmed,
+                        local_attach_deferred_confirmed: *local_attach_deferred_confirmed,
+                    },
+                    now_ms,
+                )
+                .map(OpsResponseBody::OperationReceipt)
+            }
             OpsRequestBody::PlanCertbotRenewTest { actor, plan } => {
                 self.require_write_available()?;
                 require_operator(actor)?;
@@ -315,6 +401,7 @@ impl OpsService {
                 supported_operations: vec![
                     String::from(NGINX_SITE_STATE_OPERATION),
                     String::from(MANAGED_CONFIG_OPERATION),
+                    String::from(CERTBOT_ISSUE_OPERATION),
                     String::from(CERTBOT_RENEW_TEST_OPERATION),
                 ],
                 forensic_lockdown: false,
@@ -361,9 +448,166 @@ impl OpsService {
             && !self.forensic_lockdown.load(Ordering::SeqCst)
             && Ledger::open(&self.paths).is_ok()
         {
+            inventory.issue_operation_type = Some(String::from(CERTBOT_ISSUE_OPERATION));
             inventory.renew_test_operation_type = Some(String::from(CERTBOT_RENEW_TEST_OPERATION));
+            inventory.assurance.reason = Some(String::from(
+                "목록은 G0 조회 전용이며 발급·갱신은 각각 별도 G1 계획과 재인증을 요구합니다.",
+            ));
         }
         Ok(inventory)
+    }
+
+    fn plan_certbot_issue(
+        &self,
+        actor: &Subject,
+        input: &CertbotIssuePlanInput,
+        now_ms: i64,
+    ) -> Result<CertbotIssuePlanView, OpsError> {
+        let ledger = self.open_ledger()?;
+        self.remove_expired_proposals(&ledger, now_ms)?;
+        drop(ledger);
+        let site = validate_issue_preconditions(&self.paths, input, now_ms)?;
+        let inventory = self.certificate_inventory(now_ms)?;
+        if !inventory.certbot_installed {
+            return Err(OpsError::Rejected("unsupported_environment"));
+        }
+        if inventory.inventory_digest != input.request.expected_inventory_digest {
+            return Err(OpsError::Rejected("stale_inventory"));
+        }
+        let nginx_test = self.runner.run(CommandClass::NginxConfigTest)?;
+        let nginx_active = self.runner.run(CommandClass::NginxActive)?;
+        if !nginx_test.success || !nginx_active.success {
+            return Err(OpsError::Rejected("unsupported_environment"));
+        }
+        let domains = input.request.domains();
+        let staging_evidence_key = canonical_digest(
+            b"jw-agent/certbot-staging-evidence/v1",
+            &CertbotStagingEvidenceMaterial {
+                domains: &domains,
+                site_digest: &site.available_digest,
+                resolved_addresses: &input.preflight.resolved_addresses,
+            },
+        )?;
+        let staging_evidence_valid = self.open_ledger()?.has_recent_staging_evidence(
+            &staging_evidence_key,
+            now_ms.saturating_sub(CERTBOT_STAGING_EVIDENCE_TTL_MS),
+        )?;
+        if input.request.environment == CertificateEnvironment::Production
+            && !staging_evidence_valid
+        {
+            return Err(OpsError::Rejected("staging_required"));
+        }
+        let ttl_ms = i64::try_from(self.policy.plan_ttl.as_millis())
+            .map_err(|_| OpsError::Storage(String::from("plan ttl overflow")))?;
+        let plan_id = random_id("plan")?;
+        let created_plan_id = plan_id.clone();
+        let account_email_proposal = write_proposal(
+            &self.paths,
+            &self.policy,
+            &plan_id,
+            &input.request.account_email,
+        )?;
+        let request_digest = canonical_digest(
+            b"jw-agent/operation-request/v1",
+            &CertbotIssuePlanRequestDigest {
+                operation_type: CERTBOT_ISSUE_OPERATION,
+                actor,
+                request: input,
+            },
+        )?;
+        let payload = CertbotIssuePlanPayload {
+            primary_domain: input.request.primary_domain.clone(),
+            domains,
+            account_email_proposal_relative_path: account_email_proposal.relative_path.clone(),
+            account_email_proposal_digest: account_email_proposal.digest.clone(),
+            masked_account_email: mask_account_email(&input.request.account_email),
+            environment: input.request.environment,
+            site_id: site.site_id.clone(),
+            site_digest: site.available_digest.clone(),
+            inventory_digest: inventory.inventory_digest.clone(),
+            preflight_observed_at_ms: input.preflight.observed_at_unix_ms,
+            resolved_addresses: input.preflight.resolved_addresses.clone(),
+            local_port_80_reachable: input.preflight.local_port_80_reachable,
+            local_port_443_reachable: input.preflight.local_port_443_reachable,
+            staging_evidence_valid,
+            staging_evidence_key,
+        };
+        let mut plan = StoredPlan {
+            operation_type: String::from(CERTBOT_ISSUE_OPERATION),
+            plan_id,
+            plan_hash: String::new(),
+            actor: actor.clone(),
+            site_id: site.site_id,
+            display_name: input.request.primary_domain.clone(),
+            current_state: NginxSiteState::Disabled,
+            target_state: NginxSiteState::Disabled,
+            available_digest: inventory.inventory_digest.clone(),
+            enabled_state_digest: inventory.inventory_digest,
+            created_at_ms: now_ms,
+            expires_at_ms: now_ms.saturating_add(ttl_ms),
+            idempotency_key: input.request.idempotency_key.clone(),
+            request_digest,
+            resource_key: String::from("certbot/global"),
+            assurance: issue_assurance(),
+            managed_config: None,
+            certbot_renew: None,
+            certbot_issue: Some(payload),
+        };
+        plan.plan_hash = certbot_issue_plan_hash(&plan)?;
+        let result = (|| {
+            let mut ledger = self.open_ledger()?;
+            let stored = ledger.create_or_reuse_plan(&plan)?;
+            let view = ledger.certbot_issue_plan_view(&stored)?;
+            Ok((stored.plan_id, view))
+        })();
+        match result {
+            Ok((stored_plan_id, view)) => {
+                if stored_plan_id != created_plan_id {
+                    let _cleanup = remove_proposal(&self.paths, &account_email_proposal);
+                }
+                Ok(view)
+            }
+            Err(error) => {
+                let _cleanup = remove_proposal(&self.paths, &account_email_proposal);
+                Err(error)
+            }
+        }
+    }
+
+    fn approve_certbot_issue(
+        &self,
+        actor: &Subject,
+        approval: CertbotIssueApprovalInput<'_>,
+        now_ms: i64,
+    ) -> Result<OperationReceiptView, OpsError> {
+        if !approval.external_effect_confirmed {
+            return Err(OpsError::Rejected("external_effect_confirmation"));
+        }
+        if !approval.local_attach_deferred_confirmed {
+            return Err(OpsError::Rejected("local_attach_deferred_confirmation"));
+        }
+        let mut ledger = self.open_ledger()?;
+        let plan = ledger.load_plan(approval.plan_id)?;
+        if plan.operation_type != CERTBOT_ISSUE_OPERATION {
+            return Err(OpsError::Rejected("approval_mismatch"));
+        }
+        let payload = plan
+            .certbot_issue
+            .as_ref()
+            .ok_or(OpsError::ForensicLockdown)?;
+        if now_ms.saturating_sub(payload.preflight_observed_at_ms) > 60_000 {
+            return Err(OpsError::Rejected("preflight_stale"));
+        }
+        let operation_id = random_id("op")?;
+        let operation = ledger.begin_operation(
+            &operation_id,
+            approval.plan_id,
+            approval.plan_hash,
+            approval.idempotency_key,
+            actor,
+            now_ms,
+        )?;
+        ledger.receipt(&operation.operation_id)
     }
 
     fn plan_certbot_renew_test(
@@ -418,6 +662,7 @@ impl OpsService {
             assurance: renew_test_assurance(),
             managed_config: None,
             certbot_renew: Some(payload),
+            certbot_issue: None,
         };
         plan.plan_hash = certbot_renew_plan_hash(&plan)?;
         let mut ledger = self.open_ledger()?;
@@ -551,6 +796,7 @@ impl OpsService {
             assurance: managed_config_assurance(),
             managed_config: Some(payload),
             certbot_renew: None,
+            certbot_issue: None,
         };
         plan.plan_hash = managed_config_plan_hash(&plan)?;
         let mut ledger = self.open_ledger()?;
@@ -641,6 +887,7 @@ impl OpsService {
             assurance,
             managed_config: None,
             certbot_renew: None,
+            certbot_issue: None,
         };
         plan.plan_hash = plan_hash(&plan)?;
         let mut ledger = self.open_ledger()?;
@@ -690,6 +937,9 @@ impl OpsService {
         }
         if operation.stage.is_terminal() || operation.stage != OperationStage::Approved {
             return ledger.receipt(&operation.operation_id);
+        }
+        if operation.plan.operation_type == CERTBOT_ISSUE_OPERATION {
+            return self.execute_certbot_issue(&mut ledger, operation, now_ms);
         }
         if operation.plan.operation_type == CERTBOT_RENEW_TEST_OPERATION {
             return self.execute_certbot_renew_test(&mut ledger, operation, now_ms);
@@ -918,6 +1168,213 @@ impl OpsService {
         ledger.receipt(&succeeded.operation_id)
     }
 
+    fn execute_certbot_issue(
+        &self,
+        ledger: &mut Ledger,
+        operation: StoredOperation,
+        now_ms: i64,
+    ) -> Result<OperationReceiptView, OpsError> {
+        let payload = operation
+            .plan
+            .certbot_issue
+            .as_ref()
+            .ok_or(OpsError::ForensicLockdown)?
+            .clone();
+        let account_email_proposal = ProposalRecord {
+            relative_path: payload.account_email_proposal_relative_path.clone(),
+            digest: payload.account_email_proposal_digest.clone(),
+        };
+        let account_email = match read_proposal(&self.paths, &account_email_proposal) {
+            Ok(value) => value,
+            Err(error) => {
+                return self.cancel_certbot_before_apply(ledger, &operation, error.code(), now_ms);
+            }
+        };
+        if payload.environment == CertificateEnvironment::Production
+            && !ledger.has_recent_staging_evidence(
+                &payload.staging_evidence_key,
+                now_ms.saturating_sub(CERTBOT_STAGING_EVIDENCE_TTL_MS),
+            )?
+        {
+            return self.cancel_certbot_before_apply(
+                ledger,
+                &operation,
+                "staging_required",
+                now_ms,
+            );
+        }
+        if validate_issue_site(
+            &self.paths,
+            &payload.site_id,
+            &payload.site_digest,
+            &payload.domains,
+        )
+        .is_err()
+        {
+            return self.cancel_certbot_before_apply(
+                ledger,
+                &operation,
+                "precondition_changed",
+                now_ms,
+            );
+        }
+        let inventory = match self.certificate_inventory(now_ms) {
+            Ok(inventory) => inventory,
+            Err(error) => {
+                return self.cancel_certbot_before_apply(ledger, &operation, error.code(), now_ms);
+            }
+        };
+        if !inventory.certbot_installed || inventory.inventory_digest != payload.inventory_digest {
+            return self.cancel_certbot_before_apply(
+                ledger,
+                &operation,
+                "precondition_changed",
+                now_ms,
+            );
+        }
+        let snapshot = CertificateInventorySnapshot {
+            schema_version: 1,
+            inventory_digest: inventory.inventory_digest.clone(),
+            timer_enabled: inventory.timer_enabled,
+            timer_active: inventory.timer_active,
+            certificate_count: u32::try_from(inventory.certificates.len())
+                .map_err(|_| OpsError::Rejected("certificate_inventory_too_large"))?,
+        };
+        let record = match write_certificate_inventory_snapshot(
+            &self.paths,
+            &self.policy,
+            &operation.operation_id,
+            &snapshot,
+        ) {
+            Ok(record) => record,
+            Err(error) => {
+                return self.cancel_certbot_before_apply(ledger, &operation, error.code(), now_ms);
+            }
+        };
+        let snapshotted = ledger.attach_snapshot(&operation.operation_id, &record, now_ms)?;
+        ledger.transition(
+            &operation.operation_id,
+            Transition {
+                expected: &[OperationStage::Snapshotted],
+                next: OperationStage::Applying,
+                result_code: match payload.environment {
+                    CertificateEnvironment::Staging => "certbot_staging_dry_run_started",
+                    CertificateEnvironment::Production => "certbot_production_issue_started",
+                },
+                evidence_digest: &record.digest,
+                after_digest: None,
+                rollback_result: None,
+                now_ms,
+            },
+        )?;
+        let evidence = match self.certbot_runner.run(
+            CertbotCommand::Issue {
+                primary_domain: payload.primary_domain.clone(),
+                domains: payload.domains.clone(),
+                account_email,
+                environment: payload.environment,
+                tos_agreed: true,
+            },
+            now_ms,
+        ) {
+            Ok(evidence) => evidence,
+            Err(error) => {
+                return self.reject_certbot_execution(
+                    ledger,
+                    &snapshotted.operation_id,
+                    OperationStage::Applying,
+                    "issuance_unavailable",
+                    &sha256_digest(error.code().as_bytes()),
+                    now_ms,
+                );
+            }
+        };
+        let evidence_digest = certbot_command_digest(&evidence)?;
+        ledger.transition(
+            &operation.operation_id,
+            Transition {
+                expected: &[OperationStage::Applying],
+                next: OperationStage::Validating,
+                result_code: if evidence.success {
+                    "certbot_issue_command_completed"
+                } else {
+                    "certbot_issue_command_failed"
+                },
+                evidence_digest: &evidence_digest,
+                after_digest: None,
+                rollback_result: None,
+                now_ms,
+            },
+        )?;
+        if !evidence.success {
+            return self.reject_certbot_execution(
+                ledger,
+                &operation.operation_id,
+                OperationStage::Validating,
+                "issuance_failed",
+                &evidence_digest,
+                now_ms,
+            );
+        }
+        let read_back = match self.certificate_inventory(now_ms) {
+            Ok(inventory) => inventory,
+            Err(error) => {
+                return self.reject_certbot_execution(
+                    ledger,
+                    &operation.operation_id,
+                    OperationStage::Validating,
+                    "certificate_invalid",
+                    &sha256_digest(error.code().as_bytes()),
+                    now_ms,
+                );
+            }
+        };
+        let verified = match payload.environment {
+            CertificateEnvironment::Staging => {
+                read_back.inventory_digest == payload.inventory_digest
+            }
+            CertificateEnvironment::Production => {
+                read_back
+                    .certificates
+                    .iter()
+                    .find(|certificate| certificate.primary_domain == payload.primary_domain)
+                    .is_some_and(|certificate| {
+                        certificate.sans == payload.domains && certificate.webroot_managed
+                    })
+                    && read_back.timer_enabled
+                    && read_back.timer_active
+            }
+        };
+        if !verified {
+            return self.reject_certbot_execution(
+                ledger,
+                &operation.operation_id,
+                OperationStage::Validating,
+                "certificate_invalid",
+                &read_back.inventory_digest,
+                now_ms,
+            );
+        }
+        let terminal = ledger.transition(
+            &operation.operation_id,
+            Transition {
+                expected: &[OperationStage::Validating],
+                next: OperationStage::Succeeded,
+                result_code: match payload.environment {
+                    CertificateEnvironment::Staging => "staging_challenge_verified",
+                    CertificateEnvironment::Production => "production_certificate_verified",
+                },
+                evidence_digest: &read_back.inventory_digest,
+                after_digest: Some(&read_back.inventory_digest),
+                rollback_result: None,
+                now_ms,
+            },
+        )?;
+        let receipt = ledger.receipt(&terminal.operation_id)?;
+        self.remove_operation_proposal(&terminal);
+        Ok(receipt)
+    }
+
     fn execute_certbot_renew_test(
         &self,
         ledger: &mut Ledger,
@@ -1051,7 +1508,9 @@ impl OpsService {
                 now_ms,
             },
         )?;
-        ledger.receipt(&terminal.operation_id)
+        let receipt = ledger.receipt(&terminal.operation_id)?;
+        self.remove_operation_proposal(&terminal);
+        Ok(receipt)
     }
 
     fn cancel_certbot_before_apply(
@@ -1073,7 +1532,9 @@ impl OpsService {
                 now_ms,
             },
         )?;
-        ledger.receipt(&terminal.operation_id)
+        let receipt = ledger.receipt(&terminal.operation_id)?;
+        self.remove_operation_proposal(&terminal);
+        Ok(receipt)
     }
 
     fn reject_certbot_execution(
@@ -1097,7 +1558,9 @@ impl OpsService {
                 now_ms,
             },
         )?;
-        ledger.receipt(&terminal.operation_id)
+        let receipt = ledger.receipt(&terminal.operation_id)?;
+        self.remove_operation_proposal(&terminal);
+        Ok(receipt)
     }
 
     fn execute_managed_config(
@@ -1771,24 +2234,32 @@ impl OpsService {
             | OperationStage::Reloading
             | OperationStage::Verifying
             | OperationStage::RollingBack => {
-                if operation.plan.operation_type == CERTBOT_RENEW_TEST_OPERATION {
+                if operation.plan.operation_type == CERTBOT_RENEW_TEST_OPERATION
+                    || operation.plan.operation_type == CERTBOT_ISSUE_OPERATION
+                {
                     let record = operation
                         .snapshot
                         .as_ref()
                         .ok_or(OpsError::ForensicLockdown)?;
                     let _snapshot = read_certificate_inventory_snapshot(&self.paths, record)?;
-                    ledger.transition(
+                    let terminal = ledger.transition(
                         &operation.operation_id,
                         Transition {
                             expected: &[operation.stage],
                             next: OperationStage::RecoveryRequired,
-                            result_code: "renewal_test_interrupted",
+                            result_code: if operation.plan.operation_type == CERTBOT_ISSUE_OPERATION
+                            {
+                                "certificate_issue_interrupted"
+                            } else {
+                                "renewal_test_interrupted"
+                            },
                             evidence_digest: &record.digest,
                             after_digest: None,
                             rollback_result: Some("not_applicable_external_status_unknown"),
                             now_ms,
                         },
                     )?;
+                    self.remove_operation_proposal(&terminal);
                     Ok(())
                 } else if operation.plan.operation_type == MANAGED_CONFIG_OPERATION {
                     self.rollback_managed_config(
@@ -1848,10 +2319,19 @@ impl OpsService {
                 },
             );
         }
+        if let Some(payload) = &plan.certbot_issue {
+            let _cleanup = remove_proposal(
+                &self.paths,
+                &ProposalRecord {
+                    relative_path: payload.account_email_proposal_relative_path.clone(),
+                    digest: payload.account_email_proposal_digest.clone(),
+                },
+            );
+        }
     }
 
     fn remove_expired_proposals(&self, ledger: &Ledger, now_ms: i64) -> Result<(), OpsError> {
-        for plan in ledger.expired_unexecuted_managed_plans(now_ms)? {
+        for plan in ledger.expired_unexecuted_proposal_plans(now_ms)? {
             self.remove_plan_proposal(&plan);
         }
         Ok(())
@@ -1957,6 +2437,40 @@ fn certbot_renew_plan_hash(plan: &StoredPlan) -> Result<String, OpsError> {
             timer_enabled: payload.timer_enabled,
             timer_active: payload.timer_active,
             certificate_count: payload.certificate_count,
+            resource_key: &plan.resource_key,
+            assurance: &plan.assurance,
+        },
+    )
+}
+
+fn certbot_issue_plan_hash(plan: &StoredPlan) -> Result<String, OpsError> {
+    let payload = plan
+        .certbot_issue
+        .as_ref()
+        .ok_or(OpsError::ForensicLockdown)?;
+    canonical_digest(
+        b"jw-agent/operation-plan/v1",
+        &CertbotIssuePlanHashMaterial {
+            schema_version: 1,
+            operation_type: CERTBOT_ISSUE_OPERATION,
+            plan_id: &plan.plan_id,
+            created_at_ms: plan.created_at_ms,
+            expires_at_ms: plan.expires_at_ms,
+            actor: &plan.actor,
+            primary_domain: &payload.primary_domain,
+            domains: &payload.domains,
+            account_email_digest: &payload.account_email_proposal_digest,
+            masked_account_email: &payload.masked_account_email,
+            environment: payload.environment,
+            site_id: &payload.site_id,
+            site_digest: &payload.site_digest,
+            inventory_digest: &payload.inventory_digest,
+            preflight_observed_at_ms: payload.preflight_observed_at_ms,
+            resolved_addresses: &payload.resolved_addresses,
+            local_port_80_reachable: payload.local_port_80_reachable,
+            local_port_443_reachable: payload.local_port_443_reachable,
+            staging_evidence_valid: payload.staging_evidence_valid,
+            staging_evidence_key: &payload.staging_evidence_key,
             resource_key: &plan.resource_key,
             assurance: &plan.assurance,
         },
@@ -2089,10 +2603,12 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     use jw_contracts::{
-        CERTBOT_RENEW_TEST_OPERATION, CertbotCommand, CertbotCommandClass, CertbotCommandEvidence,
-        CertbotRenewTestPlanRequest, IPC_PROTOCOL_VERSION, MANAGED_CONFIG_OPERATION,
-        ManagedConfigApprovalIntent, ManagedConfigPlanRequest, NGINX_CONFIG_ADAPTER_ID,
-        NGINX_LAYOUT_ID, NGINX_MANAGEMENT_MARKER, NGINX_SITE_STATE_OPERATION, NginxSiteState,
+        CERTBOT_ISSUE_OPERATION, CERTBOT_RENEW_TEST_OPERATION, CertbotCommand, CertbotCommandClass,
+        CertbotCommandEvidence, CertbotIssuePlanInput, CertbotIssuePlanRequest,
+        CertbotIssuePreflightEvidence, CertbotRenewTestPlanRequest, CertificateEnvironment,
+        IPC_PROTOCOL_VERSION, MANAGED_CONFIG_OPERATION, ManagedConfigApprovalIntent,
+        ManagedConfigPlanRequest, NGINX_CONFIG_ADAPTER_ID, NGINX_LAYOUT_ID,
+        NGINX_MANAGEMENT_MARKER, NGINX_SITE_STATE_OPERATION, NginxSiteState,
         NginxSiteStatePlanRequest, OpsRequest, OpsRequestBody, OpsResponseBody, Role,
         ServiceAction, Subject, nginx_config_resource_id,
         nginx_enabled_state_digest as enabled_state_digest, nginx_site_id as site_id,
@@ -2173,6 +2689,29 @@ mod tests {
                 results: Mutex::new(results),
             }
         }
+
+        fn certbot_issue_staging_and_production_plan() -> Self {
+            Self {
+                results: Mutex::new(VecDeque::from([
+                    (CommandClass::CertbotTimerEnabled, true),
+                    (CommandClass::CertbotTimerActive, true),
+                    (CommandClass::CertbotTimerEnabled, true),
+                    (CommandClass::CertbotTimerActive, true),
+                    (CommandClass::NginxConfigTest, true),
+                    (CommandClass::NginxActive, true),
+                    (CommandClass::CertbotTimerEnabled, true),
+                    (CommandClass::CertbotTimerActive, true),
+                    (CommandClass::CertbotTimerEnabled, true),
+                    (CommandClass::CertbotTimerActive, true),
+                    (CommandClass::CertbotTimerEnabled, true),
+                    (CommandClass::CertbotTimerActive, true),
+                    (CommandClass::CertbotTimerEnabled, true),
+                    (CommandClass::CertbotTimerActive, true),
+                    (CommandClass::NginxConfigTest, true),
+                    (CommandClass::NginxActive, true),
+                ])),
+            }
+        }
     }
 
     impl OperationRunner for FakeRunner {
@@ -2228,11 +2767,17 @@ mod tests {
             command: CertbotCommand,
             _now_ms: i64,
         ) -> Result<CertbotCommandEvidence, OpsError> {
-            if command != CertbotCommand::RenewDryRun {
-                return Err(OpsError::Command(String::from(
-                    "unexpected certbot command",
-                )));
-            }
+            let command_class = match command {
+                CertbotCommand::RenewDryRun => CertbotCommandClass::RenewDryRun,
+                CertbotCommand::Issue { environment, .. } => match environment {
+                    jw_contracts::CertificateEnvironment::Staging => {
+                        CertbotCommandClass::IssueStaging
+                    }
+                    jw_contracts::CertificateEnvironment::Production => {
+                        CertbotCommandClass::IssueProduction
+                    }
+                },
+            };
             let mut calls = self
                 .calls
                 .lock()
@@ -2240,7 +2785,7 @@ mod tests {
             *calls = calls.saturating_add(1);
             let digest = sha256_digest(b"redacted certbot stream");
             Ok(CertbotCommandEvidence {
-                command_class: CertbotCommandClass::RenewDryRun,
+                command_class,
                 success: self.success,
                 exit_code: Some(if self.success { 0 } else { 1 }),
                 timed_out: false,
@@ -2250,6 +2795,77 @@ mod tests {
                 stderr_truncated: false,
             })
         }
+    }
+
+    #[test]
+    fn certbot_staging_issue_is_non_persistent_and_unlocks_production_plan() -> Result<(), String> {
+        let root = test_root("certbot-issue-staging")?;
+        let certbot = Arc::new(FakeCertbotRunner::new(true));
+        let service = fixture_issue_service(
+            &root,
+            Arc::new(FakeRunner::certbot_issue_staging_and_production_plan()),
+            certbot.clone(),
+        )?;
+        let staging = certbot_issue_plan(
+            &service,
+            1_000,
+            "certbot-issue-stage1",
+            CertificateEnvironment::Staging,
+        )?;
+        assert!(!staging.staging_evidence_valid);
+        assert_eq!(staging.masked_account_email, "o***@example.com");
+        let paths = OpsPaths::for_test(&root);
+        for persisted in [
+            paths.database.clone(),
+            paths.database.with_file_name("opsd.sqlite3-wal"),
+        ] {
+            if persisted.exists() {
+                let bytes = fs::read(persisted).map_err(|error| error.to_string())?;
+                assert!(
+                    !bytes
+                        .windows(b"owner@example.com".len())
+                        .any(|window| window == b"owner@example.com")
+                );
+            }
+        }
+        assert_eq!(
+            fs::read_dir(&paths.proposals)
+                .map_err(|error| error.to_string())?
+                .count(),
+            1
+        );
+        let receipt = approve_certbot_issue(&service, &staging, 1_001, "certbot-issue-stage1")?;
+        assert_eq!(
+            receipt.terminal_state,
+            jw_contracts::OperationStage::Succeeded
+        );
+        assert_eq!(receipt.before_digest, receipt.after_digest);
+        assert!(
+            receipt
+                .stages
+                .iter()
+                .any(|stage| stage.result_code == "staging_challenge_verified")
+        );
+        assert_eq!(
+            fs::read_dir(&paths.proposals)
+                .map_err(|error| error.to_string())?
+                .count(),
+            0
+        );
+        let production = certbot_issue_plan(
+            &service,
+            1_100,
+            "certbot-issue-prod01",
+            CertificateEnvironment::Production,
+        )?;
+        assert!(production.staging_evidence_valid);
+        let calls = certbot
+            .calls
+            .lock()
+            .map_err(|_| String::from("fake certbot runner poisoned"))?;
+        assert_eq!(*calls, 1);
+        drop(calls);
+        fs::remove_dir_all(root).map_err(|error| error.to_string())
     }
 
     #[test]
@@ -2633,6 +3249,122 @@ mod tests {
         );
         service.initialize(900).map_err(|error| error.to_string())?;
         Ok(service)
+    }
+
+    fn fixture_issue_service(
+        root: &std::path::Path,
+        runner: Arc<dyn OperationRunner>,
+        certbot_runner: Arc<dyn CertbotRunner>,
+    ) -> Result<OpsService, String> {
+        let service = fixture_service_with_certbot(root, runner, certbot_runner)?;
+        let paths = OpsPaths::for_test(root);
+        let content = issue_site_content();
+        fs::write(paths.nginx_available.join("example.com"), content)
+            .map_err(|error| error.to_string())?;
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(
+            "../sites-available/example.com",
+            paths.nginx_enabled.join("example.com"),
+        )
+        .map_err(|error| error.to_string())?;
+        fs::create_dir_all(&paths.acme_webroot).map_err(|error| error.to_string())?;
+        Ok(service)
+    }
+
+    fn issue_site_content() -> &'static [u8] {
+        b"# jw-agent:protected-management-v1\nserver {\n    listen 80;\n    server_name example.com;\n    include /usr/share/jw-agent/nginx/acme-challenge.conf;\n}\n"
+    }
+
+    fn certbot_issue_plan(
+        service: &OpsService,
+        now_ms: i64,
+        idempotency_key: &str,
+        environment: CertificateEnvironment,
+    ) -> Result<jw_contracts::CertbotIssuePlanView, String> {
+        let inventory_request = OpsRequest {
+            protocol_version: IPC_PROTOCOL_VERSION,
+            request_id: String::from("request-certbot-issue-inventory"),
+            deadline_unix_ms: now_ms.saturating_add(1_000),
+            body: OpsRequestBody::CertificateInventory { actor: actor() },
+        };
+        let inventory_response = service.response_for(&inventory_request, now_ms);
+        let OpsResponseBody::CertificateInventory(inventory) = inventory_response.body else {
+            return Err(String::from("certificate inventory rejected"));
+        };
+        let request = OpsRequest {
+            protocol_version: IPC_PROTOCOL_VERSION,
+            request_id: String::from("request-certbot-issue-plan"),
+            deadline_unix_ms: now_ms.saturating_add(1_000),
+            body: OpsRequestBody::PlanCertbotIssue {
+                actor: actor(),
+                plan: CertbotIssuePlanInput {
+                    request: CertbotIssuePlanRequest {
+                        schema_version: 1,
+                        operation_type: String::from(CERTBOT_ISSUE_OPERATION),
+                        primary_domain: String::from("example.com"),
+                        alternative_domains: Vec::new(),
+                        account_email: String::from("owner@example.com"),
+                        environment,
+                        site_id: site_id(NGINX_LAYOUT_ID, "example.com"),
+                        expected_site_digest: sha256_digest(issue_site_content()),
+                        expected_inventory_digest: inventory.inventory_digest,
+                        tos_agreed: true,
+                        idempotency_key: idempotency_key.to_owned(),
+                    },
+                    preflight: CertbotIssuePreflightEvidence {
+                        observed_at_unix_ms: now_ms,
+                        resolved_addresses: vec![String::from("192.0.2.10")],
+                        expected_addresses: vec![String::from("192.0.2.10")],
+                        local_port_80_reachable: true,
+                        local_port_443_reachable: true,
+                    },
+                },
+            },
+        };
+        let response = service.response_for(&request, now_ms);
+        let OpsResponseBody::CertbotIssuePlan(plan) = response.body else {
+            return Err(String::from("certbot issue plan rejected"));
+        };
+        Ok(plan)
+    }
+
+    fn approve_certbot_issue(
+        service: &OpsService,
+        plan: &jw_contracts::CertbotIssuePlanView,
+        now_ms: i64,
+        idempotency_key: &str,
+    ) -> Result<jw_contracts::OperationReceiptView, String> {
+        let approval = OpsRequest {
+            protocol_version: IPC_PROTOCOL_VERSION,
+            request_id: String::from("request-certbot-issue-approve"),
+            deadline_unix_ms: now_ms.saturating_add(1_000),
+            body: OpsRequestBody::ApproveCertbotIssue {
+                actor: actor(),
+                plan_id: plan.plan_id.clone(),
+                plan_hash: plan.plan_hash.clone(),
+                idempotency_key: idempotency_key.to_owned(),
+                external_effect_confirmed: true,
+                local_attach_deferred_confirmed: true,
+            },
+        };
+        let approval_response = service.response_for(&approval, now_ms);
+        let OpsResponseBody::OperationReceipt(accepted) = approval_response.body else {
+            return Err(String::from("certbot issue approval rejected"));
+        };
+        let execute = OpsRequest {
+            protocol_version: IPC_PROTOCOL_VERSION,
+            request_id: String::from("request-certbot-issue-execute"),
+            deadline_unix_ms: now_ms.saturating_add(1_000),
+            body: OpsRequestBody::ExecuteOperation {
+                actor: actor(),
+                operation_id: accepted.operation_id,
+            },
+        };
+        let response = service.response_for(&execute, now_ms);
+        let OpsResponseBody::OperationReceipt(receipt) = response.body else {
+            return Err(String::from("certbot issue execution rejected"));
+        };
+        Ok(receipt)
     }
 
     fn certbot_renew_plan(

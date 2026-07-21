@@ -9,6 +9,10 @@ export type NginxSitesView = components["schemas"]["NginxSitesView"];
 export type NginxSiteObservation = components["schemas"]["NginxSiteObservation"];
 export type CertificateInventoryView = components["schemas"]["CertificateInventoryView"];
 export type CertificateSummaryView = components["schemas"]["CertificateSummaryView"];
+export type CertbotIssuePlanRequest = components["schemas"]["CertbotIssuePlanRequest"];
+export type CertbotIssuePlanView = components["schemas"]["CertbotIssuePlanView"];
+export type CertbotIssueApprovalRequest = components["schemas"]["CertbotIssueApprovalRequest"];
+export type CertificateEnvironment = components["schemas"]["CertificateEnvironment"];
 export type CertbotRenewTestPlanRequest =
   components["schemas"]["CertbotRenewTestPlanRequest"];
 export type CertbotRenewTestPlanView = components["schemas"]["CertbotRenewTestPlanView"];

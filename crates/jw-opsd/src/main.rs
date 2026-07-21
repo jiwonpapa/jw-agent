@@ -22,7 +22,7 @@ use tokio::sync::Semaphore;
 #[cfg(target_os = "linux")]
 const DEFAULT_SOCKET: &str = "/run/jw-agent/opsd.sock";
 #[cfg(target_os = "linux")]
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(14 * 60);
 #[cfg(target_os = "linux")]
 const MAX_CONNECTIONS: usize = 32;
 

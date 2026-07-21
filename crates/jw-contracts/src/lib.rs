@@ -20,9 +20,10 @@ pub use certificate::{
     CERT_FRAME_MAX_BYTES, CERTBOT_ISSUE_OPERATION, CERTBOT_MAX_DOMAINS,
     CERTBOT_RENEW_TEST_OPERATION, CertbotCommand, CertbotCommandClass, CertbotCommandEvidence,
     CertbotCommandRequest, CertbotCommandResponse, CertbotCommandResult,
-    CertbotRenewTestApprovalRequest, CertbotRenewTestPlanRequest, CertbotRenewTestPlanView,
-    CertificateEnvironment, CertificateInventoryView, CertificateSummaryView, canonical_domains,
-    validate_domain,
+    CertbotIssueApprovalRequest, CertbotIssuePlanInput, CertbotIssuePlanRequest,
+    CertbotIssuePlanView, CertbotIssuePreflightEvidence, CertbotRenewTestApprovalRequest,
+    CertbotRenewTestPlanRequest, CertbotRenewTestPlanView, CertificateEnvironment,
+    CertificateInventoryView, CertificateSummaryView, canonical_domains, validate_domain,
 };
 pub use framing::{
     AUTH_FRAME_MAX_BYTES, FrameError, IPC_PROTOCOL_VERSION, OPS_FRAME_MAX_BYTES, decode_frame,

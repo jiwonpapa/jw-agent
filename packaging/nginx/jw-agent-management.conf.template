@@ -7,7 +7,11 @@ server {
     listen [::]:80;
     server_name __JW_AGENT_FQDN__;
 
-    return 308 https://$host$request_uri;
+    include /usr/share/jw-agent/nginx/acme-challenge.conf;
+
+    location / {
+        return 308 https://$host$request_uri;
+    }
 }
 
 server {

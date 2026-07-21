@@ -526,6 +526,17 @@ const GATES: &[Gate] = &[
         run: vm::gate_p2_certbot_renew_operation,
     },
     Gate {
+        id: "VM-P2-CERTBOT-ISSUE-FAILURE",
+        owner: "Certificate Lifecycle Maintainer",
+        scope: "G1 Certbot staging issue preflight, approval, CA failure, and non-rollback receipt",
+        inputs: "installed P2 issuance package, public API, PAM fixture, protected Nginx webroot, private-LAN FQDN",
+        lanes: P2_VM_LANES,
+        timeout_seconds: 480,
+        evidence: "DNS/listener/webroot preflight passed; unreachable public CA was rejected without false rollback or inventory mutation",
+        failure_policy: "fail lane on bypassed preflight/reauth, false success/rollback, inventory drift, raw email persistence, or retained proposal/worker",
+        run: vm::gate_p2_certbot_issue_failure,
+    },
+    Gate {
         id: "VM-SECRET-SCAN",
         owner: "Security Maintainer",
         scope: "journal, SQLite, snapshot, process arguments, and package logs",

@@ -15,16 +15,25 @@ import { useEffect, useRef, useState, type SyntheticEvent } from "react";
 
 import {
   ApiError,
+  approveCertbotIssue,
   approveCertbotRenewTest,
   getOperationReceipt,
+  planCertbotIssue,
   planCertbotRenewTest,
   reauthenticateForOperation,
   watchOperationEvents,
 } from "../../shared/api/client";
-import { certificatesQueryOptions, queryKeys } from "../../shared/api/queries";
+import {
+  accessSettingsQueryOptions,
+  certificatesQueryOptions,
+  nginxSitesQueryOptions,
+  queryKeys,
+} from "../../shared/api/queries";
 import type {
+  CertificateEnvironment,
   CertificateInventoryView,
   CertificateSummaryView,
+  CertbotIssuePlanView,
   CertbotRenewTestPlanView,
   OperationAcceptedView,
   OperationReceiptView,
@@ -42,8 +51,12 @@ import { WorkspaceHeader } from "../../shared/ui/workspace-header";
 
 export function CertificatesScreen() {
   const inventory = useQuery(certificatesQueryOptions);
+  const accessSettings = useQuery(accessSettingsQueryOptions);
+  const nginxSites = useQuery(nginxSitesQueryOptions);
   const queryClient = useQueryClient();
-  const [plan, setPlan] = useState<CertbotRenewTestPlanView | null>(null);
+  const [renewPlan, setRenewPlan] = useState<CertbotRenewTestPlanView | null>(null);
+  const [issuePlan, setIssuePlan] = useState<CertbotIssuePlanView | null>(null);
+  const [operationKind, setOperationKind] = useState<"issue" | "renew" | null>(null);
   const [accepted, setAccepted] = useState<OperationAcceptedView | null>(null);
   const [receipt, setReceipt] = useState<OperationReceiptView | null>(null);
   const [sheetOpen, setSheetOpen] = useState(false);
@@ -72,7 +85,14 @@ export function CertificatesScreen() {
           }
         } catch (error) {
           if (!(error instanceof DOMException && error.name === "AbortError")) {
-            setErrorMessage(operationErrorCopy(error, "갱신 검증 영수증을 불러오지 못했습니다."));
+            setErrorMessage(
+              operationErrorCopy(
+                error,
+                operationKind === "issue"
+                  ? "발급 영수증을 불러오지 못했습니다."
+                  : "갱신 검증 영수증을 불러오지 못했습니다.",
+              ),
+            );
           }
         }
       });
@@ -84,7 +104,7 @@ export function CertificatesScreen() {
       controller.abort();
       closeStream();
     };
-  }, [accepted, queryClient]);
+  }, [accepted, operationKind, queryClient]);
 
   async function createRenewPlan(data: CertificateInventoryView): Promise<void> {
     if (
@@ -96,6 +116,8 @@ export function CertificatesScreen() {
     setErrorMessage(null);
     setReceipt(null);
     setAccepted(null);
+    setIssuePlan(null);
+    setOperationKind("renew");
     try {
       const idempotencyKey = `web_${crypto.randomUUID()}`;
       const nextPlan = await planCertbotRenewTest({
@@ -105,7 +127,7 @@ export function CertificatesScreen() {
         idempotencyKey,
       });
       approvalKey.current = idempotencyKey;
-      setPlan(nextPlan);
+      setRenewPlan(nextPlan);
       setSheetOpen(true);
     } catch (error) {
       setErrorMessage(operationErrorCopy(error, "갱신 검증 계획을 만들지 못했습니다."));
@@ -118,17 +140,17 @@ export function CertificatesScreen() {
   }
 
   async function approveRenewPlan(password: string): Promise<void> {
-    if (requestInFlight.current || plan === null || approvalKey.current === null) return;
+    if (requestInFlight.current || renewPlan === null || approvalKey.current === null) return;
     requestInFlight.current = true;
     setExecuting(true);
     setErrorMessage(null);
     try {
-      const reauth = await reauthenticateForOperation({ password, planHash: plan.planHash });
+      const reauth = await reauthenticateForOperation({ password, planHash: renewPlan.planHash });
       queryClient.setQueryData(queryKeys.session, reauth.session);
       const operation = await approveCertbotRenewTest({
-        schemaVersion: plan.schemaVersion,
-        planId: plan.planId,
-        planHash: plan.planHash,
+        schemaVersion: renewPlan.schemaVersion,
+        planId: renewPlan.planId,
+        planHash: renewPlan.planHash,
         idempotencyKey: approvalKey.current,
         reauthToken: reauth.reauthToken,
         externalEffectConfirmed: true,
@@ -142,6 +164,102 @@ export function CertificatesScreen() {
     }
   }
 
+  async function createIssuePlan(input: {
+    email: string;
+    alternativeDomains: string[];
+    environment: CertificateEnvironment;
+  }): Promise<void> {
+    const data = inventory.data;
+    const publicHost = accessSettings.data?.publicHost;
+    const site = nginxSites.data?.sites.find(
+      (candidate) =>
+        candidate.protected &&
+        candidate.enabled &&
+        candidate.siteId !== undefined &&
+        candidate.availableDigest !== undefined,
+    );
+    if (
+      requestInFlight.current ||
+      data?.issueOperationType !== "certbot.certificate.issue/v1" ||
+      publicHost === undefined ||
+      publicHost === null ||
+      site?.siteId === undefined ||
+      site.siteId === null ||
+      site.availableDigest === undefined ||
+      site.availableDigest === null
+    ) return;
+    requestInFlight.current = true;
+    setPlanning(true);
+    setErrorMessage(null);
+    setReceipt(null);
+    setAccepted(null);
+    setRenewPlan(null);
+    setOperationKind("issue");
+    try {
+      const idempotencyKey = `web_${crypto.randomUUID()}`;
+      const nextPlan = await planCertbotIssue({
+        schemaVersion: data.schemaVersion,
+        operationType: data.issueOperationType,
+        primaryDomain: publicHost,
+        alternativeDomains: input.alternativeDomains,
+        accountEmail: input.email,
+        environment: input.environment,
+        siteId: site.siteId,
+        expectedSiteDigest: site.availableDigest,
+        expectedInventoryDigest: data.inventoryDigest,
+        tosAgreed: true,
+        idempotencyKey,
+      });
+      approvalKey.current = idempotencyKey;
+      setIssuePlan(nextPlan);
+      setSheetOpen(true);
+    } catch (error) {
+      setErrorMessage(operationErrorCopy(error, "인증서 발급 계획을 만들지 못했습니다."));
+      setSheetOpen(true);
+      await queryClient.invalidateQueries({ queryKey: queryKeys.certificates });
+    } finally {
+      requestInFlight.current = false;
+      setPlanning(false);
+    }
+  }
+
+  async function approveIssuePlan(password: string): Promise<void> {
+    if (requestInFlight.current || issuePlan === null || approvalKey.current === null) return;
+    requestInFlight.current = true;
+    setExecuting(true);
+    setErrorMessage(null);
+    try {
+      const reauth = await reauthenticateForOperation({ password, planHash: issuePlan.planHash });
+      queryClient.setQueryData(queryKeys.session, reauth.session);
+      const operation = await approveCertbotIssue({
+        schemaVersion: issuePlan.schemaVersion,
+        planId: issuePlan.planId,
+        planHash: issuePlan.planHash,
+        idempotencyKey: approvalKey.current,
+        reauthToken: reauth.reauthToken,
+        externalEffectConfirmed: true,
+        localAttachDeferredConfirmed: true,
+      });
+      setAccepted(operation);
+    } catch (error) {
+      setErrorMessage(operationErrorCopy(error, "인증서 발급 승인을 완료하지 못했습니다."));
+    } finally {
+      requestInFlight.current = false;
+      setExecuting(false);
+    }
+  }
+
+  const publicHost = accessSettings.data?.publicHost ?? null;
+  const issueSiteReady = nginxSites.data?.sites.some(
+    (site) =>
+      site.protected &&
+      site.enabled &&
+      site.siteId !== null &&
+      site.siteId !== undefined &&
+      site.availableDigest !== null &&
+      site.availableDigest !== undefined,
+  ) ?? false;
+
   return (
     <div className="animate-state-in">
       <WorkspaceHeader
@@ -149,6 +267,7 @@ export function CertificatesScreen() {
         title="TLS 인증서"
         description="Certbot 인증서의 공개 메타데이터와 자동 갱신 timer를 확인합니다. 개인키와 ACME 계정 비밀은 화면으로 가져오지 않습니다."
         action={
+          inventory.data?.issueOperationType === "certbot.certificate.issue/v1" ||
           inventory.data?.renewTestOperationType === "certbot.certificate.renew_test/v1" ? (
             <StatusMark label="G1 검증 가능" tone="info" />
           ) : (
@@ -173,6 +292,9 @@ export function CertificatesScreen() {
         <CertificateInventory
           data={inventory.data}
           planning={planning}
+          publicHost={publicHost}
+          issueSiteReady={issueSiteReady}
+          onCreateIssuePlan={(input) => void createIssuePlan(input)}
           onCreateRenewPlan={() => void createRenewPlan(inventory.data)}
         />
       )}
@@ -180,18 +302,29 @@ export function CertificatesScreen() {
       <Sheet
         open={sheetOpen}
         onOpenChange={setSheetOpen}
-        title="Certbot 갱신 사전 검증"
+        title={operationKind === "issue" ? "Certbot 인증서 발급" : "Certbot 갱신 사전 검증"}
         description="외부 CA 효과와 실행 증거를 확인한 뒤 승인합니다."
         side="right"
       >
-        <RenewTestInspector
-          plan={plan}
-          accepted={accepted}
-          receipt={receipt}
-          executing={executing}
-          errorMessage={errorMessage}
-          onApprove={approveRenewPlan}
-        />
+        {operationKind === "issue" ? (
+          <IssueInspector
+            plan={issuePlan}
+            accepted={accepted}
+            receipt={receipt}
+            executing={executing}
+            errorMessage={errorMessage}
+            onApprove={approveIssuePlan}
+          />
+        ) : (
+          <RenewTestInspector
+            plan={renewPlan}
+            accepted={accepted}
+            receipt={receipt}
+            executing={executing}
+            errorMessage={errorMessage}
+            onApprove={approveRenewPlan}
+          />
+        )}
       </Sheet>
     </div>
   );
@@ -200,10 +333,20 @@ export function CertificatesScreen() {
 function CertificateInventory({
   data,
   planning,
+  publicHost,
+  issueSiteReady,
+  onCreateIssuePlan,
   onCreateRenewPlan,
 }: {
   data: CertificateInventoryView;
   planning: boolean;
+  publicHost: string | null;
+  issueSiteReady: boolean;
+  onCreateIssuePlan: (input: {
+    email: string;
+    alternativeDomains: string[];
+    environment: CertificateEnvironment;
+  }) => void;
   onCreateRenewPlan: () => void;
 }) {
   return (
@@ -251,6 +394,14 @@ function CertificateInventory({
             </div>
           </div>
         ) : null}
+        {data.issueOperationType === "certbot.certificate.issue/v1" && publicHost !== null ? (
+          <IssueSetup
+            primaryDomain={publicHost}
+            siteReady={issueSiteReady}
+            planning={planning}
+            onCreatePlan={onCreateIssuePlan}
+          />
+        ) : null}
         {data.renewTestOperationType === "certbot.certificate.renew_test/v1" ? (
           <div className="mt-5 border-t border-border pt-5">
             <p className="text-sm leading-6 text-muted">
@@ -285,7 +436,7 @@ function CertificateInventory({
           <SurfaceState
             kind="empty"
             title="관찰 가능한 Certbot 인증서가 없습니다"
-            description="발급 기능은 staging·attach fault gate가 끝날 때까지 제공하지 않습니다. 기존 인증서는 /etc/letsencrypt 표준 lineage만 인식합니다."
+            description="신규 발급은 staging 검증부터 시작합니다. 기존 인증서는 /etc/letsencrypt 표준 lineage만 인식합니다."
           />
         ) : (
           <div className="mt-6 grid gap-4 xl:grid-cols-2">
@@ -305,6 +456,133 @@ function CertificateInventory({
         </div>
       </section>
     </>
+  );
+}
+
+function IssueSetup({
+  primaryDomain,
+  siteReady,
+  planning,
+  onCreatePlan,
+}: {
+  primaryDomain: string;
+  siteReady: boolean;
+  planning: boolean;
+  onCreatePlan: (input: {
+    email: string;
+    alternativeDomains: string[];
+    environment: CertificateEnvironment;
+  }) => void;
+}) {
+  const [email, setEmail] = useState("");
+  const [alternatives, setAlternatives] = useState("");
+  const [environment, setEnvironment] = useState<CertificateEnvironment>("staging");
+  const [tosAgreed, setTosAgreed] = useState(false);
+
+  function submit(event: SyntheticEvent<HTMLFormElement>): void {
+    event.preventDefault();
+    if (!siteReady || !tosAgreed || email.length === 0) return;
+    const alternativeDomains = alternatives
+      .split(",")
+      .map((value) => value.trim().toLowerCase())
+      .filter((value) => value.length > 0 && value !== primaryDomain)
+      .sort();
+    onCreatePlan({ email, alternativeDomains: [...new Set(alternativeDomains)], environment });
+  }
+
+  return (
+    <section className="mt-6 border-t border-border pt-6" aria-labelledby="certificate-issue-heading">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <h3 id="certificate-issue-heading" className="text-sm font-semibold text-text">
+            신규 인증서 발급
+          </h3>
+          <p className="mt-1 max-w-2xl text-sm leading-6 text-muted">
+            먼저 staging challenge를 통과한 뒤 같은 DNS·Nginx 설정으로만 production 계획을 만들 수
+            있습니다. 발급 후 TLS 연결은 별도 G2 승인입니다.
+          </p>
+        </div>
+        <StatusMark label="G1 · 원복 없음" tone="warning" />
+      </div>
+
+      <form className="mt-5 grid gap-4 sm:grid-cols-2" onSubmit={submit}>
+        <div>
+          <label htmlFor="certbot-primary-domain" className="text-sm font-medium text-text">
+            기본 도메인
+          </label>
+          <Input id="certbot-primary-domain" value={primaryDomain} readOnly />
+        </div>
+        <div>
+          <label htmlFor="certbot-account-email" className="text-sm font-medium text-text">
+            ACME 계정 이메일
+          </label>
+          <Input
+            id="certbot-account-email"
+            type="email"
+            autoComplete="email"
+            maxLength={254}
+            required
+            value={email}
+            onChange={(event) => setEmail(event.currentTarget.value.trim())}
+          />
+          <p className="mt-1 text-xs leading-5 text-muted">계획 화면과 감사 export에는 마스킹됩니다.</p>
+        </div>
+        <div>
+          <label htmlFor="certbot-alternative-domains" className="text-sm font-medium text-text">
+            추가 도메인 <span className="font-normal text-muted">(선택, 쉼표 구분)</span>
+          </label>
+          <Input
+            id="certbot-alternative-domains"
+            inputMode="url"
+            placeholder="www.example.com"
+            value={alternatives}
+            onChange={(event) => setAlternatives(event.currentTarget.value)}
+          />
+        </div>
+        <div>
+          <label htmlFor="certbot-environment" className="text-sm font-medium text-text">
+            CA 환경
+          </label>
+          <select
+            id="certbot-environment"
+            className="mt-2 h-10 w-full rounded-control border border-border bg-surface px-3 text-sm text-text outline-none focus:border-accent"
+            value={environment}
+            onChange={(event) => setEnvironment(event.currentTarget.value as CertificateEnvironment)}
+          >
+            <option value="staging">staging · 비저장 challenge 검증</option>
+            <option value="production">production · 실제 인증서 발급</option>
+          </select>
+        </div>
+        <label className="flex items-start gap-3 text-sm leading-6 text-text sm:col-span-2">
+          <input
+            type="checkbox"
+            className="mt-1 size-4 accent-accent"
+            checked={tosAgreed}
+            onChange={(event) => setTosAgreed(event.currentTarget.checked)}
+          />
+          Let’s Encrypt 이용약관 동의와 외부 CA 요청이 발생하는 계획임을 확인했습니다.
+        </label>
+        {!siteReady ? (
+          <p role="alert" className="text-sm leading-6 text-warning sm:col-span-2">
+            활성화된 제품 관리 Nginx site와 고정 ACME webroot include를 확인할 수 없어 계획을 차단했습니다.
+          </p>
+        ) : null}
+        <div className="sm:col-span-2">
+          <Button
+            type="submit"
+            className="w-full sm:w-auto"
+            disabled={planning || !siteReady || !tosAgreed || email.length === 0}
+          >
+            {planning ? (
+              <LoaderCircle aria-hidden="true" className="size-4 animate-spin" />
+            ) : (
+              <BadgeCheck aria-hidden="true" className="size-4" />
+            )}
+            {planning ? "DNS·포트·Nginx 확인 중" : "발급 전 계획 만들기"}
+          </Button>
+        </div>
+      </form>
+    </section>
   );
 }
 
@@ -365,16 +643,225 @@ function CertificateCard({ certificate }: { certificate: CertificateSummaryView 
   );
 }
 
+function IssueInspector({
+  plan,
+  accepted,
+  receipt,
+  executing,
+  errorMessage,
+  onApprove,
+}: {
+  plan: CertbotIssuePlanView | null;
+  accepted: OperationAcceptedView | null;
+  receipt: OperationReceiptView | null;
+  executing: boolean;
+  errorMessage: string | null;
+  onApprove: (password: string) => Promise<void>;
+}) {
+  const [password, setPassword] = useState("");
+  const [externalEffectConfirmed, setExternalEffectConfirmed] = useState(false);
+  const [attachDeferredConfirmed, setAttachDeferredConfirmed] = useState(false);
+
+  async function submit(event: SyntheticEvent<HTMLFormElement>): Promise<void> {
+    event.preventDefault();
+    if (!externalEffectConfirmed || !attachDeferredConfirmed) return;
+    const submittedPassword = password;
+    setPassword("");
+    await onApprove(submittedPassword);
+  }
+
+  if (receipt !== null) return <IssueResult receipt={receipt} />;
+  if (accepted !== null) {
+    return (
+      <div aria-live="polite" className="flex items-start gap-3">
+        <LoaderCircle aria-hidden="true" className="size-6 shrink-0 animate-spin text-warning" />
+        <div>
+          <h3 className="text-base font-semibold text-text">{STAGE_LABELS[accepted.currentStage]}</h3>
+          <p className="mt-1 text-sm leading-6 text-muted">
+            one-shot Certbot runner가 실행 중입니다. 창이 닫혀도 opsd 감사 원장이 결과를 계속
+            추적합니다.
+          </p>
+        </div>
+      </div>
+    );
+  }
+  if (plan === null) {
+    return errorMessage ? (
+      <SurfaceState kind="error" title="발급 계획을 만들지 못했습니다" description={errorMessage} />
+    ) : (
+      <SurfaceState kind="empty" title="발급 계획이 없습니다" description="현재 상태로 새 계획을 만드세요." />
+    );
+  }
+
+  return (
+    <div>
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-muted">
+            certbot certonly · {plan.environment}
+          </p>
+          <h3 className="mt-2 text-base font-semibold text-text">{plan.primaryDomain} 발급 계획</h3>
+        </div>
+        <AssuranceMark assurance={plan.assurance} />
+      </div>
+
+      <dl className="mt-5 grid grid-cols-2 gap-3 border-y border-border py-4 text-sm">
+        <div>
+          <dt className="text-xs text-muted">CA 환경</dt>
+          <dd className="mt-1 font-medium text-text">{plan.environment}</dd>
+        </div>
+        <div>
+          <dt className="text-xs text-muted">계획 만료</dt>
+          <dd className="mt-1 font-medium text-text">{formatDateTime(plan.expiresAt)}</dd>
+        </div>
+        <div>
+          <dt className="text-xs text-muted">DNS 일치</dt>
+          <dd className="mt-1 break-words font-medium text-text">{plan.resolvedAddresses.join(", ")}</dd>
+        </div>
+        <div>
+          <dt className="text-xs text-muted">로컬 listener</dt>
+          <dd className="mt-1 font-medium text-text">
+            80 {plan.localPort80Reachable ? "확인" : "실패"} · 443 {plan.localPort443Reachable ? "확인" : "미확인"}
+          </dd>
+        </div>
+        <div className="col-span-2">
+          <dt className="text-xs text-muted">SAN</dt>
+          <dd className="mt-1 break-words font-medium text-text">{plan.domains.join(", ")}</dd>
+        </div>
+        <div className="col-span-2">
+          <dt className="text-xs text-muted">ACME 계정</dt>
+          <dd className="mt-1 font-medium text-text">{plan.maskedAccountEmail}</dd>
+        </div>
+      </dl>
+
+      {plan.environment === "production" && !plan.stagingEvidenceValid ? (
+        <p role="alert" className="mt-5 text-sm font-medium leading-6 text-danger">
+          같은 도메인·DNS·Nginx digest의 최근 staging 성공 증거가 없어 production 실행을 차단합니다.
+        </p>
+      ) : null}
+
+      <section className="mt-5 border-y border-warning/35 py-4">
+        <div className="flex items-start gap-3">
+          <TriangleAlert aria-hidden="true" className="mt-0.5 size-5 shrink-0 text-warning" />
+          <div>
+            <h4 className="text-sm font-semibold text-text">G1 · CA 외부효과는 자동 원복 불가</h4>
+            <p className="mt-1 text-sm leading-6 text-muted">
+              production 발급과 rate-limit 기록은 되돌릴 수 없습니다. 이번 승인에는 Nginx TLS 연결이
+              포함되지 않습니다.
+            </p>
+          </div>
+        </div>
+      </section>
+      <section className="mt-5">
+        <h4 className="text-xs font-semibold text-muted">실행 영향</h4>
+        <BulletList values={plan.impact} />
+      </section>
+      <div className="mt-5"><AssuranceDetails assurance={plan.assurance} /></div>
+      <section className="mt-5 border-y border-border py-4">
+        <h4 className="text-xs font-semibold text-muted">실패·중단 시 확인 경로</h4>
+        <BulletList values={plan.recoveryPath} />
+      </section>
+
+      {errorMessage ? <p role="alert" className="mt-5 text-sm font-medium text-danger">{errorMessage}</p> : null}
+      <form className="mt-6" onSubmit={(event) => void submit(event)}>
+        <label className="flex items-start gap-3 text-sm leading-6 text-text">
+          <input
+            type="checkbox"
+            className="mt-1 size-4 accent-accent"
+            checked={externalEffectConfirmed}
+            onChange={(event) => setExternalEffectConfirmed(event.currentTarget.checked)}
+          />
+          CA challenge·발급·rate-limit 외부효과는 자동 원복되지 않음을 확인했습니다.
+        </label>
+        <label className="mt-3 flex items-start gap-3 text-sm leading-6 text-text">
+          <input
+            type="checkbox"
+            className="mt-1 size-4 accent-accent"
+            checked={attachDeferredConfirmed}
+            onChange={(event) => setAttachDeferredConfirmed(event.currentTarget.checked)}
+          />
+          이번 작업은 발급까지만 수행하며 Nginx TLS 연결은 별도 G2 계획임을 확인했습니다.
+        </label>
+        <label htmlFor="certbot-issue-password" className="mt-5 block text-sm font-medium text-text">
+          Linux 계정 비밀번호로 exact plan 승인
+        </label>
+        <Input
+          id="certbot-issue-password"
+          type="password"
+          autoComplete="current-password"
+          maxLength={1024}
+          required
+          disabled={executing}
+          value={password}
+          onChange={(event) => setPassword(event.currentTarget.value)}
+        />
+        <Button
+          className="mt-4 w-full"
+          type="submit"
+          disabled={
+            executing ||
+            password.length === 0 ||
+            !externalEffectConfirmed ||
+            !attachDeferredConfirmed ||
+            (plan.environment === "production" && !plan.stagingEvidenceValid)
+          }
+        >
+          {executing ? <LoaderCircle aria-hidden="true" className="size-4 animate-spin" /> : <KeyRound aria-hidden="true" className="size-4" />}
+          {executing ? "승인·실행 요청 중" : `${plan.environment} 발급 실행`}
+        </Button>
+      </form>
+    </div>
+  );
+}
+
+function IssueResult({ receipt }: { receipt: OperationReceiptView }) {
+  const succeeded = receipt.terminalState === "SUCCEEDED";
+  return (
+    <div aria-live="polite">
+      <div className="flex items-start gap-3">
+        {succeeded ? (
+          <CheckCircle2 aria-hidden="true" className="size-6 shrink-0 text-success" />
+        ) : (
+          <XCircle aria-hidden="true" className="size-6 shrink-0 text-danger" />
+        )}
+        <div>
+          <h3 className="text-base font-semibold text-text">
+            {succeeded ? "인증서 발급 검증 완료" : STAGE_LABELS[receipt.terminalState]}
+          </h3>
+          <p className="mt-1 text-sm leading-6 text-muted">
+            {succeeded
+              ? "Certbot 결과와 sanitized inventory를 검증했습니다. TLS 연결은 아직 변경하지 않았습니다."
+              : "발급을 성공으로 처리하지 않았습니다. DNS·80 포트·webroot와 감사 단계를 확인하세요."}
+          </p>
+        </div>
+      </div>
+      <ol className="mt-6 border-y border-border py-2">
+        {receipt.stages.map((stage) => (
+          <li key={stage.sequence} className="flex gap-3 py-3 text-sm">
+            <CircleDot aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-muted" />
+            <div className="min-w-0">
+              <p className="font-medium text-text">{STAGE_LABELS[stage.stage]}</p>
+              <p className="mt-1 break-words text-xs text-muted">{formatDateTime(stage.recordedAt)} · {stage.resultCode}</p>
+            </div>
+          </li>
+        ))}
+      </ol>
+      {receipt.recoveryPath.length > 0 ? <section className="mt-5"><BulletList values={receipt.recoveryPath} /></section> : null}
+      <div className="mt-5"><AssuranceDetails assurance={receipt.assurance} /></div>
+    </div>
+  );
+}
+
 const STAGE_LABELS: Record<OperationStage, string> = {
   PLANNED: "계획 생성",
   APPROVED: "승인 완료",
   SNAPSHOTTED: "인증서 상태 저장",
-  APPLYING: "Certbot dry-run 실행",
-  VALIDATING: "결과·timer 재검증",
+  APPLYING: "Certbot 작업 실행",
+  VALIDATING: "결과 재검증",
   RELOADING: "서비스 reload",
   VERIFYING: "적용 상태 확인",
   ROLLING_BACK: "이전 상태 원복",
-  SUCCEEDED: "갱신 검증 완료",
+  SUCCEEDED: "작업 검증 완료",
   ROLLED_BACK: "실패 · 원복 완료",
   RECOVERY_REQUIRED: "중단 · 수동 확인 필요",
   REJECTED: "검증 실패",
@@ -556,7 +1043,7 @@ function RenewTestResult({ receipt }: { receipt: OperationReceiptView }) {
         )}
         <div>
           <h3 className="text-base font-semibold text-text">
-            {STAGE_LABELS[receipt.terminalState]}
+            {succeeded ? "갱신 검증 완료" : STAGE_LABELS[receipt.terminalState]}
           </h3>
           <p className="mt-1 text-sm leading-6 text-muted">
             {succeeded
@@ -619,6 +1106,17 @@ function operationErrorCopy(error: unknown, fallback: string): string {
   if (!(error instanceof ApiError)) return fallback;
   const messages: Record<string, string> = {
     stale_inventory: "인증서 상태가 바뀌었습니다. 다시 조회한 뒤 새 계획을 만드세요.",
+    stale_site: "Nginx 관리 site가 바뀌었습니다. 현재 설정을 다시 조회하세요.",
+    invalid_domain: "공개 관리 도메인과 발급 도메인이 일치하지 않습니다.",
+    dns_resolution_failed: "공개 DNS를 조회하지 못했습니다. A/AAAA 레코드를 확인하세요.",
+    dns_mismatch: "공개 DNS 주소와 설정된 서버 주소가 일치하지 않습니다.",
+    challenge_unreachable: "로컬 80 포트 또는 ACME challenge 경로를 확인할 수 없습니다.",
+    wrong_webroot: "제품 관리 Nginx site에 고정 ACME webroot include가 없습니다.",
+    staging_required: "같은 도메인·DNS·Nginx 설정의 최근 staging 성공이 먼저 필요합니다.",
+    preflight_stale: "DNS·포트 사전검증이 만료되었습니다. 새 계획을 만드세요.",
+    issuance_failed: "Certbot 발급이 실패했습니다. 원문 대신 감사 digest만 기록됐습니다.",
+    certificate_invalid: "발급 결과의 SAN·lineage·timer 검증을 통과하지 못했습니다.",
+    issuance_unavailable: "신규 발급 사전조건 또는 fault gate가 준비되지 않았습니다.",
     resource_busy: "다른 Certbot 작업이 실행 중입니다. 완료 후 다시 시도하세요.",
     plan_expired: "계획이 만료되었습니다. 현재 상태로 새 계획을 만드세요.",
     renewal_test_failed: "Certbot 갱신 사전 검증이 실패했습니다. 원문 대신 감사 digest가 기록됐습니다.",
