@@ -1,25 +1,33 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
+use std::convert::Infallible;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::{Arc, Mutex};
+use std::task::{Context, Poll};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use axum::body::Body;
-use axum::extract::{DefaultBodyLimit, State};
+use axum::extract::{DefaultBodyLimit, Path, State};
 use axum::http::header::{
     CACHE_CONTROL, CONTENT_SECURITY_POLICY, CONTENT_TYPE, COOKIE, HOST, ORIGIN, REFERRER_POLICY,
     SET_COOKIE, STRICT_TRANSPORT_SECURITY, X_CONTENT_TYPE_OPTIONS,
 };
 use axum::http::{HeaderMap, HeaderValue, Method, Request, StatusCode};
 use axum::middleware::{Next, from_fn_with_state};
+use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post, put};
 use axum::{Json, Router};
+use futures_core::Stream;
 use jw_contracts::{
-    AccessSettingsView, AdditionalAuthProviderStatus, AssuranceLevel, AssuranceView,
-    AuthFailureClass, AuthPurpose, AuthRequest, AuthResult, CapabilityStatus, CapabilityView,
-    HealthStatus, HealthView, IPC_PROTOCOL_VERSION, IngressChannel, IntegrationCatalogView,
-    LoginRequest, NginxSitesView, ObservationStatus, ProblemDetails, ReauthPurpose, ReauthRequest,
-    ReauthView, RollbackSupport, ServiceSummary, ServicesView, SessionView,
-    UpdateAdditionalAuthRequest,
+    AccessSettingsView, AdditionalAuthPolicy, AdditionalAuthProviderStatus, AssuranceLevel,
+    AssuranceView, AuthFailureClass, AuthPurpose, AuthRequest, AuthResult, CapabilityStatus,
+    CapabilityView, HealthStatus, HealthView, IPC_PROTOCOL_VERSION, IngressChannel,
+    IntegrationCatalogView, LoginRequest, NGINX_SITE_STATE_OPERATION, NginxSiteStatePlanRequest,
+    NginxSiteStatePlanView, NginxSitesView, ObservationStatus, OperationAcceptedView,
+    OperationApprovalRequest, OperationReceiptView, OperationStageEvidenceView, ProblemDetails,
+    ReauthPurpose, ReauthRequest, ReauthView, Role, RollbackSupport, ServiceSummary, ServicesView,
+    SessionView, Subject, UpdateAdditionalAuthRequest,
 };
 use sha2::{Digest, Sha256};
 use tower_http::services::{ServeDir, ServeFile};
@@ -27,8 +35,9 @@ use utoipa::OpenApi;
 use zeroize::Zeroizing;
 
 use crate::integration_catalog::{IntegrationObservationProfile, observe_integrations};
-use crate::observation::{ObservationProfile, observe_host, observe_nginx};
-use crate::session::PolicyUpdateError;
+use crate::observation::{ObservationProfile, observe_host, observe_nginx_with_mutation_gate};
+use crate::ops_client::OpsBrokerError;
+use crate::session::{OperationClaimError, PolicyUpdateError};
 use crate::{AgentConfig, AuthBroker, OpsBroker, SessionStore};
 
 const API_BODY_MAX_BYTES: usize = 16 * 1_024;
@@ -85,6 +94,10 @@ impl AppState {
         integrations,
         access_settings,
         update_additional_auth,
+        plan_nginx_site_state,
+        approve_nginx_site_state,
+        operation_events,
+        operation_receipt,
     ),
     components(schemas(
         AccessSettingsView,
@@ -101,6 +114,14 @@ impl AppState {
         jw_contracts::DiskObservation,
         NginxSitesView,
         jw_contracts::NginxSiteObservation,
+        jw_contracts::NginxSiteState,
+        NginxSiteStatePlanRequest,
+        NginxSiteStatePlanView,
+        OperationAcceptedView,
+        OperationApprovalRequest,
+        OperationReceiptView,
+        jw_contracts::OperationStage,
+        jw_contracts::OperationStageEvidenceView,
         AssuranceLevel,
         AssuranceView,
         RollbackSupport,
@@ -141,6 +162,19 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/v1/capabilities", get(capabilities))
         .route("/api/v1/services", get(services))
         .route("/api/v1/services/nginx/sites", get(nginx_sites))
+        .route(
+            "/api/v1/operations/nginx/site-state/plans",
+            post(plan_nginx_site_state),
+        )
+        .route(
+            "/api/v1/operations/nginx/site-state/approvals",
+            post(approve_nginx_site_state),
+        )
+        .route(
+            "/api/v1/operations/{operation_id}/events",
+            get(operation_events),
+        )
+        .route("/api/v1/operations/{operation_id}", get(operation_receipt))
         .route("/api/v1/integrations", get(integrations))
         .route("/api/v1/settings/access", get(access_settings))
         .route(
@@ -278,9 +312,6 @@ async fn reauthenticate(
     let now = unix_milliseconds()?;
     let (old_token, current) = current_session(&state, &headers, now)?;
     require_csrf(&headers, old_token.as_str())?;
-    if !matches!(input.purpose, ReauthPurpose::SecurityPolicyChange { .. }) {
-        return Err(ApiProblem::bad_request("unsupported_reauth_purpose"));
-    }
     let source = request_source(&state, &headers)?;
     state
         .auth_limiter
@@ -387,15 +418,21 @@ async fn services(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<Json<ServicesView>, ApiProblem> {
-    let _session = current_session(&state, &headers, unix_milliseconds()?)?;
+    let (_, session) = current_session(&state, &headers, unix_milliseconds()?)?;
     let observed_at = now_rfc3339()?;
-    let nginx = observe_nginx(&ObservationProfile::default(), observed_at.clone());
+    let mutation_reason =
+        nginx_mutation_gate_reason(&state, &session.subject, session.additional_auth_policy).await;
+    let nginx = observe_nginx_with_mutation_gate(
+        &ObservationProfile::default(),
+        observed_at.clone(),
+        mutation_reason.as_deref(),
+    );
     Ok(Json(ServicesView {
         observed_at,
         services: vec![ServiceSummary {
             service: "nginx".to_owned(),
             status: nginx.status,
-            read_only: true,
+            read_only: mutation_reason.is_some(),
         }],
     }))
 }
@@ -408,11 +445,335 @@ async fn nginx_sites(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<Json<NginxSitesView>, ApiProblem> {
-    let _session = current_session(&state, &headers, unix_milliseconds()?)?;
-    Ok(Json(observe_nginx(
+    let (_, session) = current_session(&state, &headers, unix_milliseconds()?)?;
+    let mutation_reason =
+        nginx_mutation_gate_reason(&state, &session.subject, session.additional_auth_policy).await;
+    Ok(Json(observe_nginx_with_mutation_gate(
         &ObservationProfile::default(),
         now_rfc3339()?,
+        mutation_reason.as_deref(),
     )))
+}
+
+async fn nginx_mutation_gate_reason(
+    state: &AppState,
+    subject: &Subject,
+    additional_auth_policy: AdditionalAuthPolicy,
+) -> Option<String> {
+    if !matches!(subject.role, Role::Admin | Role::Operator) {
+        return Some(String::from("현재 계정은 Nginx 변경 권한이 없습니다."));
+    }
+    if additional_auth_policy != AdditionalAuthPolicy::Disabled {
+        return Some(String::from(
+            "설정된 추가 인증 수단이 아직 준비되지 않아 변경이 차단되었습니다.",
+        ));
+    }
+    match state.ops.capabilities().await {
+        Ok(capability) if capability.forensic_lockdown => Some(String::from(
+            "감사 원장 무결성 잠금 상태여서 모든 변경이 차단되었습니다.",
+        )),
+        Ok(capability)
+            if !capability.read_only
+                && capability
+                    .supported_operations
+                    .iter()
+                    .any(|operation| operation == NGINX_SITE_STATE_OPERATION) =>
+        {
+            None
+        }
+        Ok(_) => Some(String::from(
+            "이 서버에서는 Nginx 자동 원복 작업을 사용할 수 없습니다.",
+        )),
+        Err(_) => Some(String::from(
+            "권한 분리 서비스 상태를 확인할 수 없어 변경이 차단되었습니다.",
+        )),
+    }
+}
+
+#[utoipa::path(post, path = "/api/v1/operations/nginx/site-state/plans", request_body = NginxSiteStatePlanRequest, responses(
+    (status = 200, description = "Immutable Nginx site-state plan", body = NginxSiteStatePlanView),
+    (status = 400, description = "Invalid typed request", body = ProblemDetails),
+    (status = 401, description = "Authentication required", body = ProblemDetails),
+    (status = 403, description = "Role or CSRF rejected", body = ProblemDetails),
+    (status = 409, description = "Stale, busy, or idempotency conflict", body = ProblemDetails),
+    (status = 423, description = "Forensic lockdown", body = ProblemDetails)
+))]
+async fn plan_nginx_site_state(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(input): Json<NginxSiteStatePlanRequest>,
+) -> Result<Json<NginxSiteStatePlanView>, ApiProblem> {
+    input.validate().map_err(ApiProblem::bad_request)?;
+    let now = unix_milliseconds()?;
+    let (token, session) = current_session(&state, &headers, now)?;
+    require_csrf(&headers, token.as_str())?;
+    let plan = state
+        .ops
+        .plan_nginx_site_state(session.subject, input)
+        .await
+        .map_err(map_ops_error)?;
+    Ok(Json(plan))
+}
+
+#[utoipa::path(post, path = "/api/v1/operations/nginx/site-state/approvals", request_body = OperationApprovalRequest, responses(
+    (status = 202, description = "Operation accepted for durable background execution", body = OperationAcceptedView),
+    (status = 400, description = "Invalid approval shape", body = ProblemDetails),
+    (status = 401, description = "Authentication required", body = ProblemDetails),
+    (status = 403, description = "Claim, role, or CSRF rejected", body = ProblemDetails),
+    (status = 409, description = "Expired, stale, busy, or conflicting operation", body = ProblemDetails),
+    (status = 423, description = "Forensic lockdown", body = ProblemDetails),
+    (status = 428, description = "Additional authentication is configured but unavailable", body = ProblemDetails)
+))]
+async fn approve_nginx_site_state(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(input): Json<OperationApprovalRequest>,
+) -> Result<(StatusCode, Json<OperationAcceptedView>), ApiProblem> {
+    input.validate_shape().map_err(ApiProblem::bad_request)?;
+    let now = unix_milliseconds()?;
+    let (token, session) = current_session(&state, &headers, now)?;
+    require_csrf(&headers, token.as_str())?;
+    if session.additional_auth_policy != AdditionalAuthPolicy::Disabled {
+        return Err(ApiProblem::new(
+            StatusCode::PRECONDITION_REQUIRED,
+            "additional_authentication_unavailable",
+        ));
+    }
+    if input.additional_auth_claim.is_some() {
+        return Err(ApiProblem::bad_request(
+            "additional_authentication_claim_unexpected",
+        ));
+    }
+    state
+        .store
+        .consume_operation_claim(
+            token.as_str(),
+            &session.subject,
+            &input.plan_hash,
+            &input.reauth_token,
+            now,
+        )
+        .map_err(map_operation_claim_error)?;
+    let actor = session.subject;
+    let receipt = state
+        .ops
+        .approve_nginx_site_state(
+            actor.clone(),
+            input.plan_id,
+            input.plan_hash,
+            input.idempotency_key,
+        )
+        .await
+        .map_err(map_ops_error)?;
+    let operation_id = receipt.operation_id.clone();
+    let accepted = OperationAcceptedView {
+        schema_version: receipt.schema_version,
+        operation_type: receipt.operation_type,
+        operation_id: operation_id.clone(),
+        plan_id: receipt.plan_id,
+        plan_hash: receipt.plan_hash,
+        actor: receipt.actor,
+        current_stage: receipt.terminal_state,
+        event_stream: format!("/api/v1/operations/{operation_id}/events"),
+    };
+    let ops = Arc::clone(&state.ops);
+    let _execution_task = tokio::spawn(async move {
+        let _execution_result = ops.execute_operation(actor, operation_id).await;
+    });
+    Ok((StatusCode::ACCEPTED, Json(accepted)))
+}
+
+#[utoipa::path(get, path = "/api/v1/operations/{operation_id}/events", params(
+    ("operation_id" = String, Path, description = "Opaque operation identifier")
+), responses(
+    (status = 200, description = "Resumable operation stage event stream", content_type = "text/event-stream"),
+    (status = 400, description = "Invalid operation or event identifier", body = ProblemDetails),
+    (status = 401, description = "Authentication required", body = ProblemDetails)
+))]
+async fn operation_events(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(operation_id): Path<String>,
+) -> Result<Response, ApiProblem> {
+    validate_operation_id(&operation_id)?;
+    let (_, session) = current_session(&state, &headers, unix_milliseconds()?)?;
+    let last_sequence = last_event_sequence(&headers)?;
+    let stream = OperationEventStream::new(
+        Arc::clone(&state.ops),
+        session.subject,
+        operation_id,
+        last_sequence,
+    );
+    let mut response = Sse::new(stream)
+        .keep_alive(
+            KeepAlive::new()
+                .interval(Duration::from_secs(10))
+                .text("keepalive"),
+        )
+        .into_response();
+    response
+        .headers_mut()
+        .insert("x-accel-buffering", HeaderValue::from_static("no"));
+    Ok(response)
+}
+
+#[utoipa::path(get, path = "/api/v1/operations/{operation_id}", params(
+    ("operation_id" = String, Path, description = "Opaque operation identifier")
+), responses(
+    (status = 200, description = "Operation receipt or current stage", body = OperationReceiptView),
+    (status = 401, description = "Authentication required", body = ProblemDetails),
+    (status = 403, description = "Operation belongs to another actor", body = ProblemDetails),
+    (status = 404, description = "Operation not found", body = ProblemDetails)
+))]
+async fn operation_receipt(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(operation_id): Path<String>,
+) -> Result<Json<OperationReceiptView>, ApiProblem> {
+    validate_operation_id(&operation_id)?;
+    let (_, session) = current_session(&state, &headers, unix_milliseconds()?)?;
+    let receipt = state
+        .ops
+        .operation_receipt(session.subject, operation_id)
+        .await
+        .map_err(map_ops_error)?;
+    Ok(Json(receipt))
+}
+
+type ReceiptFuture =
+    Pin<Box<dyn Future<Output = Result<OperationReceiptView, OpsBrokerError>> + Send + 'static>>;
+
+struct OperationEventStream {
+    ops: Arc<dyn OpsBroker>,
+    actor: Subject,
+    operation_id: String,
+    last_sequence: u64,
+    queue: VecDeque<Event>,
+    delay: Pin<Box<tokio::time::Sleep>>,
+    pending: Option<ReceiptFuture>,
+    deadline: Instant,
+    close_after_queue: bool,
+}
+
+impl OperationEventStream {
+    fn new(
+        ops: Arc<dyn OpsBroker>,
+        actor: Subject,
+        operation_id: String,
+        last_sequence: u64,
+    ) -> Self {
+        Self {
+            ops,
+            actor,
+            operation_id,
+            last_sequence,
+            queue: VecDeque::new(),
+            delay: Box::pin(tokio::time::sleep(Duration::ZERO)),
+            pending: None,
+            deadline: Instant::now() + Duration::from_secs(180),
+            close_after_queue: false,
+        }
+    }
+
+    fn record_receipt(&mut self, receipt: OperationReceiptView) {
+        for stage in receipt.stages {
+            if stage.sequence <= self.last_sequence {
+                continue;
+            }
+            self.last_sequence = self.last_sequence.max(stage.sequence);
+            self.push_stage(stage);
+        }
+        if receipt.terminal_state.is_terminal() {
+            self.close_after_queue = true;
+        } else {
+            self.delay = Box::pin(tokio::time::sleep(Duration::from_millis(300)));
+        }
+    }
+
+    fn push_stage(&mut self, stage: OperationStageEvidenceView) {
+        match serde_json::to_string(&stage) {
+            Ok(data) => self.queue.push_back(
+                Event::default()
+                    .event("operation-stage")
+                    .id(stage.sequence.to_string())
+                    .data(data),
+            ),
+            Err(_) => self.push_error("event_serialization_failed"),
+        }
+    }
+
+    fn push_error(&mut self, code: &str) {
+        let data = format!("{{\"code\":\"{code}\"}}");
+        self.queue
+            .push_back(Event::default().event("operation-error").data(data));
+        self.close_after_queue = true;
+    }
+}
+
+impl Stream for OperationEventStream {
+    type Item = Result<Event, Infallible>;
+
+    fn poll_next(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let stream = self.get_mut();
+        loop {
+            if let Some(event) = stream.queue.pop_front() {
+                return Poll::Ready(Some(Ok(event)));
+            }
+            if stream.close_after_queue {
+                return Poll::Ready(None);
+            }
+            if Instant::now() >= stream.deadline {
+                stream.push_error("event_stream_window_elapsed");
+                continue;
+            }
+            if let Some(mut pending) = stream.pending.take() {
+                match pending.as_mut().poll(context) {
+                    Poll::Pending => {
+                        stream.pending = Some(pending);
+                        return Poll::Pending;
+                    }
+                    Poll::Ready(Ok(receipt)) => stream.record_receipt(receipt),
+                    Poll::Ready(Err(_)) => stream.push_error("operation_receipt_unavailable"),
+                }
+                continue;
+            }
+            match stream.delay.as_mut().poll(context) {
+                Poll::Pending => return Poll::Pending,
+                Poll::Ready(()) => {
+                    let ops = Arc::clone(&stream.ops);
+                    let actor = stream.actor.clone();
+                    let operation_id = stream.operation_id.clone();
+                    stream.pending = Some(Box::pin(async move {
+                        ops.operation_receipt(actor, operation_id).await
+                    }));
+                }
+            }
+        }
+    }
+}
+
+fn validate_operation_id(operation_id: &str) -> Result<(), ApiProblem> {
+    if operation_id.is_empty()
+        || operation_id.len() > 64
+        || !operation_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+    {
+        Err(ApiProblem::bad_request("operation_id"))
+    } else {
+        Ok(())
+    }
+}
+
+fn last_event_sequence(headers: &HeaderMap) -> Result<u64, ApiProblem> {
+    let Some(value) = headers.get("last-event-id") else {
+        return Ok(0);
+    };
+    let text = value
+        .to_str()
+        .map_err(|_| ApiProblem::bad_request("last_event_id"))?;
+    text.parse::<u64>()
+        .map_err(|_| ApiProblem::bad_request("last_event_id"))
 }
 
 #[utoipa::path(get, path = "/api/v1/integrations", responses(
@@ -647,16 +1008,17 @@ fn request_source(state: &AppState, headers: &HeaderMap) -> Result<String, ApiPr
 }
 
 fn access_view(state: &AppState) -> Result<AccessSettingsView, ApiProblem> {
+    let policy = state
+        .store
+        .additional_auth_policy()
+        .map_err(|_| ApiProblem::internal())?;
     Ok(AccessSettingsView {
         ingress: state.channel,
         public_host: state.config.public_host.clone(),
         recovery_origin: state.config.recovery_origin.clone(),
-        additional_auth_policy: state
-            .store
-            .additional_auth_policy()
-            .map_err(|_| ApiProblem::internal())?,
+        additional_auth_policy: policy,
         additional_auth_provider: AdditionalAuthProviderStatus::NotImplemented,
-        mutation_approval_available: false,
+        mutation_approval_available: policy == AdditionalAuthPolicy::Disabled,
         assurance: AssuranceView {
             level: AssuranceLevel::G2ReversibleConfig,
             rollback_support: RollbackSupport::AutomaticBounded,
@@ -716,6 +1078,33 @@ fn map_policy_error(error: PolicyUpdateError) -> ApiProblem {
         ),
         PolicyUpdateError::InvalidReauth => ApiProblem::forbidden("reauthentication_rejected"),
         PolicyUpdateError::Storage(_) => ApiProblem::internal(),
+    }
+}
+
+fn map_operation_claim_error(error: OperationClaimError) -> ApiProblem {
+    match error {
+        OperationClaimError::Invalid => ApiProblem::forbidden("reauthentication_rejected"),
+        OperationClaimError::Storage(_) => ApiProblem::internal(),
+    }
+}
+
+fn map_ops_error(error: OpsBrokerError) -> ApiProblem {
+    match error {
+        OpsBrokerError::Unavailable | OpsBrokerError::Timeout | OpsBrokerError::InvalidResponse => {
+            ApiProblem::unavailable("operation_service_unavailable")
+        }
+        OpsBrokerError::Rejected(code) => match code.as_str() {
+            "role_denied" | "protected_resource" | "operation_access_denied" => {
+                ApiProblem::forbidden(code)
+            }
+            "forensic_lockdown" => ApiProblem::new(StatusCode::LOCKED, code),
+            "site_missing" | "plan_missing" | "operation_missing" => {
+                ApiProblem::new(StatusCode::NOT_FOUND, code)
+            }
+            "schema_version" | "operation_type" | "site_id" | "digest" | "idempotency_key"
+            | "plan_id" | "plan_hash" | "operation_id" => ApiProblem::bad_request(code),
+            _ => ApiProblem::new(StatusCode::CONFLICT, code),
+        },
     }
 }
 
@@ -843,32 +1232,32 @@ fn remaining(counter: &Counter, now: Instant) -> Duration {
 #[derive(Debug)]
 struct ApiProblem {
     status: StatusCode,
-    code: &'static str,
+    code: String,
     retry_after: Option<Duration>,
 }
 
 impl ApiProblem {
-    fn new(status: StatusCode, code: &'static str) -> Self {
+    fn new(status: StatusCode, code: impl Into<String>) -> Self {
         Self {
             status,
-            code,
+            code: code.into(),
             retry_after: None,
         }
     }
 
-    fn bad_request(code: &'static str) -> Self {
+    fn bad_request(code: impl Into<String>) -> Self {
         Self::new(StatusCode::BAD_REQUEST, code)
     }
 
-    fn unauthorized(code: &'static str) -> Self {
+    fn unauthorized(code: impl Into<String>) -> Self {
         Self::new(StatusCode::UNAUTHORIZED, code)
     }
 
-    fn forbidden(code: &'static str) -> Self {
+    fn forbidden(code: impl Into<String>) -> Self {
         Self::new(StatusCode::FORBIDDEN, code)
     }
 
-    fn unavailable(code: &'static str) -> Self {
+    fn unavailable(code: impl Into<String>) -> Self {
         Self::new(StatusCode::SERVICE_UNAVAILABLE, code)
     }
 
@@ -879,7 +1268,7 @@ impl ApiProblem {
     fn rate_limited(retry_after: Duration) -> Self {
         Self {
             status: StatusCode::TOO_MANY_REQUESTS,
-            code: "authentication_rate_limited",
+            code: String::from("authentication_rate_limited"),
             retry_after: Some(retry_after),
         }
     }
@@ -891,6 +1280,9 @@ impl IntoResponse for ApiProblem {
             StatusCode::BAD_REQUEST => "Request rejected",
             StatusCode::UNAUTHORIZED => "Authentication required",
             StatusCode::FORBIDDEN => "Request forbidden",
+            StatusCode::NOT_FOUND => "Resource not found",
+            StatusCode::CONFLICT => "Operation conflict",
+            StatusCode::LOCKED => "Operations locked",
             StatusCode::TOO_MANY_REQUESTS => "Too many requests",
             StatusCode::PRECONDITION_REQUIRED => "Precondition required",
             StatusCode::SERVICE_UNAVAILABLE => "Service unavailable",
@@ -936,7 +1328,7 @@ mod tests {
     };
 
     use crate::auth_client::AuthFuture;
-    use crate::ops_client::OpsFuture;
+    use crate::ops_client::{OpsBrokerError, OpsFuture};
     use crate::{AgentConfig, AuthBroker, OpsBroker, SessionStore};
 
     use super::{AppState, AuthLimiter, login, session_cookie, validate_request_boundary};
@@ -968,16 +1360,48 @@ mod tests {
     }
 
     impl OpsBroker for StaticOps {
-        fn capabilities<'a>(&'a self) -> OpsFuture<'a> {
+        fn capabilities<'a>(&'a self) -> OpsFuture<'a, jw_contracts::OpsCapabilityResponse> {
             Box::pin(async move {
                 Ok(jw_contracts::OpsCapabilityResponse {
-                    protocol_version: IPC_PROTOCOL_VERSION,
-                    request_id: String::from("test-request"),
                     read_only: true,
                     supported_operations: Vec::new(),
                     forensic_lockdown: false,
                 })
             })
+        }
+
+        fn plan_nginx_site_state<'a>(
+            &'a self,
+            _actor: Subject,
+            _plan: jw_contracts::NginxSiteStatePlanRequest,
+        ) -> OpsFuture<'a, jw_contracts::NginxSiteStatePlanView> {
+            Box::pin(async move { Err(OpsBrokerError::Unavailable) })
+        }
+
+        fn approve_nginx_site_state<'a>(
+            &'a self,
+            _actor: Subject,
+            _plan_id: String,
+            _plan_hash: String,
+            _idempotency_key: String,
+        ) -> OpsFuture<'a, jw_contracts::OperationReceiptView> {
+            Box::pin(async move { Err(OpsBrokerError::Unavailable) })
+        }
+
+        fn operation_receipt<'a>(
+            &'a self,
+            _actor: Subject,
+            _operation_id: String,
+        ) -> OpsFuture<'a, jw_contracts::OperationReceiptView> {
+            Box::pin(async move { Err(OpsBrokerError::Unavailable) })
+        }
+
+        fn execute_operation<'a>(
+            &'a self,
+            _actor: Subject,
+            _operation_id: String,
+        ) -> OpsFuture<'a, jw_contracts::OperationReceiptView> {
+            Box::pin(async move { Err(OpsBrokerError::Unavailable) })
         }
     }
 
@@ -997,6 +1421,7 @@ mod tests {
             database: path.clone(),
             web_root: std::env::temp_dir(),
             auth_timeout: Duration::from_secs(8),
+            operation_timeout: Duration::from_secs(125),
         };
         Ok((
             AppState::new(

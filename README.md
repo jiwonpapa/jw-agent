@@ -2,7 +2,7 @@
 
 Ubuntu 24.04 LTS 서버의 **범용 서비스 설정·유지보수 작업을 안전하게 수행하는 단일 서버 우선 관리 콘솔**입니다.
 
-현재 단계는 `P1 Identity, public edge, and read-only vertical slice`의 VM 검증 완료 상태입니다. Ubuntu 24.04에서 PAM·systemd·Nginx·`.deb` 설치·업그레이드·제거·재부팅을 검증했으며, 실제 P2 mutation 구현은 별도 진입 승인 전에는 시작하지 않습니다.
+현재 단계는 `P2 Safe local operations`입니다. P1의 PAM·공개 HTTPS·loopback 복구 기반 위에 durable ledger·snapshot·lock·forensic lockdown과 첫 G2 작업인 Nginx site enable/disable을 구현했으며, P2 완료 주장은 Ubuntu VM fault lane 통과 후에만 합니다.
 
 이 저장소의 P1 기준점은 공개 개발 스냅샷이며 아직 오픈소스 릴리스가 아닙니다. `LICENSE`가 추가되기 전에는 사용·수정·재배포 권한을 부여하지 않으며, 정식 라이선스는 P3 release 준비에서 명시적으로 결정합니다.
 
@@ -20,8 +20,9 @@ Ubuntu 24.04 LTS 서버의 **범용 서비스 설정·유지보수 작업을 안
 - Rust `agentd` 비-root / `authd`·`opsd` root·networkless 분리
 - React + TypeScript + Bun + Vite + Tailwind CSS CLI + shadcn/ui
 - desktop·tablet·mobile 반응형 웹
-- P1은 호스트·Nginx 읽기 전용이며 일반 서비스 쓰기는 제공하지 않음
-- P2 진입 승인 후 첫 후보 작업: 발견된 Nginx 사이트의 enable/disable
+- 호스트·Nginx 관찰과 발견된 Nginx site의 typed enable/disable
+- 계획→snapshot→적용→검증→자동 원복, 비동기 실행과 SSE 진행 증거
+- 임의 shell·임의 path·보호된 관리 vhost 변경은 제공하지 않음
 - 원격 GitHub Actions 사용 금지, 로컬 단일 `xtask` 검증
 
 ## 읽는 순서
@@ -33,19 +34,19 @@ Ubuntu 24.04 LTS 서버의 **범용 서비스 설정·유지보수 작업을 안
 5. [시스템 구조](docs/20-architecture/system-context.md)
 6. [개발 단계](docs/80-delivery/roadmap.md)
 
-## P1 로컬 검증
+## P2 검증
 
 ```bash
-cargo xtask verify p1-local
-cargo xtask verify p1-browser
+cargo xtask verify p2-local
+cargo xtask verify p2-browser
 ```
 
-`p1-local`은 문서, Rust, OpenAPI drift, 웹 type/lint/unit/build를 검증합니다. `p1-browser`는 mock API 기반 로그인·스토리지 비노출·320/390/768/1024/1440 반응형·접근성을 검증합니다.
+`p2-local`은 문서, Rust safety kernel, OpenAPI drift, 웹 type/lint/unit/build를 검증합니다. `p2-browser`는 PAM 승인, 보장 범위 선표시, operation timeline, 실패·원복 표현, 320/390/768/1024/1440 반응형과 접근성을 검증합니다.
 
 Ubuntu evidence는 별도 환경 입력과 immutable package checksum을 요구합니다.
 
 ```bash
-cargo xtask verify p1-vm
+cargo xtask verify p2-vm
 ```
 
 현재 VM evidence와 private-LAN test CA 한계는 [tests/vm/README.md](tests/vm/README.md)에 기록합니다. 이것은 공인 DNS·Certbot issuance·signed release 또는 운영 안전 증거가 아닙니다.

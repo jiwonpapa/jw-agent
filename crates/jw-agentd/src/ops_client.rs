@@ -4,24 +4,51 @@ use std::pin::Pin;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use jw_contracts::{
-    IPC_PROTOCOL_VERSION, OPS_FRAME_MAX_BYTES, OpsCapabilityRequest, OpsCapabilityResponse,
-    decode_frame, encode_frame,
+    IPC_PROTOCOL_VERSION, NginxSiteStatePlanRequest, NginxSiteStatePlanView, OPS_FRAME_MAX_BYTES,
+    OperationReceiptView, OpsCapabilityResponse, OpsRequest, OpsRequestBody, OpsResponse,
+    OpsResponseBody, Subject, decode_frame, encode_frame,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixStream;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum OpsBrokerError {
     Unavailable,
     Timeout,
     InvalidResponse,
+    Rejected(String),
 }
 
-pub type OpsFuture<'a> =
-    Pin<Box<dyn Future<Output = Result<OpsCapabilityResponse, OpsBrokerError>> + Send + 'a>>;
+pub type OpsFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, OpsBrokerError>> + Send + 'a>>;
 
 pub trait OpsBroker: Send + Sync {
-    fn capabilities<'a>(&'a self) -> OpsFuture<'a>;
+    fn capabilities<'a>(&'a self) -> OpsFuture<'a, OpsCapabilityResponse>;
+
+    fn plan_nginx_site_state<'a>(
+        &'a self,
+        actor: Subject,
+        plan: NginxSiteStatePlanRequest,
+    ) -> OpsFuture<'a, NginxSiteStatePlanView>;
+
+    fn approve_nginx_site_state<'a>(
+        &'a self,
+        actor: Subject,
+        plan_id: String,
+        plan_hash: String,
+        idempotency_key: String,
+    ) -> OpsFuture<'a, OperationReceiptView>;
+
+    fn operation_receipt<'a>(
+        &'a self,
+        actor: Subject,
+        operation_id: String,
+    ) -> OpsFuture<'a, OperationReceiptView>;
+
+    fn execute_operation<'a>(
+        &'a self,
+        actor: Subject,
+        operation_id: String,
+    ) -> OpsFuture<'a, OperationReceiptView>;
 }
 
 #[derive(Clone, Debug)]
@@ -35,37 +62,119 @@ impl UdsOpsBroker {
     pub fn new(socket: PathBuf, timeout: Duration) -> Self {
         Self { socket, timeout }
     }
+
+    async fn request(&self, body: OpsRequestBody) -> Result<OpsResponseBody, OpsBrokerError> {
+        let now = unix_milliseconds()?;
+        let request = OpsRequest {
+            protocol_version: IPC_PROTOCOL_VERSION,
+            request_id: random_identifier()?,
+            deadline_unix_ms: deadline(now, self.timeout),
+            body,
+        };
+        let request_id = request.request_id.clone();
+        let response = tokio::time::timeout(self.timeout, exchange(&self.socket, request))
+            .await
+            .map_err(|_| OpsBrokerError::Timeout)??;
+        if response.protocol_version != IPC_PROTOCOL_VERSION || response.request_id != request_id {
+            return Err(OpsBrokerError::InvalidResponse);
+        }
+        match response.body {
+            OpsResponseBody::Rejected(rejected) => Err(OpsBrokerError::Rejected(rejected.code)),
+            body => Ok(body),
+        }
+    }
 }
 
 impl OpsBroker for UdsOpsBroker {
-    fn capabilities<'a>(&'a self) -> OpsFuture<'a> {
+    fn capabilities<'a>(&'a self) -> OpsFuture<'a, OpsCapabilityResponse> {
         Box::pin(async move {
-            let now = unix_milliseconds()?;
-            let request = OpsCapabilityRequest {
-                protocol_version: IPC_PROTOCOL_VERSION,
-                request_id: random_identifier()?,
-                deadline_unix_ms: deadline(now, self.timeout),
-            };
-            let request_id = request.request_id.clone();
-            let exchange = exchange(&self.socket, request);
-            let response = tokio::time::timeout(self.timeout, exchange)
-                .await
-                .map_err(|_| OpsBrokerError::Timeout)??;
-            if response.protocol_version != IPC_PROTOCOL_VERSION
-                || response.request_id != request_id
-                || !response.read_only
-            {
+            let body = self.request(OpsRequestBody::Capabilities).await?;
+            let OpsResponseBody::Capabilities(capabilities) = body else {
                 return Err(OpsBrokerError::InvalidResponse);
-            }
-            Ok(response)
+            };
+            Ok(capabilities)
+        })
+    }
+
+    fn plan_nginx_site_state<'a>(
+        &'a self,
+        actor: Subject,
+        plan: NginxSiteStatePlanRequest,
+    ) -> OpsFuture<'a, NginxSiteStatePlanView> {
+        Box::pin(async move {
+            let body = self
+                .request(OpsRequestBody::PlanNginxSiteState { actor, plan })
+                .await?;
+            let OpsResponseBody::NginxSiteStatePlan(plan) = body else {
+                return Err(OpsBrokerError::InvalidResponse);
+            };
+            Ok(plan)
+        })
+    }
+
+    fn approve_nginx_site_state<'a>(
+        &'a self,
+        actor: Subject,
+        plan_id: String,
+        plan_hash: String,
+        idempotency_key: String,
+    ) -> OpsFuture<'a, OperationReceiptView> {
+        Box::pin(async move {
+            let body = self
+                .request(OpsRequestBody::ApproveNginxSiteState {
+                    actor,
+                    plan_id,
+                    plan_hash,
+                    idempotency_key,
+                })
+                .await?;
+            let OpsResponseBody::OperationReceipt(receipt) = body else {
+                return Err(OpsBrokerError::InvalidResponse);
+            };
+            Ok(receipt)
+        })
+    }
+
+    fn operation_receipt<'a>(
+        &'a self,
+        actor: Subject,
+        operation_id: String,
+    ) -> OpsFuture<'a, OperationReceiptView> {
+        Box::pin(async move {
+            let body = self
+                .request(OpsRequestBody::OperationReceipt {
+                    actor,
+                    operation_id,
+                })
+                .await?;
+            let OpsResponseBody::OperationReceipt(receipt) = body else {
+                return Err(OpsBrokerError::InvalidResponse);
+            };
+            Ok(receipt)
+        })
+    }
+
+    fn execute_operation<'a>(
+        &'a self,
+        actor: Subject,
+        operation_id: String,
+    ) -> OpsFuture<'a, OperationReceiptView> {
+        Box::pin(async move {
+            let body = self
+                .request(OpsRequestBody::ExecuteOperation {
+                    actor,
+                    operation_id,
+                })
+                .await?;
+            let OpsResponseBody::OperationReceipt(receipt) = body else {
+                return Err(OpsBrokerError::InvalidResponse);
+            };
+            Ok(receipt)
         })
     }
 }
 
-async fn exchange(
-    socket: &PathBuf,
-    request: OpsCapabilityRequest,
-) -> Result<OpsCapabilityResponse, OpsBrokerError> {
+async fn exchange(socket: &PathBuf, request: OpsRequest) -> Result<OpsResponse, OpsBrokerError> {
     let mut stream = UnixStream::connect(socket)
         .await
         .map_err(|_| OpsBrokerError::Unavailable)?;

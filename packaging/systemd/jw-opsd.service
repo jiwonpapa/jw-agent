@@ -13,6 +13,7 @@ RestartSec=2s
 UMask=0007
 NoNewPrivileges=yes
 PrivateDevices=yes
+PrivateNetwork=yes
 PrivateTmp=yes
 ProtectClock=yes
 ProtectControlGroups=yes
@@ -22,14 +23,15 @@ ProtectKernelLogs=yes
 ProtectKernelModules=yes
 ProtectKernelTunables=yes
 ProtectSystem=strict
-ReadWritePaths=/run/jw-agent
-RestrictAddressFamilies=AF_UNIX
+ReadWritePaths=/run/jw-agent /var/lib/jw-agent/opsd /etc/nginx/sites-enabled
+TemporaryFileSystem=/var/log/nginx:rw
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 IPAddressDeny=any
 RestrictNamespaces=yes
 LockPersonality=yes
 MemoryDenyWriteExecute=yes
-CapabilityBoundingSet=
-AmbientCapabilities=
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+AmbientCapabilities=CAP_NET_BIND_SERVICE
 SystemCallArchitectures=native
 
 [Install]

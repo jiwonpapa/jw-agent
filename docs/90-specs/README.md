@@ -7,13 +7,19 @@ Last reviewed: 2026-07-21
 
 ## Operation specs
 
-- [OPS-NGINX-SITE-STATE-V1](operations/nginx-site-state-set-v1.md) — Accepted, implementation requires P2 entry approval
+- [OPS-NGINX-SITE-STATE-V1](operations/nginx-site-state-set-v1.md) — Accepted, P2 active implementation
 - [OPS-PUBLIC-ACCESS-PROFILE-V1](operations/public-access-profile-v1.md) — Accepted
+- [OPS-MANAGED-CONFIG-FILE-V1](operations/managed-config-file-v1.md) — Accepted, blocked on P2 safety kernel gate
+- [OPS-CERTBOT-CERTIFICATE-V1](operations/certbot-certificate-v1.md) — Accepted, blocked on managed Nginx gate
+
+## Access specs
+
+- [ACCESS-OPENSSH-TERMINAL-SFTP-V1](access/openssh-terminal-sftp-v1.md) — Accepted, blocked on dependency and security gate
 
 ## Authentication specs
 
 - [AUTH-PAM-LOGIN-V1](auth/pam-login-v1.md) — Accepted
-- [AUTH-TOTP-STEP-UP-V1](auth/totp-step-up-v1.md) — Accepted, implementation requires P2 entry approval
+- [AUTH-TOTP-STEP-UP-V1](auth/totp-step-up-v1.md) — Accepted, implementation follows safety kernel and secret-storage gate
 
 ## UI specs
 
@@ -34,6 +40,7 @@ Last reviewed: 2026-07-21
 - [ADR-0007 public HTTPS and PAM boundary](adr/0007-public-https-pam-boundary.md) — Accepted
 - [ADR-0008 P1 storage and contract generation](adr/0008-p1-storage-and-contract-generation.md) — Accepted
 - [ADR-0009 P2 safety kernel decisions](adr/0009-p2-safety-kernel-decisions.md) — Accepted
+- [ADR-0010 Local maintenance surfaces and P2 entry](adr/0010-local-maintenance-surfaces.md) — Accepted
 
 ## Spec template requirements
 

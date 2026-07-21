@@ -17,8 +17,11 @@ type GateRunner = fn(&Path, Duration) -> Result<(), String>;
 enum Lane {
     Governance,
     P1Local,
+    P2Local,
     P1Browser,
+    P2Browser,
     P1Vm,
+    P2Vm,
 }
 
 impl Lane {
@@ -26,8 +29,11 @@ impl Lane {
         match value {
             "governance" => Some(Self::Governance),
             "p1-local" => Some(Self::P1Local),
+            "p2-local" => Some(Self::P2Local),
             "p1-browser" => Some(Self::P1Browser),
+            "p2-browser" => Some(Self::P2Browser),
             "p1-vm" => Some(Self::P1Vm),
+            "p2-vm" => Some(Self::P2Vm),
             _ => None,
         }
     }
@@ -36,8 +42,11 @@ impl Lane {
         match self {
             Self::Governance => "governance",
             Self::P1Local => "p1-local",
+            Self::P2Local => "p2-local",
             Self::P1Browser => "p1-browser",
+            Self::P2Browser => "p2-browser",
             Self::P1Vm => "p1-vm",
+            Self::P2Vm => "p2-vm",
         }
     }
 }
@@ -54,10 +63,20 @@ struct Gate {
     run: GateRunner,
 }
 
-const GOVERNANCE_LANES: &[Lane] = &[Lane::Governance, Lane::P1Local, Lane::P1Browser, Lane::P1Vm];
-const LOCAL_LANES: &[Lane] = &[Lane::P1Local];
-const BROWSER_LANES: &[Lane] = &[Lane::P1Browser];
-const VM_LANES: &[Lane] = &[Lane::P1Vm];
+const GOVERNANCE_LANES: &[Lane] = &[
+    Lane::Governance,
+    Lane::P1Local,
+    Lane::P2Local,
+    Lane::P1Browser,
+    Lane::P2Browser,
+    Lane::P1Vm,
+    Lane::P2Vm,
+];
+const LOCAL_LANES: &[Lane] = &[Lane::P1Local, Lane::P2Local];
+const P2_LOCAL_LANES: &[Lane] = &[Lane::P2Local];
+const BROWSER_LANES: &[Lane] = &[Lane::P1Browser, Lane::P2Browser];
+const VM_LANES: &[Lane] = &[Lane::P1Vm, Lane::P2Vm];
+const P2_VM_LANES: &[Lane] = &[Lane::P2Vm];
 
 const REQUIRED_FOUNDATION_PATHS: &[&str] = &[
     "README.md",
@@ -98,6 +117,9 @@ const REQUIRED_FOUNDATION_PATHS: &[&str] = &[
     "docs/90-specs/README.md",
     "docs/90-specs/operations/nginx-site-state-set-v1.md",
     "docs/90-specs/operations/public-access-profile-v1.md",
+    "docs/90-specs/operations/managed-config-file-v1.md",
+    "docs/90-specs/operations/certbot-certificate-v1.md",
+    "docs/90-specs/access/openssh-terminal-sftp-v1.md",
     "docs/90-specs/auth/pam-login-v1.md",
     "docs/90-specs/auth/totp-step-up-v1.md",
     "docs/90-specs/ui/overview-v1.md",
@@ -108,6 +130,7 @@ const REQUIRED_FOUNDATION_PATHS: &[&str] = &[
     "docs/90-specs/adr/0007-public-https-pam-boundary.md",
     "docs/90-specs/adr/0008-p1-storage-and-contract-generation.md",
     "docs/90-specs/adr/0009-p2-safety-kernel-decisions.md",
+    "docs/90-specs/adr/0010-local-maintenance-surfaces.md",
     "tests/spec-fixtures/nginx-site-state-set-v1.json",
 ];
 
@@ -145,6 +168,20 @@ const P1_REQUIRED_PATHS: &[&str] = &[
     "tests/vm/playwright-cli.json.template",
     "tests/vm/tls/server.ext.template",
     "xtask/src/vm.rs",
+];
+
+const P2_REQUIRED_PATHS: &[&str] = &[
+    "crates/jw-contracts/src/operation.rs",
+    "crates/jw-opsd/migrations/0001_initial.sql",
+    "crates/jw-opsd/src/config.rs",
+    "crates/jw-opsd/src/digest.rs",
+    "crates/jw-opsd/src/engine.rs",
+    "crates/jw-opsd/src/error.rs",
+    "crates/jw-opsd/src/ledger.rs",
+    "crates/jw-opsd/src/nginx.rs",
+    "crates/jw-opsd/src/runner.rs",
+    "crates/jw-opsd/src/snapshot.rs",
+    "tests/spec-fixtures/nginx-site-state-set-v1.json",
 ];
 
 const GATES: &[Gate] = &[
@@ -237,6 +274,17 @@ const GATES: &[Gate] = &[
         run: gate_p1_structure,
     },
     Gate {
+        id: "P2-STRUCTURE",
+        owner: "P2 Safety Maintainers",
+        scope: "P2 typed contracts, safety kernel, migration, and normative fixture",
+        inputs: "P2_REQUIRED_PATHS registry and workspace files",
+        lanes: P2_LOCAL_LANES,
+        timeout_seconds: 2,
+        evidence: "P2 safety ownership paths exist",
+        failure_policy: "fail lane on missing P2 ownership path",
+        run: gate_p2_structure,
+    },
+    Gate {
         id: "RUST-POLICY",
         owner: "Rust Maintainer",
         scope: "workspace Rust sources",
@@ -276,7 +324,7 @@ const GATES: &[Gate] = &[
         inputs: "Cargo.lock, Rust sources, unit and contract tests",
         lanes: LOCAL_LANES,
         timeout_seconds: 300,
-        evidence: "workspace tests passed",
+        evidence: "workspace tests and normative P2 fixture drift passed",
         failure_policy: "fail lane on test failure or timeout",
         run: gate_rust_test,
     },
@@ -402,9 +450,31 @@ const GATES: &[Gate] = &[
         run: vm::gate_public_recovery,
     },
     Gate {
+        id: "VM-P2-NGINX-OPERATION",
+        owner: "P2 Safety Maintainers",
+        scope: "real Nginx G2 plan, approval, apply, validation, reload, and rollback",
+        inputs: "installed P2 package, public TLS API, PAM fixture, Nginx, opsd ledger",
+        lanes: P2_VM_LANES,
+        timeout_seconds: 300,
+        evidence: "success, no-op, syntax failure, reload failure, and disk guard receipts passed",
+        failure_policy: "fail lane on unsafe apply, missing rollback, wrong receipt, or leaked secret",
+        run: vm::gate_p2_nginx_operation,
+    },
+    Gate {
+        id: "VM-P2-FORENSIC-LOCKDOWN",
+        owner: "Security Maintainer",
+        scope: "opsd ledger checkpoint deletion and fail-closed capability",
+        inputs: "completed P2 ledger, checkpoint, opsd restart, authenticated capability API",
+        lanes: P2_VM_LANES,
+        timeout_seconds: 120,
+        evidence: "checkpoint deletion disabled mutations and restoration recovered service",
+        failure_policy: "fail lane if deleted evidence leaves mutation capability available",
+        run: vm::gate_p2_forensic_lockdown,
+    },
+    Gate {
         id: "VM-SECRET-SCAN",
         owner: "Security Maintainer",
-        scope: "journal, SQLite, process arguments, and package logs",
+        scope: "journal, SQLite, snapshot, process arguments, and package logs",
         inputs: "fixture password via stdin and live VM evidence sources",
         lanes: VM_LANES,
         timeout_seconds: 60,
@@ -439,7 +509,7 @@ fn execute() -> Result<(), String> {
 
 fn usage() -> String {
     String::from(
-        "usage: cargo xtask list | cargo xtask verify governance|p1-local|p1-browser|p1-vm",
+        "usage: cargo xtask list | cargo xtask verify governance|p1-local|p2-local|p1-browser|p2-browser|p1-vm|p2-vm",
     )
 }
 
@@ -765,6 +835,19 @@ fn gate_registry_integrity(_root: &Path, _timeout: Duration) -> Result<(), Strin
 
 fn gate_p1_structure(root: &Path, _timeout: Duration) -> Result<(), String> {
     let missing: Vec<&str> = P1_REQUIRED_PATHS
+        .iter()
+        .copied()
+        .filter(|relative| !root.join(relative).is_file())
+        .collect();
+    if missing.is_empty() {
+        Ok(())
+    } else {
+        Err(format!("missing: {}", missing.join(", ")))
+    }
+}
+
+fn gate_p2_structure(root: &Path, _timeout: Duration) -> Result<(), String> {
+    let missing: Vec<&str> = P2_REQUIRED_PATHS
         .iter()
         .copied()
         .filter(|relative| !root.join(relative).is_file())

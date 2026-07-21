@@ -9,16 +9,20 @@
   "cases": [
     {
       "id": "enable-success",
+      "availableContent": "server {}\n",
       "availableDigest": "sha256:355da02c030cafce7f50bba6a64ec89983df42d6d1861cb9c9a8f38db15f674d",
-      "beforeLinkStateDigest": "sha256:a69e7381b4b12f0aaec7bad71ecbb76d7dfb010139c270643f1abc3713869064",
+      "beforeEnabled": false,
+      "beforeLinkStateDigest": "sha256:601cad563455d69a3920b52c6936bb25fc48876bb62255b09b549b823bf0550c",
       "targetState": "enabled",
       "expectedTerminalState": "SUCCEEDED",
       "expectedAssurance": "g2_reversible_config"
     },
     {
       "id": "syntax-failure-rolls-back",
+      "availableContent": "server {}\n",
       "availableDigest": "sha256:355da02c030cafce7f50bba6a64ec89983df42d6d1861cb9c9a8f38db15f674d",
-      "beforeLinkStateDigest": "sha256:a69e7381b4b12f0aaec7bad71ecbb76d7dfb010139c270643f1abc3713869064",
+      "beforeEnabled": false,
+      "beforeLinkStateDigest": "sha256:601cad563455d69a3920b52c6936bb25fc48876bb62255b09b549b823bf0550c",
       "targetState": "enabled",
       "injectFailureAt": "NGINX_CONFIG_TEST",
       "expectedTerminalState": "ROLLED_BACK",

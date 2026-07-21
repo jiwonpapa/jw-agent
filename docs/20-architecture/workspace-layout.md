@@ -34,12 +34,22 @@ web --HTTPS--> Nginx --UDS REST/SSE--> agentd --> jw-contracts
                                            └--typed UDS runtime--> opsd --> jw-contracts
 ```
 
+P2 수동 접근은 같은 public/recovery ingress와 PAM session을 재사용하되 root helper를 통과하지 않습니다.
+
+```text
+web terminal --same-origin WSS--> agentd --loopback SSH--> existing sshd (non-root)
+web files ----REST/stream-------> agentd --loopback SFTP-> existing sshd (non-root)
+managed config --REST----------> agentd --typed UDS-----> opsd (root, allowlisted resource)
+```
+
 - `jw-contracts`는 serde/schema 외 DB·Tokio·Axum·OS 명령을 모릅니다.
 - `jw-authd`는 HTTP·TLS·DB·operation dependency가 없고 PAM 인증 후 종료합니다.
 - `ffi-pam`만 unsafe와 libpam link를 허용합니다.
 - `jw-opsd`는 `jw-agentd`, HTTP, TLS, WebSocket을 의존하지 않습니다.
 - `agentd`는 `authd`·`opsd` 내부 상태를 직접 읽지 않습니다.
 - daemon은 compile-time service plugin을 공유하지 않습니다.
+- terminal·SFTP session code는 `agentd` module로 시작하며 dependency spike 전 새 crate를 만들지 않습니다.
+- service config·Certbot adapter는 `opsd` module이며 HTTP·WebSocket을 알지 못합니다.
 
 ## crate 생성 기준
 

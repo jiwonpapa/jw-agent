@@ -9,7 +9,13 @@ import type {
   HealthView,
   HostObservation,
   IntegrationCatalogView,
+  NginxSiteStatePlanRequest,
+  NginxSiteStatePlanView,
   NginxSitesView,
+  OperationAcceptedView,
+  OperationApprovalRequest,
+  OperationReceiptView,
+  OperationStageEvidenceView,
   ProblemDetails,
   ReauthView,
   SessionView,
@@ -104,6 +110,100 @@ export async function getHost(signal?: AbortSignal): Promise<HostObservation> {
 
 export async function getNginxSites(signal?: AbortSignal): Promise<NginxSitesView> {
   const { data, error, response } = await api.GET("/api/v1/services/nginx/sites", {
+    signal: signal ?? null,
+  });
+  if (data !== undefined) return data;
+  throw new ApiError(error, response);
+}
+
+export async function planNginxSiteState(
+  input: NginxSiteStatePlanRequest,
+): Promise<NginxSiteStatePlanView> {
+  const { data, error, response } = await api.POST(
+    "/api/v1/operations/nginx/site-state/plans",
+    {
+      body: input,
+      headers: mutationHeaders(),
+    },
+  );
+  if (data !== undefined) return data;
+  throw new ApiError(error, response);
+}
+
+export async function reauthenticateForOperation(input: {
+  password: string;
+  planHash: string;
+}): Promise<ReauthView> {
+  const { data, error, response } = await api.POST("/api/v1/auth/reauth", {
+    body: {
+      password: input.password,
+      purpose: {
+        kind: "operation",
+        planHash: input.planHash,
+      },
+    },
+    headers: mutationHeaders(),
+  });
+  if (data !== undefined) {
+    rememberSession(data.session);
+    return data;
+  }
+  throw new ApiError(error, response);
+}
+
+export async function approveNginxSiteState(
+  input: OperationApprovalRequest,
+): Promise<OperationAcceptedView> {
+  const { data, error, response } = await api.POST(
+    "/api/v1/operations/nginx/site-state/approvals",
+    {
+      body: input,
+      headers: mutationHeaders(),
+    },
+  );
+  if (data !== undefined) return data;
+  throw new ApiError(error, response);
+}
+
+export function watchOperationEvents(
+  eventStream: string,
+  onStage: (stage: OperationStageEvidenceView) => void,
+  onStreamError: (code: string) => void,
+): () => void {
+  if (!/^\/api\/v1\/operations\/[A-Za-z0-9_-]{1,64}\/events$/.test(eventStream)) {
+    onStreamError("invalid_event_stream");
+    return () => undefined;
+  }
+  const source = new EventSource(eventStream);
+  source.addEventListener("operation-stage", (event) => {
+    if (!(event instanceof MessageEvent) || typeof event.data !== "string") return;
+    try {
+      onStage(JSON.parse(event.data) as OperationStageEvidenceView);
+    } catch {
+      onStreamError("invalid_operation_event");
+    }
+  });
+  source.addEventListener("operation-error", (event) => {
+    if (!(event instanceof MessageEvent) || typeof event.data !== "string") {
+      onStreamError("operation_event_unavailable");
+      return;
+    }
+    try {
+      const value = JSON.parse(event.data) as { code?: unknown };
+      onStreamError(typeof value.code === "string" ? value.code : "operation_event_unavailable");
+    } catch {
+      onStreamError("invalid_operation_event");
+    }
+  });
+  return () => source.close();
+}
+
+export async function getOperationReceipt(
+  operationId: string,
+  signal?: AbortSignal,
+): Promise<OperationReceiptView> {
+  const { data, error, response } = await api.GET("/api/v1/operations/{operation_id}", {
+    params: { path: { operation_id: operationId } },
     signal: signal ?? null,
   });
   if (data !== undefined) return data;

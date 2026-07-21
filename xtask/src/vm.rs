@@ -2,7 +2,7 @@
 
 use std::env;
 use std::ffi::{OsStr, OsString};
-use std::fs;
+use std::fs::{self, OpenOptions};
 use std::io::{Read, Write};
 use std::net::IpAddr;
 use std::os::unix::fs::PermissionsExt;
@@ -103,6 +103,9 @@ sudo test -S /run/jw-agent/opsd.sock
 sudo test -S /run/jw-agent-proxy/agentd.sock
 test "$(sudo stat -c '%U:%G:%a' /run/jw-agent/authd.sock)" = jw-agent:jw-agent:600
 test "$(sudo stat -c '%U:%G:%a' /run/jw-agent/opsd.sock)" = root:jw-agent:660
+test "$(sudo stat -c '%U:%G:%a' /var/lib/jw-agent/opsd)" = root:root:700
+test "$(sudo stat -c '%U:%G:%a' /var/lib/jw-agent/opsd/snapshots)" = root:root:700
+test "$(sudo stat -c '%U:%G:%a' /var/lib/jw-agent/opsd/opsd.sqlite3)" = root:jw-agent:600
 test "$(stat -c '%U:%G:%a' /run/jw-agent-proxy)" = jw-agent:jw-agent-proxy:2750
 test "$(sudo stat -c '%U:%G:%a' /run/jw-agent-proxy/agentd.sock)" = jw-agent:jw-agent-proxy:660
 id -nG jw-agent | tr ' ' '\n' | grep -Fxq jw-agent-proxy
@@ -112,7 +115,9 @@ ops_pid=$(systemctl show -p MainPID --value jw-opsd.service)
 test "$agent_pid" -gt 1
 test "$ops_pid" -gt 1
 test "$(awk '/^CapEff:/{print $2}' "/proc/$agent_pid/status")" = 0000000000000000
-test "$(awk '/^CapEff:/{print $2}' "/proc/$ops_pid/status")" = 0000000000000000
+test "$(awk '/^CapEff:/{print $2}' "/proc/$ops_pid/status")" = 0000000000000400
+test "$(systemctl show -p PrivateNetwork --value jw-opsd.service)" = yes
+test -z "$(sudo nsenter --target "$ops_pid" --net ss -H -ltnup)"
 test "$(ss -H -ltn 'sport = :8787' | awk '{print $4}')" = 127.0.0.1:8787
 test "$(find /proc -maxdepth 2 -name comm -readable -exec grep -l '^jw-authd$' {} + 2>/dev/null | wc -l)" -eq 0
 "#;
@@ -372,13 +377,672 @@ IFS= read -r secret
 printf "%s" "$secret" > "$pattern"
 found=0
 journalctl -u jw-agentd.service --no-pager -o cat | grep -F -q -f "$pattern" && found=1 || true
-find /var/lib/jw-agent/agentd -maxdepth 1 -type f -print0 | xargs -0 -r strings | grep -F -q -f "$pattern" && found=1 || true
+journalctl -u jw-opsd.service --no-pager -o cat | grep -F -q -f "$pattern" && found=1 || true
+find /var/lib/jw-agent -type f -print0 | xargs -0 -r strings | grep -F -q -f "$pattern" && found=1 || true
 ps -eo args= | grep -F -q -f "$pattern" && found=1 || true
 grep -F -q -f "$pattern" /var/log/dpkg.log /var/log/apt/term.log 2>/dev/null && found=1 || true
 test "$found" -eq 0
 '"#;
     let result = config.ssh(script, Some(&secret_input), timeout)?;
     require_success(&result, "fixture secret scan", true)
+}
+
+const P2_VALID_SITE: &str = "jw-agent-vm-operation.conf";
+const P2_INVALID_SITE: &str = "jw-agent-vm-invalid.conf";
+
+pub fn gate_p2_nginx_operation(_root: &Path, timeout: Duration) -> Result<(), String> {
+    let config = VmConfig::load()?;
+    let password = read_secret(&config.password_file)?;
+    restart_edge_and_agentd_and_wait(&config, timeout)?;
+    cleanup_p2_fixtures(&config, timeout)?;
+    let result = (|| {
+        install_nginx_fixture(
+        &config,
+        P2_VALID_SITE,
+        b"server { listen 127.0.0.1:18081; server_name jw-agent-vm-operation.invalid; return 204; }\n",
+        timeout,
+        )?;
+        install_nginx_fixture(
+            &config,
+            P2_INVALID_SITE,
+            b"server { this_is_not_valid_nginx_syntax; }\n",
+            timeout,
+        )?;
+        let syntax = config.ssh("sudo nginx -t", None, timeout)?;
+        require_success(&syntax, "baseline Nginx syntax", false)?;
+
+        let mut session = P2ApiSession::login(&config, &password, timeout)?;
+        session.require_management_site_protected(&config, timeout)?;
+        let enabled = session.operate(&config, &password, P2_VALID_SITE, "enabled", timeout)?;
+        require_terminal(&enabled, "SUCCEEDED", "valid site enable")?;
+        let runtime = config.ssh(
+        "sudo test -L /etc/nginx/sites-enabled/jw-agent-vm-operation.conf && sudo systemctl is-active --quiet nginx.service",
+        None,
+        timeout,
+        )?;
+        require_success(&runtime, "enabled Nginx fixture", false)?;
+
+        let noop = session.operate(&config, &password, P2_VALID_SITE, "enabled", timeout)?;
+        require_terminal(&noop, "SUCCEEDED", "already-target no-op")?;
+        if !noop.contains("\"resultCode\":\"verified_noop\"") {
+            return Err(String::from("no-op receipt omitted verified_noop evidence"));
+        }
+
+        let disabled = session.operate(&config, &password, P2_VALID_SITE, "disabled", timeout)?;
+        require_terminal(&disabled, "SUCCEEDED", "valid site disable")?;
+        require_link_absent(&config, P2_VALID_SITE, timeout)?;
+        restart_edge_and_agentd_and_wait(&config, timeout)?;
+
+        let syntax_rollback =
+            session.operate(&config, &password, P2_INVALID_SITE, "enabled", timeout)?;
+        require_terminal(&syntax_rollback, "ROLLED_BACK", "syntax failure rollback")?;
+        require_link_absent(&config, P2_INVALID_SITE, timeout)?;
+
+        install_reload_fail_once(&config, timeout)?;
+        let reload_rollback =
+            session.operate(&config, &password, P2_VALID_SITE, "enabled", timeout)?;
+        require_terminal(&reload_rollback, "ROLLED_BACK", "reload failure rollback")?;
+        if !reload_rollback.contains("\"resultCode\":\"nginx_reload_failed\"") {
+            return Err(String::from(
+                "reload failure receipt omitted failure evidence",
+            ));
+        }
+        require_link_absent(&config, P2_VALID_SITE, timeout)?;
+        remove_reload_fixture(&config, timeout)?;
+
+        mount_small_snapshot_filesystem(&config, timeout)?;
+        session.wait_for_operation_available(&config, timeout)?;
+        let disk_guard = session.operate(&config, &password, P2_VALID_SITE, "enabled", timeout)?;
+        require_terminal(&disk_guard, "CANCELLED_BEFORE_APPLY", "snapshot disk guard")?;
+        if !disk_guard.contains("\"resultCode\":\"snapshot_space_insufficient\"") {
+            return Err(String::from(
+                "disk guard receipt omitted snapshot_space_insufficient",
+            ));
+        }
+        require_link_absent(&config, P2_VALID_SITE, timeout)?;
+        unmount_small_snapshot_filesystem(&config, timeout)
+    })();
+    let cleanup = cleanup_p2_fixtures(&config, timeout);
+    match (result, cleanup) {
+        (Ok(()), Ok(())) => Ok(()),
+        (Err(error), Ok(())) => Err(error),
+        (Ok(()), Err(cleanup_error)) => Err(cleanup_error),
+        (Err(error), Err(cleanup_error)) => Err(format!(
+            "{error}; fixture cleanup also failed: {cleanup_error}"
+        )),
+    }
+}
+
+pub fn gate_p2_forensic_lockdown(_root: &Path, timeout: Duration) -> Result<(), String> {
+    let config = VmConfig::load()?;
+    let password = read_secret(&config.password_file)?;
+    restart_agentd_and_wait(&config, timeout)?;
+    let backup = "/var/tmp/jw-agent-ledger.checkpoint.backup";
+    let remove_checkpoint = config.ssh(
+        &format!(
+            "sudo systemctl stop jw-opsd.service\nsudo install -o root -g root -m 0600 /var/lib/jw-agent/opsd/ledger.checkpoint {backup}\nsudo rm -f /var/lib/jw-agent/opsd/ledger.checkpoint\nsudo systemctl start jw-opsd.service"
+        ),
+        None,
+        timeout,
+    )?;
+    require_success(&remove_checkpoint, "checkpoint deletion fixture", false)?;
+
+    let locked_result = (|| {
+        let session = P2ApiSession::login(&config, &password, timeout)?;
+        session.wait_for_forensic_lockdown(&config, timeout)
+    })();
+
+    let restore = config.ssh(
+        &format!(
+            "sudo systemctl stop jw-opsd.service\nsudo install -o root -g root -m 0600 {backup} /var/lib/jw-agent/opsd/ledger.checkpoint\nsudo rm -f {backup}\nsudo systemctl start jw-opsd.service"
+        ),
+        None,
+        timeout,
+    )?;
+    require_success(&restore, "checkpoint restoration", false)?;
+    locked_result?;
+    let session = P2ApiSession::login(&config, &password, timeout)?;
+    session.wait_for_operation_available(&config, timeout)
+}
+
+struct P2ApiSession {
+    cookie_jar: TemporarySecretFile,
+    csrf_token: String,
+}
+
+impl P2ApiSession {
+    fn login(config: &VmConfig, password: &str, timeout: Duration) -> Result<Self, String> {
+        let cookie_jar = TemporarySecretFile::create("jw-agent-p2-cookie")?;
+        let body = format!(
+            "{{\"username\":{},\"password\":{}}}",
+            json_string(&config.admin_user),
+            json_string(password)
+        );
+        let response = public_api_request(
+            config,
+            "POST",
+            "/api/v1/auth/login",
+            &cookie_jar.path,
+            None,
+            Some(body.as_bytes()),
+            timeout,
+        )?;
+        expect_http(&response, 200, "P2 API login")?;
+        let csrf_token = json_string_field(&response.body, "csrfToken")?;
+        Ok(Self {
+            cookie_jar,
+            csrf_token,
+        })
+    }
+
+    fn get(
+        &self,
+        config: &VmConfig,
+        path: &str,
+        timeout: Duration,
+    ) -> Result<HttpResponse, String> {
+        public_api_request(
+            config,
+            "GET",
+            path,
+            &self.cookie_jar.path,
+            None,
+            None,
+            timeout,
+        )
+    }
+
+    fn wait_for_operation_available(
+        &self,
+        config: &VmConfig,
+        timeout: Duration,
+    ) -> Result<(), String> {
+        self.wait_for_capability(
+            config,
+            timeout,
+            |body| {
+                !body.contains("\"forensicLockdown\":true")
+                    && body.contains("nginx.site_state.set/v1")
+            },
+            "typed operation capability",
+        )
+    }
+
+    fn require_management_site_protected(
+        &self,
+        config: &VmConfig,
+        timeout: Duration,
+    ) -> Result<(), String> {
+        let sites = self.get(config, "/api/v1/services/nginx/sites", timeout)?;
+        expect_http(&sites, 200, "Nginx protected management observation")?;
+        let Some((_, after_protected)) = sites.body.split_once("\"protected\":true") else {
+            return Err(String::from(
+                "public management vhost was not classified as protected",
+            ));
+        };
+        let before_assurance = after_protected
+            .split_once("\"assurance\":")
+            .map_or(after_protected, |(before, _)| before);
+        if !before_assurance.contains("\"operationType\":null")
+            || !before_assurance.contains("\"operationSchemaVersion\":null")
+        {
+            return Err(String::from(
+                "protected public management vhost exposed a mutation contract",
+            ));
+        }
+        Ok(())
+    }
+
+    fn wait_for_forensic_lockdown(
+        &self,
+        config: &VmConfig,
+        timeout: Duration,
+    ) -> Result<(), String> {
+        self.wait_for_capability(
+            config,
+            timeout,
+            |body| {
+                body.contains("\"forensicLockdown\":true")
+                    && body.contains("\"readOnly\":true")
+                    && body.contains("\"supportedOperations\":[]")
+            },
+            "forensic lockdown capability",
+        )
+    }
+
+    fn wait_for_capability(
+        &self,
+        config: &VmConfig,
+        timeout: Duration,
+        accepted: impl Fn(&str) -> bool,
+        label: &str,
+    ) -> Result<(), String> {
+        let started = Instant::now();
+        loop {
+            if let Ok(response) = self.get(config, "/api/v1/capabilities", timeout)
+                && response.status == 200
+                && accepted(&response.body)
+            {
+                return Ok(());
+            }
+            if started.elapsed() >= timeout {
+                return Err(format!("{label} did not become ready before timeout"));
+            }
+            thread::sleep(Duration::from_millis(100));
+        }
+    }
+
+    fn operate(
+        &mut self,
+        config: &VmConfig,
+        password: &str,
+        site_name: &str,
+        target_state: &str,
+        timeout: Duration,
+    ) -> Result<String, String> {
+        let sites = self.get(config, "/api/v1/services/nginx/sites", timeout)?;
+        expect_http(&sites, 200, "Nginx site observation")?;
+        let site = json_site_fields(&sites.body, site_name)?;
+        let idempotency_key = operation_idempotency_key()?;
+        let plan_body = format!(
+            "{{\"schemaVersion\":{},\"operationType\":{},\"siteId\":{},\"targetState\":{},\"expectedAvailableDigest\":{},\"expectedEnabledStateDigest\":{},\"idempotencyKey\":{}}}",
+            site.schema_version,
+            json_string(&site.operation_type),
+            json_string(&site.site_id),
+            json_string(target_state),
+            json_string(&site.available_digest),
+            json_string(&site.enabled_state_digest),
+            json_string(&idempotency_key),
+        );
+        let plan = public_api_request(
+            config,
+            "POST",
+            "/api/v1/operations/nginx/site-state/plans",
+            &self.cookie_jar.path,
+            Some(&self.csrf_token),
+            Some(plan_body.as_bytes()),
+            timeout,
+        )?;
+        expect_http(&plan, 200, "Nginx operation plan")?;
+        let plan_id = json_string_field(&plan.body, "planId")?;
+        let plan_hash = json_string_field(&plan.body, "planHash")?;
+        let reauth_body = format!(
+            "{{\"password\":{},\"purpose\":{{\"kind\":\"operation\",\"planHash\":{}}}}}",
+            json_string(password),
+            json_string(&plan_hash),
+        );
+        let reauth = public_api_request(
+            config,
+            "POST",
+            "/api/v1/auth/reauth",
+            &self.cookie_jar.path,
+            Some(&self.csrf_token),
+            Some(reauth_body.as_bytes()),
+            timeout,
+        )?;
+        expect_http(&reauth, 200, "exact-plan PAM reauthentication")?;
+        self.csrf_token = json_string_field(&reauth.body, "csrfToken")?;
+        let reauth_token = json_string_field(&reauth.body, "reauthToken")?;
+        let approval_body = format!(
+            "{{\"schemaVersion\":{},\"planId\":{},\"planHash\":{},\"idempotencyKey\":{},\"reauthToken\":{}}}",
+            site.schema_version,
+            json_string(&plan_id),
+            json_string(&plan_hash),
+            json_string(&idempotency_key),
+            json_string(&reauth_token),
+        );
+        let accepted = public_api_request(
+            config,
+            "POST",
+            "/api/v1/operations/nginx/site-state/approvals",
+            &self.cookie_jar.path,
+            Some(&self.csrf_token),
+            Some(approval_body.as_bytes()),
+            timeout,
+        )?;
+        expect_http(&accepted, 202, "Nginx operation approval")?;
+        let operation_id = json_string_field(&accepted.body, "operationId")?;
+        let event_stream = json_string_field(&accepted.body, "eventStream")?;
+        let expected_stream = format!("/api/v1/operations/{operation_id}/events");
+        if event_stream != expected_stream {
+            return Err(String::from(
+                "Nginx operation returned a non-canonical event stream",
+            ));
+        }
+        let operation_path = format!("/api/v1/operations/{operation_id}");
+        let started = Instant::now();
+        let receipt = loop {
+            let current = self.get(config, &operation_path, timeout)?;
+            expect_http(&current, 200, "Nginx operation receipt")?;
+            let stage = json_string_field(&current.body, "terminalState")?;
+            if matches!(
+                stage.as_str(),
+                "SUCCEEDED"
+                    | "ROLLED_BACK"
+                    | "RECOVERY_REQUIRED"
+                    | "REJECTED"
+                    | "EXPIRED"
+                    | "CANCELLED_BEFORE_APPLY"
+            ) {
+                break current;
+            }
+            if started.elapsed() >= timeout {
+                return Err(String::from(
+                    "Nginx operation did not reach a terminal receipt before timeout",
+                ));
+            }
+            thread::sleep(Duration::from_millis(250));
+        };
+        let events = self.get(config, &event_stream, timeout)?;
+        expect_http(&events, 200, "Nginx operation event stream")?;
+        if !events.body.contains("event:operation-stage")
+            && !events.body.contains("event: operation-stage")
+        {
+            return Err(String::from(
+                "Nginx operation event stream did not replay durable stage evidence",
+            ));
+        }
+        Ok(receipt.body)
+    }
+}
+
+fn restart_agentd_and_wait(config: &VmConfig, timeout: Duration) -> Result<(), String> {
+    let restarted = config.ssh("sudo systemctl restart jw-agentd.service", None, timeout)?;
+    require_success(&restarted, "agentd restart", false)?;
+    wait_for_public_agent(config, timeout)
+}
+
+fn restart_edge_and_agentd_and_wait(config: &VmConfig, timeout: Duration) -> Result<(), String> {
+    let restarted = config.ssh(
+        "sudo systemctl restart nginx.service jw-agentd.service",
+        None,
+        timeout,
+    )?;
+    require_success(&restarted, "public edge and agentd restart", false)?;
+    wait_for_public_agent(config, timeout)
+}
+
+fn wait_for_public_agent(config: &VmConfig, timeout: Duration) -> Result<(), String> {
+    let started = Instant::now();
+    loop {
+        let health = config.public_curl(
+            &["--fail", "--output", "-", "/api/v1/health"],
+            None,
+            Duration::from_secs(3),
+        );
+        if let Ok(result) = health
+            && result.status.success()
+            && text(&result.stdout)?.contains("\"status\":\"ok\"")
+        {
+            return Ok(());
+        }
+        if started.elapsed() >= timeout {
+            return Err(String::from("agentd did not become ready before timeout"));
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+}
+
+struct NginxSiteFields {
+    schema_version: u16,
+    operation_type: String,
+    site_id: String,
+    available_digest: String,
+    enabled_state_digest: String,
+}
+
+fn json_site_fields(body: &str, site_name: &str) -> Result<NginxSiteFields, String> {
+    let marker = format!("\"name\":{}", json_string(site_name));
+    let Some(marker_index) = body.find(&marker) else {
+        return Err(format!("Nginx fixture `{site_name}` was not observed"));
+    };
+    let start = body[..marker_index]
+        .rfind('{')
+        .map_or(marker_index, std::convert::identity);
+    let remainder = &body[start..];
+    let end = remainder
+        .find("\"assurance\":")
+        .map_or(remainder.len(), std::convert::identity);
+    let object = &remainder[..end];
+    let schema = json_unsigned_field(object, "operationSchemaVersion")?;
+    Ok(NginxSiteFields {
+        schema_version: u16::try_from(schema)
+            .map_err(|_| String::from("operation schema version overflow"))?,
+        operation_type: json_string_field(object, "operationType")?,
+        site_id: json_string_field(object, "siteId")?,
+        available_digest: json_string_field(object, "availableDigest")?,
+        enabled_state_digest: json_string_field(object, "enabledStateDigest")?,
+    })
+}
+
+fn json_string_field(body: &str, field: &str) -> Result<String, String> {
+    let marker = format!("\"{field}\":\"");
+    let Some(start) = body.find(&marker).map(|index| index + marker.len()) else {
+        return Err(format!("JSON field `{field}` is missing"));
+    };
+    let remainder = &body[start..];
+    let Some(end) = remainder.find('"') else {
+        return Err(format!("JSON field `{field}` is unterminated"));
+    };
+    let value = &remainder[..end];
+    if value.contains('\\') || value.is_empty() {
+        return Err(format!("JSON field `{field}` has an unsupported value"));
+    }
+    Ok(value.to_owned())
+}
+
+fn json_unsigned_field(body: &str, field: &str) -> Result<u64, String> {
+    let marker = format!("\"{field}\":");
+    let Some(start) = body.find(&marker).map(|index| index + marker.len()) else {
+        return Err(format!("JSON field `{field}` is missing"));
+    };
+    let digits: String = body[start..]
+        .chars()
+        .take_while(char::is_ascii_digit)
+        .collect();
+    if digits.is_empty() {
+        return Err(format!("JSON field `{field}` is not unsigned"));
+    }
+    digits
+        .parse::<u64>()
+        .map_err(|_| format!("JSON field `{field}` overflowed"))
+}
+
+fn public_api_request(
+    config: &VmConfig,
+    method: &str,
+    path: &str,
+    cookie_jar: &Path,
+    csrf_token: Option<&str>,
+    body: Option<&[u8]>,
+    timeout: Duration,
+) -> Result<HttpResponse, String> {
+    if !path.starts_with("/api/") || !matches!(method, "GET" | "POST") {
+        return Err(String::from("P2 API request rejected an unsupported shape"));
+    }
+    let csrf_header = match csrf_token {
+        Some(token) => Some(TemporarySecretFile::create_with_contents(
+            "jw-agent-p2-csrf",
+            format!("X-CSRF-Token: {token}\n").as_bytes(),
+        )?),
+        None => None,
+    };
+    let mut arguments = vec![
+        OsString::from("--silent"),
+        OsString::from("--show-error"),
+        OsString::from("--max-time"),
+        OsString::from(timeout.as_secs().min(295).to_string()),
+        OsString::from("--resolve"),
+        OsString::from(format!(
+            "{}:443:{}",
+            config.public_host, config.public_address
+        )),
+        OsString::from("--cacert"),
+        config.ca_certificate.as_os_str().to_owned(),
+        OsString::from("--output"),
+        OsString::from("-"),
+        OsString::from("--write-out"),
+        OsString::from("\n%{http_code}"),
+        OsString::from("--cookie"),
+        cookie_jar.as_os_str().to_owned(),
+        OsString::from("--cookie-jar"),
+        cookie_jar.as_os_str().to_owned(),
+        OsString::from("--header"),
+        OsString::from(format!("Origin: https://{}", config.public_host)),
+    ];
+    if let Some(header) = &csrf_header {
+        arguments.push(OsString::from("--header"));
+        arguments.push(OsString::from(format!("@{}", header.path.display())));
+    }
+    if method == "POST" {
+        arguments.push(OsString::from("--header"));
+        arguments.push(OsString::from("Content-Type: application/json"));
+        arguments.push(OsString::from("--data-binary"));
+        arguments.push(OsString::from("@-"));
+    }
+    arguments.push(OsString::from(format!(
+        "https://{}{}",
+        config.public_host, path
+    )));
+    let result = run_capture(OsStr::new("curl"), &arguments, body, timeout)?;
+    if !result.status.success() || result.stdout_truncated || result.stderr_truncated {
+        return Err(format!(
+            "P2 API transport failed with {} (response and credentials redacted)",
+            result.status
+        ));
+    }
+    parse_http_response(&result.stdout)
+}
+
+fn operation_idempotency_key() -> Result<String, String> {
+    let elapsed = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|_| String::from("system clock is before Unix epoch"))?;
+    Ok(format!(
+        "vm-{}-{:x}",
+        std::process::id(),
+        elapsed.as_nanos()
+    ))
+}
+
+fn require_terminal(body: &str, expected: &str, label: &str) -> Result<(), String> {
+    if json_string_field(body, "terminalState")? == expected {
+        Ok(())
+    } else {
+        Err(format!("{label} returned the wrong terminal state"))
+    }
+}
+
+fn install_nginx_fixture(
+    config: &VmConfig,
+    name: &str,
+    contents: &[u8],
+    timeout: Duration,
+) -> Result<(), String> {
+    validate_atom(name, "Nginx fixture name", ".-_")?;
+    let command = format!(
+        "sudo install -o root -g root -m 0644 /dev/stdin /etc/nginx/sites-available/{name}"
+    );
+    let result = config.ssh(&command, Some(contents), timeout)?;
+    require_success(&result, "Nginx fixture install", false)
+}
+
+fn require_link_absent(config: &VmConfig, name: &str, timeout: Duration) -> Result<(), String> {
+    validate_atom(name, "Nginx fixture name", ".-_")?;
+    let result = config.ssh(
+        &format!(
+            "sudo test ! -e /etc/nginx/sites-enabled/{name} && sudo test ! -L /etc/nginx/sites-enabled/{name} && sudo systemctl is-active --quiet nginx.service"
+        ),
+        None,
+        timeout,
+    )?;
+    require_success(&result, "rolled-back Nginx fixture", false)
+}
+
+fn install_reload_fail_once(config: &VmConfig, timeout: Duration) -> Result<(), String> {
+    let script = r#"set -eu
+sudo install -d -o root -g root -m 0755 /etc/systemd/system/nginx.service.d
+sudo install -o root -g root -m 0644 /dev/stdin /etc/systemd/system/nginx.service.d/90-jw-agent-vm.conf
+sudo touch /run/jw-agent-vm-reload-fail-once
+sudo systemctl daemon-reload
+"#;
+    let drop_in = b"[Service]\nExecReload=\nExecReload=/bin/sh -c 'if test -e /run/jw-agent-vm-reload-fail-once; then rm -f /run/jw-agent-vm-reload-fail-once; exit 1; fi; exec /usr/sbin/nginx -s reload'\n";
+    let result = config.ssh(script, Some(drop_in), timeout)?;
+    require_success(&result, "reload failure fixture", false)
+}
+
+fn remove_reload_fixture(config: &VmConfig, timeout: Duration) -> Result<(), String> {
+    let result = config.ssh(
+        "sudo rm -f /etc/systemd/system/nginx.service.d/90-jw-agent-vm.conf /run/jw-agent-vm-reload-fail-once\nsudo systemctl daemon-reload\nsudo systemctl is-active --quiet nginx.service",
+        None,
+        timeout,
+    )?;
+    require_success(&result, "reload failure fixture cleanup", false)
+}
+
+fn mount_small_snapshot_filesystem(config: &VmConfig, timeout: Duration) -> Result<(), String> {
+    let result = config.ssh(
+        "sudo systemctl stop jw-opsd.service\nsudo mount -t tmpfs -o size=1m,mode=0700,uid=0,gid=0 tmpfs /var/lib/jw-agent/opsd/snapshots\nsudo systemctl start jw-opsd.service",
+        None,
+        timeout,
+    )?;
+    require_success(&result, "small snapshot filesystem fixture", false)
+}
+
+fn unmount_small_snapshot_filesystem(config: &VmConfig, timeout: Duration) -> Result<(), String> {
+    let result = config.ssh(
+        "sudo systemctl stop jw-opsd.service\nsudo umount /var/lib/jw-agent/opsd/snapshots\nsudo systemctl start jw-opsd.service",
+        None,
+        timeout,
+    )?;
+    require_success(&result, "small snapshot filesystem cleanup", false)
+}
+
+fn cleanup_p2_fixtures(config: &VmConfig, timeout: Duration) -> Result<(), String> {
+    let result = config.ssh(
+        "sudo systemctl stop jw-opsd.service\nsudo umount /var/lib/jw-agent/opsd/snapshots 2>/dev/null || true\nsudo rm -f /etc/nginx/sites-enabled/jw-agent-vm-operation.conf /etc/nginx/sites-enabled/jw-agent-vm-invalid.conf\nsudo rm -f /etc/nginx/sites-available/jw-agent-vm-operation.conf /etc/nginx/sites-available/jw-agent-vm-invalid.conf\nsudo rm -f /etc/systemd/system/nginx.service.d/90-jw-agent-vm.conf /run/jw-agent-vm-reload-fail-once\nsudo systemctl daemon-reload\nsudo systemctl start jw-opsd.service\nsudo nginx -t\nsudo systemctl reload nginx.service",
+        None,
+        timeout,
+    )?;
+    require_success(&result, "P2 VM fixture cleanup", false)
+}
+
+struct TemporarySecretFile {
+    path: PathBuf,
+}
+
+impl TemporarySecretFile {
+    fn create(prefix: &str) -> Result<Self, String> {
+        let path = env::temp_dir().join(format!(
+            "{prefix}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_err(|_| String::from("system clock is before Unix epoch"))?
+                .as_nanos()
+        ));
+        let file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .map_err(|error| format!("cannot create temporary cookie jar: {error}"))?;
+        file.set_permissions(fs::Permissions::from_mode(0o600))
+            .map_err(|error| format!("cannot secure temporary cookie jar: {error}"))?;
+        Ok(Self { path })
+    }
+
+    fn create_with_contents(prefix: &str, contents: &[u8]) -> Result<Self, String> {
+        let file = Self::create(prefix)?;
+        fs::write(&file.path, contents)
+            .map_err(|error| format!("cannot write temporary secret file: {error}"))?;
+        Ok(file)
+    }
+}
+
+impl Drop for TemporarySecretFile {
+    fn drop(&mut self) {
+        let _remove_result = fs::remove_file(&self.path);
+    }
 }
 
 struct VmConfig {

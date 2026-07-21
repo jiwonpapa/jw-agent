@@ -11,6 +11,7 @@ pub const DEFAULT_AUTH_SOCKET: &str = "/run/jw-agent/authd.sock";
 pub const DEFAULT_OPS_SOCKET: &str = "/run/jw-agent/opsd.sock";
 pub const DEFAULT_DATABASE: &str = "/var/lib/jw-agent/agentd/agentd.sqlite3";
 pub const DEFAULT_WEB_ROOT: &str = "/usr/share/jw-agent/web";
+pub const DEFAULT_OPERATION_TIMEOUT_SECONDS: u64 = 125;
 
 #[derive(Clone, Debug)]
 pub struct AgentConfig {
@@ -23,6 +24,7 @@ pub struct AgentConfig {
     pub database: PathBuf,
     pub web_root: PathBuf,
     pub auth_timeout: Duration,
+    pub operation_timeout: Duration,
 }
 
 impl AgentConfig {
@@ -57,6 +59,7 @@ impl AgentConfig {
             database: PathBuf::from(environment_or("JW_AGENT_DATABASE", DEFAULT_DATABASE)),
             web_root: PathBuf::from(environment_or("JW_AGENT_WEB_ROOT", DEFAULT_WEB_ROOT)),
             auth_timeout: Duration::from_secs(8),
+            operation_timeout: operation_timeout()?,
         })
     }
 
@@ -84,6 +87,22 @@ impl AgentConfig {
             },
         }
     }
+}
+
+fn operation_timeout() -> Result<Duration, String> {
+    let raw = environment_or(
+        "JW_AGENT_OPERATION_TIMEOUT_SECONDS",
+        &DEFAULT_OPERATION_TIMEOUT_SECONDS.to_string(),
+    );
+    let seconds = raw
+        .parse::<u64>()
+        .map_err(|_| String::from("JW_AGENT_OPERATION_TIMEOUT_SECONDS is invalid"))?;
+    if !(30..=300).contains(&seconds) {
+        return Err(String::from(
+            "JW_AGENT_OPERATION_TIMEOUT_SECONDS must be between 30 and 300",
+        ));
+    }
+    Ok(Duration::from_secs(seconds))
 }
 
 fn environment_or(name: &str, default: &str) -> String {

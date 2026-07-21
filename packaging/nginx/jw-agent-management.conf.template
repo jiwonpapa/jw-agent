@@ -1,3 +1,4 @@
+# jw-agent:protected-management-v1
 # Opt-in template. Replace every __PLACEHOLDER__ before enabling this vhost.
 limit_req_zone $binary_remote_addr zone=jw_agent_login:10m rate=10r/m;
 

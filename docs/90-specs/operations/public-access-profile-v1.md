@@ -9,7 +9,7 @@ Last reviewed: 2026-07-21
 
 SSH tunnel recovery에서 검토한 plan으로 공개 HTTPS profile을 활성화·비활성화합니다. 이는 일반 service operation이 아니라 제품 access 설정 operation입니다.
 
-이 문서는 P2 계약을 고정하지만 구현 진입을 승인하지 않습니다. P1 runtime은 기존 valid certificate와 administrator-owned opt-in Nginx template만 지원하며 아래 typed operation·UFW mutation·자동 rollback은 별도 P2 진입 승인 전에는 노출하지 않습니다.
+이 문서는 P2 계약을 고정합니다. P2 구현 진입은 승인되었지만 P1 runtime은 기존 valid certificate와 administrator-owned opt-in Nginx template만 지원합니다. 아래 typed operation·UFW mutation·자동 rollback은 safety kernel과 첫 Nginx operation의 VM gate 뒤에만 활성화합니다.
 
 ## Operation IDs
 
@@ -27,7 +27,7 @@ SSH tunnel recovery에서 검토한 plan으로 공개 HTTPS profile을 활성화
 
 - supported Nginx and Certbot layout
 - exact FQDN/Host and valid certificate
-- protected management vhost name available
+- protected management vhost marker와 전용 proxy include 판별 가능
 - proxy UDS permission verified
 - at least one non-root PAM admin verified
 - SSH recovery connectivity confirmed

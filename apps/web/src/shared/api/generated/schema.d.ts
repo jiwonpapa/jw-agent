@@ -132,6 +132,70 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/operations/nginx/site-state/approvals": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["approve_nginx_site_state"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/operations/nginx/site-state/plans": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["plan_nginx_site_state"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/operations/{operation_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["operation_receipt"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/operations/{operation_id}/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["operation_events"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/services": {
         parameters: {
             query?: never;
@@ -307,9 +371,46 @@ export interface components {
         NginxSiteObservation: {
             assurance: components["schemas"]["AssuranceView"];
             available: boolean;
+            availableDigest?: string | null;
             enabled: boolean;
+            enabledStateDigest?: string | null;
             name: string;
+            /** Format: int32 */
+            operationSchemaVersion?: number | null;
+            operationType?: string | null;
             protected: boolean;
+            siteId?: string | null;
+        };
+        /** @enum {string} */
+        NginxSiteState: "enabled" | "disabled";
+        NginxSiteStatePlanRequest: {
+            expectedAvailableDigest: string;
+            expectedEnabledStateDigest: string;
+            idempotencyKey: string;
+            operationType: string;
+            /** Format: int32 */
+            schemaVersion: number;
+            siteId: string;
+            targetState: components["schemas"]["NginxSiteState"];
+        };
+        NginxSiteStatePlanView: {
+            actor: components["schemas"]["Subject"];
+            assurance: components["schemas"]["AssuranceView"];
+            availableDigest: string;
+            createdAt: string;
+            currentState: components["schemas"]["NginxSiteState"];
+            displayName: string;
+            enabledStateDigest: string;
+            expiresAt: string;
+            impact: string[];
+            operationType: string;
+            planHash: string;
+            planId: string;
+            recoveryPath: string[];
+            /** Format: int32 */
+            schemaVersion: number;
+            siteId: string;
+            targetState: components["schemas"]["NginxSiteState"];
         };
         NginxSitesView: {
             observedAt: string;
@@ -319,6 +420,54 @@ export interface components {
         };
         /** @enum {string} */
         ObservationStatus: "observed" | "partial" | "not_installed" | "unsupported_platform";
+        OperationAcceptedView: {
+            actor: components["schemas"]["Subject"];
+            currentStage: components["schemas"]["OperationStage"];
+            eventStream: string;
+            operationId: string;
+            operationType: string;
+            planHash: string;
+            planId: string;
+            /** Format: int32 */
+            schemaVersion: number;
+        };
+        OperationApprovalRequest: {
+            /** Format: password */
+            additionalAuthClaim?: string | null;
+            idempotencyKey: string;
+            planHash: string;
+            planId: string;
+            /** Format: password */
+            reauthToken: string;
+            /** Format: int32 */
+            schemaVersion: number;
+        };
+        OperationReceiptView: {
+            actor: components["schemas"]["Subject"];
+            afterDigest: string;
+            assurance: components["schemas"]["AssuranceView"];
+            beforeDigest: string;
+            operationId: string;
+            operationType: string;
+            planHash: string;
+            planId: string;
+            recoveryPath: string[];
+            rollbackResult?: string | null;
+            /** Format: int32 */
+            schemaVersion: number;
+            stages: components["schemas"]["OperationStageEvidenceView"][];
+            terminalState: components["schemas"]["OperationStage"];
+        };
+        /** @enum {string} */
+        OperationStage: "PLANNED" | "APPROVED" | "SNAPSHOTTED" | "APPLYING" | "VALIDATING" | "RELOADING" | "VERIFYING" | "ROLLING_BACK" | "SUCCEEDED" | "ROLLED_BACK" | "RECOVERY_REQUIRED" | "REJECTED" | "EXPIRED" | "CANCELLED_BEFORE_APPLY";
+        OperationStageEvidenceView: {
+            evidenceDigest: string;
+            recordedAt: string;
+            resultCode: string;
+            /** Format: int64 */
+            sequence: number;
+            stage: components["schemas"]["OperationStage"];
+        };
         ProblemDetails: {
             code: string;
             /** Format: int32 */
@@ -659,6 +808,244 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["IntegrationCatalogView"];
+                };
+            };
+            /** @description Authentication required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    approve_nginx_site_state: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OperationApprovalRequest"];
+            };
+        };
+        responses: {
+            /** @description Operation accepted for durable background execution */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OperationAcceptedView"];
+                };
+            };
+            /** @description Invalid approval shape */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Authentication required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Claim, role, or CSRF rejected */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Expired, stale, busy, or conflicting operation */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Forensic lockdown */
+            423: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Additional authentication is configured but unavailable */
+            428: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    plan_nginx_site_state: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NginxSiteStatePlanRequest"];
+            };
+        };
+        responses: {
+            /** @description Immutable Nginx site-state plan */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NginxSiteStatePlanView"];
+                };
+            };
+            /** @description Invalid typed request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Authentication required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Role or CSRF rejected */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Stale, busy, or idempotency conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Forensic lockdown */
+            423: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    operation_receipt: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Opaque operation identifier */
+                operation_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Operation receipt or current stage */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OperationReceiptView"];
+                };
+            };
+            /** @description Authentication required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Operation belongs to another actor */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Operation not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    operation_events: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Opaque operation identifier */
+                operation_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Resumable operation stage event stream */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/event-stream": unknown;
+                };
+            };
+            /** @description Invalid operation or event identifier */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
                 };
             };
             /** @description Authentication required */

@@ -13,6 +13,7 @@ Recovery Browser ─SSH tunnel─> loopback ────────> agentd
                                                     │       └──> Linux PAM/NSS
                                    typed operation └──> opsd (root, networkless)
                                                             └──> Ubuntu services
+                     manual access └──> loopback OpenSSH (non-root account)
 ```
 
 ## 신뢰 경계
@@ -26,6 +27,7 @@ Recovery Browser ─SSH tunnel─> loopback ────────> agentd
 7. opsd ↔ OS: canonical path, symlink defense, fixed argv, timeout, resource lock
 8. 저장 상태 ↔ runtime: digest, transaction, ledger chain, crash recovery
 9. package ↔ host: signature, checksum, SBOM, maintainer scripts
+10. agentd ↔ OpenSSH: short-lived server ticket, strict host key, Linux user authorization, bounded terminal/SFTP session
 
 ## 중앙 seam
 
@@ -40,3 +42,4 @@ Recovery Browser ─SSH tunnel─> loopback ────────> agentd
 - agentd compromise가 arbitrary root primitive로 확대되지 않음
 - unsupported service는 write로 승격되지 않음
 - evidence 손상이 신규 write를 허용하지 않음
+- terminal/SFTP가 opsd root mutation 경계를 우회하지 않음

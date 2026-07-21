@@ -44,15 +44,15 @@ Last reviewed: 2026-07-21
 - Playwright login and real API overview at mobile/tablet/desktop viewports
 - Ubuntu VM `.deb` install, systemd start, public HTTPS and SSH tunnel recovery
 
-P1 public/PAM gates는 VM_PASS했지만 이것만으로 P2 write operation 진입이 승인되지는 않습니다. 별도 P2 진입 승인 전까지 general service write, central, broad service mutations는 계속 금지합니다.
+P1 public/PAM gates는 VM_PASS했습니다. P2 write operation 진입은 2026-07-21 사용자 목표추진 지시와 [ADR-0010](../90-specs/adr/0010-local-maintenance-surfaces.md)으로 승인되었습니다. 중앙관제와 미등록 broad mutation은 계속 금지합니다.
 
-현재 `p1-local` 18개, `p1-browser` 8개, `p1-vm` 12개 gate가 PASS했습니다. 폐기 가능한 Ubuntu 24.04 VM에서 `.deb` 설치·업그레이드·제거/재설치·재부팅, PAM 실패 동등성, 공개 HTTPS, Nginx 장애 중 SSH recovery를 검증했습니다. 테스트 CA 기반 VM 증거이므로 실제 공인 DNS·Certbot 발급, 서명 release와 운영 안전은 아직 주장하지 않습니다. P2 진입은 별도 승인 사항입니다.
+현재 `p1-local` 18개, `p1-browser` 8개, `p1-vm` 12개 gate가 PASS했습니다. 폐기 가능한 Ubuntu 24.04 VM에서 `.deb` 설치·업그레이드·제거/재설치·재부팅, PAM 실패 동등성, 공개 HTTPS, Nginx 장애 중 SSH recovery를 검증했습니다. 테스트 CA 기반 VM 증거이므로 실제 공인 DNS·Certbot 발급, 서명 release와 운영 안전은 아직 주장하지 않습니다.
 
 P1 public profile 범위는 existing certificate와 administrator-owned opt-in template입니다. 자동 public enable/disable과 Certbot guided issuance는 P1 완료 주장에 포함하지 않습니다.
 
 ## P2 — Safety kernel and first operation
 
-진입 상태: architecture·operation·TOTP spec은 Accepted, implementation entry approval 대기.
+진입 상태: Approved. 첫 활성 scope는 safety kernel과 Nginx site-state입니다.
 
 구현:
 
@@ -69,6 +69,57 @@ P1 public profile 범위는 existing certificate와 administrator-owned opt-in t
 - traversal/external symlink/output-limit/timeout negatives
 - `SUPPORTED + VM_PASS + G2`
 - first additional-auth provider and enrollment/recovery spec accepted
+
+현재 기준선:
+
+- `p2-local` 19개, `p2-browser` 8개 gate와 Playwright 18개 scenario가 PASS했습니다.
+- `p2-vm` 14개 gate에서 성공·no-op·문법 실패 원복·reload 실패 원복·디스크 여유 차단·forensic checkpoint 삭제 lockdown/복구를 검증했습니다.
+- Ubuntu 24.04 VM에 `jw-agent_0.2.0~p2.1_amd64.deb`를 설치했고 SHA-256은 `20d2e3df5c2fc205721685a25d1583d164a75e3da5cc48f83a870a02082aef25`입니다.
+- 제품 관리 vhost는 파일명과 무관하게 content marker/include로 보호되며 plan 단계에서 변경을 거부합니다.
+- 승인 API는 `202 Accepted` 뒤 durable operation을 실행하고 SSE sequence replay와 canonical receipt 조회를 제공합니다.
+
+P2 전체 milestone은 아직 완료가 아닙니다. 단계별 강제 종료 재개, 외부 동시 변경, command timeout·output cap 음성 증거는 P2B fault matrix와 함께 추가합니다.
+
+## P2B — Managed configuration
+
+구현:
+
+- allowlisted Nginx resource editor, diff, syntax, reload approval, health read-back
+- snapshot·atomic replace·verified rollback과 recovery receipt
+- inline help, glossary, warnings, mobile approval UX
+
+완료 증거:
+
+- valid save, syntax rejection without reload, reload/health failure rollback
+- external edit, symlink/traversal, disk full, kill/restart, concurrent edit negatives
+- browser G2 assurance and Ubuntu VM service continuity proof
+
+## P2C — Certificate lifecycle
+
+구현:
+
+- Certbot inventory, DNS/port preflight, staging/production guided issuance
+- Nginx attach, timer status, renewal dry-run and expiry warnings
+
+완료 증거:
+
+- staging ACME VM/domain harness, bounded command and redaction proof
+- failed challenge/rate-limit/attach rollback/recovery scenarios
+- G1 external effect and G2 local config boundary UI evidence
+
+## P2D — Manual OpenSSH access
+
+구현:
+
+- same-origin WSS non-root terminal and bounded xterm UI
+- existing OpenSSH SFTP list/read/download/upload and Monaco text editing
+- short ticket, PAM reauth, role/path/quota/session policy, audit summary
+
+완료 증거:
+
+- root denial, ticket replay, wrong origin, idle/max lifetime, frame/transfer cap
+- disconnect/reconnect, mobile/tablet terminal, large file and traversal negatives
+- no browser secret/transcript persistence and no opsd shell/PTY surface
 
 ## P3 — Community local MVP release
 
@@ -92,4 +143,4 @@ P1 public profile 범위는 existing certificate와 administrator-owned opt-in t
 
 ## P5 — Central typed operations
 
-로컬 operation 증거를 재사용해 중앙 plan/approval/receipt relay를 추가합니다. terminal/SFTP는 별도 제품 결정 없이는 포함하지 않습니다.
+로컬 operation 증거를 재사용해 중앙 plan/approval/receipt relay를 추가합니다. terminal/SFTP session은 중앙에서 장기 보관하거나 root로 승격하지 않습니다.

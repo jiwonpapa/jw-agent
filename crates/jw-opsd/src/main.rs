@@ -11,7 +11,7 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 #[cfg(target_os = "linux")]
-use jw_contracts::{OPS_FRAME_MAX_BYTES, OpsCapabilityRequest, decode_frame, encode_frame};
+use jw_contracts::{OPS_FRAME_MAX_BYTES, OpsRequest, decode_frame, encode_frame};
 #[cfg(target_os = "linux")]
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 #[cfg(target_os = "linux")]
@@ -22,7 +22,7 @@ use tokio::sync::Semaphore;
 #[cfg(target_os = "linux")]
 const DEFAULT_SOCKET: &str = "/run/jw-agent/opsd.sock";
 #[cfg(target_os = "linux")]
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
 #[cfg(target_os = "linux")]
 const MAX_CONNECTIONS: usize = 32;
 
@@ -53,6 +53,16 @@ async fn run() -> Result<(), String> {
 async fn run_linux() -> Result<(), String> {
     harden_process()?;
     let expected_uid = required_uid()?;
+    let paths = jw_opsd::OpsPaths::default();
+    let policy = jw_opsd::OpsPolicy::default();
+    let runner = Arc::new(jw_opsd::FixedCommandRunner::new(
+        policy.command_timeout,
+        policy.output_cap_bytes,
+    ));
+    let service = Arc::new(jw_opsd::OpsService::new(paths, policy, runner));
+    service
+        .initialize(unix_milliseconds()?)
+        .map_err(|error| error.to_string())?;
     let socket = PathBuf::from(environment_or("JW_OPSD_SOCKET", DEFAULT_SOCKET));
     prepare_socket(&socket)?;
     let listener = UnixListener::bind(&socket).map_err(|error| error.to_string())?;
@@ -67,9 +77,13 @@ async fn run_linux() -> Result<(), String> {
             .acquire_owned()
             .await
             .map_err(|_| String::from("connection limiter closed"))?;
+        let request_service = service.clone();
         tokio::spawn(async move {
             let _permit = permit;
-            if handle_connection(stream, expected_uid).await.is_err() {
+            if handle_connection(stream, expected_uid, request_service)
+                .await
+                .is_err()
+            {
                 eprintln!("jw-opsd: request rejected");
             }
         });
@@ -77,7 +91,11 @@ async fn run_linux() -> Result<(), String> {
 }
 
 #[cfg(target_os = "linux")]
-async fn handle_connection(mut stream: UnixStream, expected_uid: u32) -> Result<(), String> {
+async fn handle_connection(
+    mut stream: UnixStream,
+    expected_uid: u32,
+    service: Arc<jw_opsd::OpsService>,
+) -> Result<(), String> {
     verify_peer_uid(&stream, expected_uid)?;
     let exchange = async {
         let mut prefix = [0_u8; 4];
@@ -99,9 +117,13 @@ async fn handle_connection(mut stream: UnixStream, expected_uid: u32) -> Result<
             .read_exact(payload)
             .await
             .map_err(|_| String::from("invalid request frame"))?;
-        let request: OpsCapabilityRequest =
+        let request: OpsRequest =
             decode_frame(&frame, OPS_FRAME_MAX_BYTES).map_err(|error| error.to_string())?;
-        let response = jw_opsd::capability_response(&request, unix_milliseconds()?);
+        let response_time = unix_milliseconds()?;
+        let response =
+            tokio::task::spawn_blocking(move || service.response_for(&request, response_time))
+                .await
+                .map_err(|_| String::from("operation worker failed"))?;
         let encoded =
             encode_frame(&response, OPS_FRAME_MAX_BYTES).map_err(|error| error.to_string())?;
         stream

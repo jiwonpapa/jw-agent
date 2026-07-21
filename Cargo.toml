@@ -29,6 +29,7 @@ unwrap_used = "deny"
 axum = { version = "=0.8.9", default-features = false }
 base64 = { version = "=0.22.1", default-features = false }
 getrandom = { version = "=0.4.3", default-features = false }
+futures-core = { version = "=0.3.33", default-features = false }
 libc = { version = "=0.2.186", default-features = false }
 nix = { version = "=0.31.3", default-features = false }
 rusqlite = { version = "=0.40.1", default-features = false, features = ["libsqlite3-sys"] }

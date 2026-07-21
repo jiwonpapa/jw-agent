@@ -34,7 +34,9 @@ Last reviewed: 2026-07-21
 - fixed argv process group timeout: `SIGTERM` → 2초 → `SIGKILL`, stream별 64 KiB evidence cap
 - Nginx layout `ubuntu-nginx-sites-v1`과 hashed `ngs_` site ID
 - first additional-auth provider `totp/v1`; PAM-first enrollment·recovery contract
-- no shell/PTY/SFTP/file CRUD/blockchain
+- no opsd arbitrary shell/PTY/user argv, root terminal, generic root file CRUD, custom SSH/SFTP server or blockchain
+- existing OpenSSH 기반 non-root terminal/SFTP는 G1 manual session으로 local MVP에 포함
+- adapter allowlisted managed config는 G2, Certbot CA effect는 G1/local attach는 G2
 - central implementation after local release
 
 ## P1 마감 결정과 증거
@@ -50,7 +52,16 @@ Last reviewed: 2026-07-21
 
 ## P2 진입 결정
 
-모든 선행 결정은 [ADR-0009](../90-specs/adr/0009-p2-safety-kernel-decisions.md), [OPS-NGINX-SITE-STATE-V1](../90-specs/operations/nginx-site-state-set-v1.md), [AUTH-TOTP-STEP-UP-V1](../90-specs/auth/totp-step-up-v1.md)에서 Accepted 상태입니다. 실제 P2 mutation 구현은 별도 진입 승인 전 금지합니다.
+P2 구현 진입은 2026-07-21 사용자 목표추진 지시와 [ADR-0010](../90-specs/adr/0010-local-maintenance-surfaces.md)으로 승인되었습니다. 첫 활성 범위는 [ADR-0009](../90-specs/adr/0009-p2-safety-kernel-decisions.md)와 [OPS-NGINX-SITE-STATE-V1](../90-specs/operations/nginx-site-state-set-v1.md)의 safety kernel·Nginx site state이며, 후속 managed config·Certbot·OpenSSH 표면은 각 선행 gate 뒤 순차 활성화합니다.
+
+## P2 Nginx 기준선 결정과 증거
+
+- opsd는 private network namespace와 `CAP_NET_BIND_SERVICE`만 사용하며 외부 network API나 listening socket을 갖지 않습니다.
+- 제품 관리 vhost는 legacy basename뿐 아니라 versioned content marker와 제품 include로 판정합니다. 보호 resource는 operation type/schema를 노출하지 않고 opsd plan도 재검증합니다.
+- mutation 승인은 `202 Accepted`이며 durable ledger가 실행 상태를 소유합니다. 브라우저 SSE는 durable sequence를 event ID로 사용하고 canonical receipt를 다시 조회합니다.
+- `p2-local` 19개, `p2-browser` 8개, Playwright 18개, `p2-vm` 14개 gate가 PASS했습니다.
+- VM package는 `jw-agent_0.2.0~p2.1_amd64.deb`, SHA-256 `20d2e3df5c2fc205721685a25d1583d164a75e3da5cc48f83a870a02082aef25`입니다.
+- 현재 `SUPPORTED + VM_PASS + G2` write 표면은 `nginx.site_state.set/v1` 하나입니다. P2B·P2C·P2D 기능은 각 gate 전까지 지원 완료로 표시하지 않습니다.
 
 ## P3 전에 선택
 

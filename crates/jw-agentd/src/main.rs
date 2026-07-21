@@ -65,7 +65,7 @@ async fn serve() -> Result<(), String> {
     ));
     let ops = Arc::new(UdsOpsBroker::new(
         config.ops_socket.clone(),
-        config.auth_timeout,
+        config.operation_timeout,
     ));
 
     let recovery_listener = TcpListener::bind(config.recovery_address)

@@ -5,11 +5,14 @@ use std::path::{Path, PathBuf};
 
 use jw_contracts::{
     AssuranceLevel, AssuranceView, DiskObservation, HostObservation, MemoryObservation,
-    NginxSiteObservation, NginxSitesView, ObservationStatus, RollbackSupport,
+    NGINX_LAYOUT_ID, NGINX_SITE_STATE_OPERATION, NginxSiteObservation, NginxSitesView,
+    OPERATION_SCHEMA_VERSION, ObservationStatus, RollbackSupport, nginx_enabled_state_digest,
+    nginx_management_config, nginx_site_id, sha256_digest,
 };
 
 const MAX_TEXT_BYTES: u64 = 64 * 1_024;
 const MAX_NGINX_SITES: usize = 512;
+const MAX_NGINX_CONFIG_BYTES: u64 = 1024 * 1024;
 const MANAGEMENT_SITE: &str = "jw-agent-management.conf";
 
 #[derive(Clone, Debug)]
@@ -81,7 +84,11 @@ pub fn observe_host(profile: &ObservationProfile, observed_at: String) -> HostOb
     }
 }
 
-pub fn observe_nginx(profile: &ObservationProfile, observed_at: String) -> NginxSitesView {
+pub fn observe_nginx_with_mutation_gate(
+    profile: &ObservationProfile,
+    observed_at: String,
+    mutation_gate_reason: Option<&str>,
+) -> NginxSitesView {
     if !cfg!(target_os = "linux") {
         return NginxSitesView {
             observed_at,
@@ -111,12 +118,8 @@ pub fn observe_nginx(profile: &ObservationProfile, observed_at: String) -> Nginx
     let sites = sites
         .into_iter()
         .take(MAX_NGINX_SITES)
-        .map(|(name, (available, enabled))| NginxSiteObservation {
-            assurance: nginx_assurance(name == MANAGEMENT_SITE),
-            protected: name == MANAGEMENT_SITE,
-            name,
-            available,
-            enabled,
+        .map(|(name, (available, enabled))| {
+            observe_nginx_site(profile, name, available, enabled, mutation_gate_reason)
         })
         .collect();
     NginxSitesView {
@@ -127,21 +130,135 @@ pub fn observe_nginx(profile: &ObservationProfile, observed_at: String) -> Nginx
     }
 }
 
-fn nginx_assurance(protected: bool) -> AssuranceView {
+fn observe_nginx_site(
+    profile: &ObservationProfile,
+    name: String,
+    available: bool,
+    enabled: bool,
+    mutation_gate_reason: Option<&str>,
+) -> NginxSiteObservation {
+    let preconditions = inspect_nginx_preconditions(profile, &name, available, enabled);
+    let (site_id, available_digest, enabled_state_digest, content_protected, path_reason) =
+        match preconditions {
+            Ok((site_id, available_digest, enabled_state_digest, content_protected)) => (
+                Some(site_id),
+                Some(available_digest),
+                Some(enabled_state_digest),
+                content_protected,
+                None,
+            ),
+            Err(reason) => (None, None, None, false, Some(reason)),
+        };
+    let protected = name == MANAGEMENT_SITE || content_protected;
     let reason = if protected {
-        "JW Agent 공개 관리 리소스는 일반 Nginx 작업에서 변경할 수 없습니다."
+        Some("JW Agent 공개 관리 리소스는 일반 Nginx 작업에서 변경할 수 없습니다.")
     } else {
-        "현재 P1은 읽기 전용이며 G2 변경 작업은 Ubuntu VM 검증 전입니다."
+        path_reason.or(mutation_gate_reason)
     };
+    let assurance = nginx_assurance(reason);
+    let operation_type = assurance
+        .operation_available
+        .then(|| String::from(NGINX_SITE_STATE_OPERATION));
+    let operation_schema_version = assurance
+        .operation_available
+        .then_some(OPERATION_SCHEMA_VERSION);
+    NginxSiteObservation {
+        name,
+        site_id,
+        available,
+        enabled,
+        protected,
+        available_digest,
+        enabled_state_digest,
+        operation_type,
+        operation_schema_version,
+        assurance,
+    }
+}
+
+fn inspect_nginx_preconditions(
+    profile: &ObservationProfile,
+    name: &str,
+    available: bool,
+    enabled: bool,
+) -> Result<(String, String, String, bool), &'static str> {
+    if !available {
+        return Err("원본 설정 파일이 없어 변경 계획을 만들 수 없습니다.");
+    }
+    let available_path = profile.nginx_available.join(name);
+    let metadata = fs::symlink_metadata(&available_path)
+        .map_err(|_| "원본 설정 파일을 다시 읽을 수 없습니다.")?;
+    if !metadata.is_file() || metadata.file_type().is_symlink() {
+        return Err("원본 설정이 일반 파일이 아니어서 변경할 수 없습니다.");
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+
+        if metadata.nlink() != 1 || (cfg!(target_os = "linux") && metadata.uid() != 0) {
+            return Err("원본 설정의 소유권 또는 hard link 정책이 맞지 않습니다.");
+        }
+    }
+    if metadata.len() > MAX_NGINX_CONFIG_BYTES {
+        return Err("원본 설정 파일이 허용 크기를 초과했습니다.");
+    }
+    let bytes = read_bytes_bounded(&available_path, MAX_NGINX_CONFIG_BYTES)
+        .ok_or("원본 설정 파일을 안전하게 읽을 수 없습니다.")?;
+    if enabled {
+        let enabled_path = profile.nginx_enabled.join(name);
+        let enabled_metadata = fs::symlink_metadata(&enabled_path)
+            .map_err(|_| "활성 링크를 다시 읽을 수 없습니다.")?;
+        if !enabled_metadata.file_type().is_symlink() {
+            return Err("활성 항목이 허용된 symbolic link가 아닙니다.");
+        }
+        let resolved_enabled =
+            fs::canonicalize(enabled_path).map_err(|_| "활성 링크의 대상을 확인할 수 없습니다.")?;
+        let resolved_available = fs::canonicalize(&available_path)
+            .map_err(|_| "원본 설정의 실제 경로를 확인할 수 없습니다.")?;
+        if resolved_enabled != resolved_available {
+            return Err("활성 링크가 발견된 원본 설정을 가리키지 않습니다.");
+        }
+    }
+    Ok((
+        nginx_site_id(NGINX_LAYOUT_ID, name),
+        sha256_digest(&bytes),
+        nginx_enabled_state_digest(enabled),
+        nginx_management_config(&bytes),
+    ))
+}
+
+fn nginx_assurance(reason: Option<&str>) -> AssuranceView {
+    if let Some(reason) = reason {
+        return AssuranceView {
+            level: AssuranceLevel::G0ObserveOnly,
+            rollback_support: RollbackSupport::NotApplicable,
+            operation_available: false,
+            scope: vec![String::from("Nginx 사이트 상태 관찰")],
+            excluded_effects: vec![String::from("site enable·disable와 Nginx reload")],
+            apply_verifier: Vec::new(),
+            rollback_verifier: Vec::new(),
+            reason: Some(reason.to_owned()),
+        };
+    }
     AssuranceView {
-        level: AssuranceLevel::G0ObserveOnly,
-        rollback_support: RollbackSupport::NotApplicable,
-        operation_available: false,
-        scope: vec![String::from("Nginx 사이트 상태 관찰")],
-        excluded_effects: vec![String::from("site enable·disable와 Nginx reload")],
-        apply_verifier: Vec::new(),
-        rollback_verifier: Vec::new(),
-        reason: Some(reason.to_owned()),
+        level: AssuranceLevel::G2ReversibleConfig,
+        rollback_support: RollbackSupport::AutomaticBounded,
+        operation_available: true,
+        scope: vec![String::from("발견된 site의 sites-enabled link 상태")],
+        excluded_effects: vec![
+            String::from("sites-available 설정 내용"),
+            String::from("기존 연결과 Nginx process의 과거 상태"),
+        ],
+        apply_verifier: vec![
+            String::from("enabled link read-back"),
+            String::from("nginx -t"),
+            String::from("reload 후 active 확인"),
+        ],
+        rollback_verifier: vec![
+            String::from("이전 link 상태 복원"),
+            String::from("nginx -t와 reload 후 active 확인"),
+        ],
+        reason: None,
     }
 }
 
@@ -178,14 +295,19 @@ fn collect_sites(
 }
 
 fn read_bounded(path: &Path) -> Option<String> {
+    let bytes = read_bytes_bounded(path, MAX_TEXT_BYTES)?;
+    String::from_utf8(bytes).ok()
+}
+
+fn read_bytes_bounded(path: &Path, max_bytes: u64) -> Option<Vec<u8>> {
     let file = fs::File::open(path).ok()?;
-    let mut bounded = file.take(MAX_TEXT_BYTES.saturating_add(1));
+    let mut bounded = file.take(max_bytes.saturating_add(1));
     let mut bytes = Vec::new();
     bounded.read_to_end(&mut bytes).ok()?;
-    if bytes.len() as u64 > MAX_TEXT_BYTES {
+    if bytes.len() as u64 > max_bytes {
         return None;
     }
-    String::from_utf8(bytes).ok()
+    Some(bytes)
 }
 
 fn parse_key_values(value: &str) -> BTreeMap<String, String> {
@@ -234,4 +356,96 @@ fn observe_root_disk() -> Option<DiskObservation> {
         total_bytes: u64::from(stats.blocks()).saturating_mul(block_size),
         available_bytes: u64::from(stats.blocks_available()).saturating_mul(block_size),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+
+    use jw_contracts::{
+        NGINX_LAYOUT_ID, NGINX_MANAGEMENT_PROXY_INCLUDE, nginx_enabled_state_digest, nginx_site_id,
+        sha256_digest,
+    };
+
+    use super::{ObservationProfile, inspect_nginx_preconditions};
+
+    #[test]
+    fn nginx_precondition_identity_is_stable_for_a_safe_disabled_site() -> Result<(), String> {
+        let root = test_root("safe-disabled")?;
+        let profile = profile(&root);
+        fs::create_dir_all(&profile.nginx_available).map_err(|error| error.to_string())?;
+        fs::create_dir_all(&profile.nginx_enabled).map_err(|error| error.to_string())?;
+        let content = b"server {}\n";
+        fs::write(profile.nginx_available.join("example.com"), content)
+            .map_err(|error| error.to_string())?;
+        let (site_id, available_digest, state_digest, protected) =
+            inspect_nginx_preconditions(&profile, "example.com", true, false)
+                .map_err(str::to_owned)?;
+        assert_eq!(site_id, nginx_site_id(NGINX_LAYOUT_ID, "example.com"));
+        assert_eq!(available_digest, sha256_digest(content));
+        assert_eq!(state_digest, nginx_enabled_state_digest(false));
+        assert!(!protected);
+        fs::remove_dir_all(root).map_err(|error| error.to_string())
+    }
+
+    #[test]
+    fn nginx_precondition_protects_proxy_include_under_custom_basename() -> Result<(), String> {
+        let root = test_root("protected-custom-name")?;
+        let profile = profile(&root);
+        fs::create_dir_all(&profile.nginx_available).map_err(|error| error.to_string())?;
+        fs::create_dir_all(&profile.nginx_enabled).map_err(|error| error.to_string())?;
+        let mut content = Vec::from(b"server { " as &[u8]);
+        content.extend_from_slice(NGINX_MANAGEMENT_PROXY_INCLUDE);
+        content.extend_from_slice(b" }\n");
+        fs::write(
+            profile.nginx_available.join("operator-selected-name"),
+            content,
+        )
+        .map_err(|error| error.to_string())?;
+        let (_, _, _, protected) =
+            inspect_nginx_preconditions(&profile, "operator-selected-name", true, false)
+                .map_err(str::to_owned)?;
+        assert!(protected);
+        fs::remove_dir_all(root).map_err(|error| error.to_string())
+    }
+
+    #[test]
+    fn nginx_precondition_rejects_an_enabled_link_to_another_source() -> Result<(), String> {
+        let root = test_root("outside-link")?;
+        let profile = profile(&root);
+        fs::create_dir_all(&profile.nginx_available).map_err(|error| error.to_string())?;
+        fs::create_dir_all(&profile.nginx_enabled).map_err(|error| error.to_string())?;
+        fs::write(profile.nginx_available.join("example.com"), b"server {}\n")
+            .map_err(|error| error.to_string())?;
+        fs::write(root.join("outside.conf"), b"server {}\n").map_err(|error| error.to_string())?;
+        std::os::unix::fs::symlink(
+            root.join("outside.conf"),
+            profile.nginx_enabled.join("example.com"),
+        )
+        .map_err(|error| error.to_string())?;
+        let result = inspect_nginx_preconditions(&profile, "example.com", true, true);
+        assert_eq!(
+            result,
+            Err("활성 링크가 발견된 원본 설정을 가리키지 않습니다.")
+        );
+        fs::remove_dir_all(root).map_err(|error| error.to_string())
+    }
+
+    fn profile(root: &std::path::Path) -> ObservationProfile {
+        ObservationProfile {
+            nginx_available: root.join("sites-available"),
+            nginx_enabled: root.join("sites-enabled"),
+            ..ObservationProfile::default()
+        }
+    }
+
+    fn test_root(label: &str) -> Result<std::path::PathBuf, String> {
+        let mut random = [0_u8; 8];
+        getrandom::fill(&mut random).map_err(|error| error.to_string())?;
+        Ok(std::env::temp_dir().join(format!(
+            "jw-agentd-observation-{label}-{}-{:016x}",
+            std::process::id(),
+            u64::from_le_bytes(random)
+        )))
+    }
 }

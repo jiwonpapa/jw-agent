@@ -72,9 +72,14 @@ pub struct HostObservation {
 #[serde(rename_all = "camelCase")]
 pub struct NginxSiteObservation {
     pub name: String,
+    pub site_id: Option<String>,
     pub available: bool,
     pub enabled: bool,
     pub protected: bool,
+    pub available_digest: Option<String>,
+    pub enabled_state_digest: Option<String>,
+    pub operation_type: Option<String>,
+    pub operation_schema_version: Option<u16>,
     pub assurance: AssuranceView,
 }
 
@@ -106,39 +111,6 @@ pub struct ServicesView {
 #[serde(rename_all = "camelCase")]
 pub struct CapabilityView {
     pub opsd: CapabilityStatus,
-    pub read_only: bool,
-    pub supported_operations: Vec<String>,
-    pub forensic_lockdown: bool,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct OpsCapabilityRequest {
-    pub protocol_version: u16,
-    pub request_id: String,
-    pub deadline_unix_ms: i64,
-}
-
-impl OpsCapabilityRequest {
-    pub fn validate(&self, now_unix_ms: i64) -> Result<(), &'static str> {
-        if self.protocol_version != crate::IPC_PROTOCOL_VERSION {
-            return Err("protocol_version");
-        }
-        if self.request_id.is_empty() || self.request_id.len() > 64 {
-            return Err("request_id");
-        }
-        if self.deadline_unix_ms <= now_unix_ms {
-            return Err("deadline_expired");
-        }
-        Ok(())
-    }
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct OpsCapabilityResponse {
-    pub protocol_version: u16,
-    pub request_id: String,
     pub read_only: bool,
     pub supported_operations: Vec<String>,
     pub forensic_lockdown: bool,

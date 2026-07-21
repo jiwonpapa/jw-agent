@@ -17,9 +17,10 @@
 
 ## 현재 단계
 
-- 현재 단계는 `P1 Identity, public edge, and read-only vertical slice`입니다.
-- P1에서 Accepted 상태인 인증·세션·공개 edge·관찰·반응형 UI spec만 구현할 수 있습니다.
-- P2의 일반 서비스 쓰기, 임의 명령, 중앙관제 구현은 별도 진입 승인 전 금지합니다.
+- P1은 Ubuntu VM 증거까지 완료되었고 현재 단계는 `P2 Safety kernel and local maintenance surfaces`입니다.
+- 첫 활성 write scope는 Accepted `OPS-NGINX-SITE-STATE-V1`과 그 safety kernel·UI·fault evidence입니다.
+- managed config, Certbot, non-root OpenSSH terminal·SFTP는 각각 Accepted spec과 선행 gate가 준비된 순서에만 구현합니다.
+- `opsd` 임의 shell·PTY·사용자 argv, root 웹 터미널, 범용 root 파일 CRUD와 중앙관제 구현은 금지합니다.
 - 기존 프로젝트 코드를 복사하거나 dependency로 연결하지 않습니다.
 - `.github/workflows`를 만들거나 원격 Actions를 소비하지 않습니다.
 

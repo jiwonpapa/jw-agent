@@ -18,7 +18,9 @@ Last reviewed: 2026-07-21
 
 같은 판단을 여러 layer에서 복사하지 않습니다. Unit은 logic, VM은 실제 OS/권한/장애라는 서로 다른 실패 모델을 가집니다.
 
-현재 `p1-browser`는 mock API로 UI route·세션 비밀 비저장·viewport·접근성을 검증합니다. 실제 agentd API·PAM과 결합된 browser flow는 Ubuntu VM gate의 책임이며 아직 미검증입니다.
+`RUST-TEST`는 `jw-opsd`가 normative Nginx fixture를 직접 읽어 site ID·content digest·enabled-state digest drift를 검증하는 단일 owner입니다. 별도 script나 중복 fixture gate를 만들지 않습니다.
+
+`p1-browser`는 mock API로 UI route·세션 비밀 비저장·viewport·접근성을 검증합니다. 실제 agentd API·PAM과 결합된 browser flow는 Ubuntu VM gate에서 검증되었습니다. 이 증거는 P2 mutation·terminal·SFTP까지 자동 확장되지 않으며 각 기능은 별도 browser+VM gate를 가져야 합니다.
 
 ## Operation fault injection
 
@@ -36,7 +38,7 @@ Last reviewed: 2026-07-21
 - real host values and observation time
 - unsupported hides write capability
 - operation 진입 전 rollback assurance·scope를 표시
-- G1·unknown·stale assurance에는 mutation CTA 없음
+- typed root mutation은 G1·unknown·stale assurance에 CTA 없음; G1 manual terminal·SFTP는 격리된 session approval UI만 허용
 - no mutation before approval
 - plan hash/idempotency in approval
 - double click creates one operation
@@ -58,6 +60,10 @@ Last reviewed: 2026-07-21
 - loopback recovery listener rejects non-loopback bind·Host·Origin and all forwarded headers
 - mobile full plan→reauth→approve→SSE flow
 - tablet portrait/landscape navigation and inspector
+- terminal ticket replay·wrong-origin·idle/max lifetime·frame/output cap
+- SFTP protected-root·traversal·stale-digest·transfer-interruption
+- managed config syntax failure에는 service action 없음; reload/health failure에는 G2 rollback receipt
+- Certbot external G1 effect와 local attach G2 result가 분리 표시
 
 ## Public edge and PAM VM scenarios
 
@@ -71,6 +77,9 @@ Last reviewed: 2026-07-21
 - Nginx management vhost protected from site operation
 - UFW active/inactive and existing SSH/user rule preservation
 - Nginx/TLS failure followed by SSH fallback public disable
+- P2 opsd no-follow/dirfd path policy, snapshot fsync, crash/disk-full reconciliation
+- OpenSSH non-root/root-denial, host-key mismatch, session revoke and normal SSH independence
+- Certbot staging challenge, local attach rollback and secret scan
 
 ## 환경
 

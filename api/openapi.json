@@ -6,7 +6,7 @@
     "license": {
       "name": ""
     },
-    "version": "0.1.0"
+    "version": "0.2.0"
   },
   "paths": {
     "/api/v1/auth/login": {
@@ -279,6 +279,276 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/IntegrationCatalogView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/operations/nginx/site-state/approvals": {
+      "post": {
+        "tags": [],
+        "operationId": "approve_nginx_site_state",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OperationApprovalRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Operation accepted for durable background execution",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperationAcceptedView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid approval shape",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Claim, role, or CSRF rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Expired, stale, busy, or conflicting operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "Forensic lockdown",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "428": {
+            "description": "Additional authentication is configured but unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/operations/nginx/site-state/plans": {
+      "post": {
+        "tags": [],
+        "operationId": "plan_nginx_site_state",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NginxSiteStatePlanRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Immutable Nginx site-state plan",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NginxSiteStatePlanView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid typed request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role or CSRF rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Stale, busy, or idempotency conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "Forensic lockdown",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/operations/{operation_id}": {
+      "get": {
+        "tags": [],
+        "operationId": "operation_receipt",
+        "parameters": [
+          {
+            "name": "operation_id",
+            "in": "path",
+            "description": "Opaque operation identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Operation receipt or current stage",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperationReceiptView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Operation belongs to another actor",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Operation not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/operations/{operation_id}/events": {
+      "get": {
+        "tags": [],
+        "operationId": "operation_events",
+        "parameters": [
+          {
+            "name": "operation_id",
+            "in": "path",
+            "description": "Opaque operation identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Resumable operation stage event stream",
+            "content": {
+              "text/event-stream": {}
+            }
+          },
+          "400": {
+            "description": "Invalid operation or event identifier",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
                 }
               }
             }
@@ -902,14 +1172,170 @@
           "available": {
             "type": "boolean"
           },
+          "availableDigest": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "enabled": {
             "type": "boolean"
+          },
+          "enabledStateDigest": {
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "name": {
             "type": "string"
           },
+          "operationSchemaVersion": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "operationType": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "protected": {
             "type": "boolean"
+          },
+          "siteId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "NginxSiteState": {
+        "type": "string",
+        "enum": [
+          "enabled",
+          "disabled"
+        ]
+      },
+      "NginxSiteStatePlanRequest": {
+        "type": "object",
+        "required": [
+          "schemaVersion",
+          "operationType",
+          "siteId",
+          "targetState",
+          "expectedAvailableDigest",
+          "expectedEnabledStateDigest",
+          "idempotencyKey"
+        ],
+        "properties": {
+          "expectedAvailableDigest": {
+            "type": "string"
+          },
+          "expectedEnabledStateDigest": {
+            "type": "string"
+          },
+          "idempotencyKey": {
+            "type": "string"
+          },
+          "operationType": {
+            "type": "string"
+          },
+          "schemaVersion": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "siteId": {
+            "type": "string"
+          },
+          "targetState": {
+            "$ref": "#/components/schemas/NginxSiteState"
+          }
+        },
+        "additionalProperties": false
+      },
+      "NginxSiteStatePlanView": {
+        "type": "object",
+        "required": [
+          "schemaVersion",
+          "operationType",
+          "planId",
+          "planHash",
+          "createdAt",
+          "expiresAt",
+          "actor",
+          "siteId",
+          "displayName",
+          "currentState",
+          "targetState",
+          "availableDigest",
+          "enabledStateDigest",
+          "impact",
+          "recoveryPath",
+          "assurance"
+        ],
+        "properties": {
+          "actor": {
+            "$ref": "#/components/schemas/Subject"
+          },
+          "assurance": {
+            "$ref": "#/components/schemas/AssuranceView"
+          },
+          "availableDigest": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string"
+          },
+          "currentState": {
+            "$ref": "#/components/schemas/NginxSiteState"
+          },
+          "displayName": {
+            "type": "string"
+          },
+          "enabledStateDigest": {
+            "type": "string"
+          },
+          "expiresAt": {
+            "type": "string"
+          },
+          "impact": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "operationType": {
+            "type": "string"
+          },
+          "planHash": {
+            "type": "string"
+          },
+          "planId": {
+            "type": "string"
+          },
+          "recoveryPath": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "schemaVersion": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "siteId": {
+            "type": "string"
+          },
+          "targetState": {
+            "$ref": "#/components/schemas/NginxSiteState"
           }
         }
       },
@@ -947,6 +1373,202 @@
           "not_installed",
           "unsupported_platform"
         ]
+      },
+      "OperationAcceptedView": {
+        "type": "object",
+        "required": [
+          "schemaVersion",
+          "operationType",
+          "operationId",
+          "planId",
+          "planHash",
+          "actor",
+          "currentStage",
+          "eventStream"
+        ],
+        "properties": {
+          "actor": {
+            "$ref": "#/components/schemas/Subject"
+          },
+          "currentStage": {
+            "$ref": "#/components/schemas/OperationStage"
+          },
+          "eventStream": {
+            "type": "string"
+          },
+          "operationId": {
+            "type": "string"
+          },
+          "operationType": {
+            "type": "string"
+          },
+          "planHash": {
+            "type": "string"
+          },
+          "planId": {
+            "type": "string"
+          },
+          "schemaVersion": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        }
+      },
+      "OperationApprovalRequest": {
+        "type": "object",
+        "required": [
+          "schemaVersion",
+          "planId",
+          "planHash",
+          "idempotencyKey",
+          "reauthToken"
+        ],
+        "properties": {
+          "additionalAuthClaim": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "password"
+          },
+          "idempotencyKey": {
+            "type": "string"
+          },
+          "planHash": {
+            "type": "string"
+          },
+          "planId": {
+            "type": "string"
+          },
+          "reauthToken": {
+            "type": "string",
+            "format": "password"
+          },
+          "schemaVersion": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        },
+        "additionalProperties": false
+      },
+      "OperationReceiptView": {
+        "type": "object",
+        "required": [
+          "schemaVersion",
+          "operationType",
+          "operationId",
+          "planId",
+          "planHash",
+          "actor",
+          "terminalState",
+          "beforeDigest",
+          "afterDigest",
+          "stages",
+          "assurance",
+          "recoveryPath"
+        ],
+        "properties": {
+          "actor": {
+            "$ref": "#/components/schemas/Subject"
+          },
+          "afterDigest": {
+            "type": "string"
+          },
+          "assurance": {
+            "$ref": "#/components/schemas/AssuranceView"
+          },
+          "beforeDigest": {
+            "type": "string"
+          },
+          "operationId": {
+            "type": "string"
+          },
+          "operationType": {
+            "type": "string"
+          },
+          "planHash": {
+            "type": "string"
+          },
+          "planId": {
+            "type": "string"
+          },
+          "recoveryPath": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "rollbackResult": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "schemaVersion": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "stages": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OperationStageEvidenceView"
+            }
+          },
+          "terminalState": {
+            "$ref": "#/components/schemas/OperationStage"
+          }
+        }
+      },
+      "OperationStage": {
+        "type": "string",
+        "enum": [
+          "PLANNED",
+          "APPROVED",
+          "SNAPSHOTTED",
+          "APPLYING",
+          "VALIDATING",
+          "RELOADING",
+          "VERIFYING",
+          "ROLLING_BACK",
+          "SUCCEEDED",
+          "ROLLED_BACK",
+          "RECOVERY_REQUIRED",
+          "REJECTED",
+          "EXPIRED",
+          "CANCELLED_BEFORE_APPLY"
+        ]
+      },
+      "OperationStageEvidenceView": {
+        "type": "object",
+        "required": [
+          "sequence",
+          "stage",
+          "recordedAt",
+          "resultCode",
+          "evidenceDigest"
+        ],
+        "properties": {
+          "evidenceDigest": {
+            "type": "string"
+          },
+          "recordedAt": {
+            "type": "string"
+          },
+          "resultCode": {
+            "type": "string"
+          },
+          "sequence": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "stage": {
+            "$ref": "#/components/schemas/OperationStage"
+          }
+        }
       },
       "ProblemDetails": {
         "type": "object",

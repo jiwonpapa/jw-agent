@@ -31,7 +31,8 @@ Last reviewed: 2026-07-21
 - keyboard, focus, responsive, reduced motion 확인
 - capability와 permission을 UI hardcode로 추측하지 않음
 - mutation 진입 전 assurance·rollback scope·제외 효과를 표시
-- G1·unknown·stale·unsupported에 mutation CTA가 없음
+- typed root mutation은 G1·unknown·stale·unsupported에 CTA가 없음
+- G1 manual terminal·SFTP는 root mutation UI와 분리되고 자동 원복 불가·권한·session 만료를 승인 전에 표시
 - mutation retry·optimistic success 없음
 - Playwright trace/screenshot evidence
 - mobile 320/390, tablet portrait/landscape, desktop에서 기능 동일
@@ -59,6 +60,14 @@ Last reviewed: 2026-07-21
 - user-facing assurance·rollback scope·excluded effects와 실제 receipt 일치
 - VM fault matrix PASS
 - support matrix and user-facing risk copy
+
+## Manual OpenSSH access 승격
+
+- existing OpenSSH만 사용하고 UID 0·root credential·opsd shell/PTY가 없음
+- same-origin short-lived single-use ticket, PAM reauth, role/session binding
+- terminal frame/output/idle/lifetime과 SFTP path/size/quota가 bounded
+- browser storage·trace·ledger에 password/key/transcript/file body가 없음
+- normal SSH recovery가 제품 session 실패와 독립적임을 VM에서 확인
 
 ## Release
 

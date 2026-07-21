@@ -1,6 +1,6 @@
 [package]
 name = "jw-opsd"
-version = "0.1.0"
+version = "0.2.0"
 edition.workspace = true
 rust-version.workspace = true
 publish = false
@@ -9,8 +9,14 @@ publish = false
 workspace = true
 
 [dependencies]
+getrandom.workspace = true
 jw-contracts = { path = "../jw-contracts" }
+rusqlite.workspace = true
+serde = { workspace = true, features = ["derive", "std"] }
+serde_json = { workspace = true, features = ["std"] }
+sha2.workspace = true
+time = { workspace = true, features = ["formatting", "std"] }
 tokio = { workspace = true, features = ["io-util", "macros", "net", "rt", "sync", "time"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-nix = { workspace = true, features = ["resource", "socket", "user"] }
+nix = { workspace = true, features = ["fs", "process", "resource", "signal", "socket", "user"] }

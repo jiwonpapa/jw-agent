@@ -1,6 +1,6 @@
 [package]
 name = "jw-agentd"
-version = "0.1.0"
+version = "0.2.0"
 edition.workspace = true
 rust-version.workspace = true
 publish = false
@@ -12,6 +12,7 @@ workspace = true
 axum = { workspace = true, features = ["http1", "json", "tokio"] }
 base64 = { workspace = true, features = ["std"] }
 getrandom.workspace = true
+futures-core.workspace = true
 jw-contracts = { path = "../jw-contracts" }
 nix = { workspace = true, features = ["fs"] }
 rusqlite.workspace = true

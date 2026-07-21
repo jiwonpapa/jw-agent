@@ -1,6 +1,8 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page } from "@playwright/test";
 
+import type { OperationReceiptView } from "../../src/shared/api/types";
+
 const session = {
   subject: { uid: 1001, username: "operator", role: "admin" },
   ingress: "recovery",
@@ -45,6 +47,11 @@ const observeAssurance = {
   reason: "현재 P1은 읽기 전용입니다.",
 };
 
+const protectedAssurance = {
+  ...observeAssurance,
+  reason: "JW Agent 공개 관리 리소스는 일반 Nginx 작업에서 변경할 수 없습니다.",
+};
+
 const policyAssurance = {
   level: "g2_reversible_config",
   rollbackSupport: "automatic_bounded",
@@ -56,14 +63,111 @@ const policyAssurance = {
   reason: null,
 };
 
+const reversibleAssurance = {
+  level: "g2_reversible_config",
+  rollbackSupport: "automatic_bounded",
+  operationAvailable: true,
+  scope: ["선택한 Nginx site의 enabled link 존재 상태"],
+  excludedEffects: ["sites-available 설정 내용", "기존 연결과 process history"],
+  applyVerifier: ["enabled link read-back", "nginx -t", "nginx.service active"],
+  rollbackVerifier: ["이전 link 상태 복원", "nginx -t와 reload 후 active 확인"],
+  reason: null,
+} satisfies OperationReceiptView["assurance"];
+
+const availableDigest = `sha256:${"1".repeat(64)}`;
+const enabledStateDigest = `sha256:${"2".repeat(64)}`;
+const planHash = `sha256:${"3".repeat(64)}`;
+
 const nginx = {
   observedAt: "2026-07-21T02:10:00Z",
   status: "observed",
   sites: [
-    { name: "example.com", available: true, enabled: true, protected: false, assurance: observeAssurance },
-    { name: "jw-agent-management", available: true, enabled: true, protected: true, assurance: observeAssurance },
+    {
+      name: "example.com",
+      siteId: "ngs_tQ9Xog5xTe1fh8OsTIdiw6xr",
+      available: true,
+      enabled: true,
+      protected: false,
+      availableDigest,
+      enabledStateDigest,
+      operationType: "nginx.site_state.set/v1",
+      operationSchemaVersion: 1,
+      assurance: reversibleAssurance,
+    },
+    {
+      name: "jw-agent-management.conf",
+      siteId: null,
+      available: true,
+      enabled: true,
+      protected: true,
+      availableDigest: null,
+      enabledStateDigest: null,
+      operationType: null,
+      operationSchemaVersion: null,
+      assurance: protectedAssurance,
+    },
   ],
   truncated: false,
+};
+
+const operationPlan = {
+  schemaVersion: 1,
+  operationType: "nginx.site_state.set/v1",
+  planId: "plan_fixture",
+  planHash,
+  createdAt: "2026-07-21T02:11:00Z",
+  expiresAt: "2026-07-21T02:16:00Z",
+  actor: session.subject,
+  siteId: "ngs_tQ9Xog5xTe1fh8OsTIdiw6xr",
+  displayName: "example.com",
+  currentState: "enabled",
+  targetState: "disabled",
+  availableDigest,
+  enabledStateDigest,
+  impact: [
+    "Nginx enabled symlink 상태가 변경됩니다.",
+    "nginx -t 후 nginx.service reload를 실행합니다.",
+  ],
+  recoveryPath: [
+    "SSH로 서버에 접속합니다.",
+    "JW Agent receipt와 Nginx 설정을 확인합니다.",
+    "nginx -t 성공 후 Nginx를 reload합니다.",
+  ],
+  assurance: reversibleAssurance,
+};
+
+const operationReceipt: OperationReceiptView = {
+  schemaVersion: 1,
+  operationType: "nginx.site_state.set/v1",
+  operationId: "op_fixture",
+  planId: "plan_fixture",
+  planHash,
+  actor: session.subject as OperationReceiptView["actor"],
+  terminalState: "SUCCEEDED",
+  beforeDigest: enabledStateDigest,
+  afterDigest: `sha256:${"4".repeat(64)}`,
+  stages: [
+    { sequence: 1, stage: "APPROVED", recordedAt: "2026-07-21T02:12:00Z", resultCode: "approved", evidenceDigest: planHash },
+    { sequence: 2, stage: "SNAPSHOTTED", recordedAt: "2026-07-21T02:12:01Z", resultCode: "snapshot_durable", evidenceDigest: availableDigest },
+    { sequence: 3, stage: "APPLYING", recordedAt: "2026-07-21T02:12:02Z", resultCode: "apply_started", evidenceDigest: enabledStateDigest },
+    { sequence: 4, stage: "VALIDATING", recordedAt: "2026-07-21T02:12:03Z", resultCode: "nginx_config_valid", evidenceDigest: availableDigest },
+    { sequence: 5, stage: "RELOADING", recordedAt: "2026-07-21T02:12:04Z", resultCode: "nginx_reloaded", evidenceDigest: availableDigest },
+    { sequence: 6, stage: "SUCCEEDED", recordedAt: "2026-07-21T02:12:05Z", resultCode: "verified", evidenceDigest: availableDigest },
+  ],
+  assurance: reversibleAssurance,
+  rollbackResult: null,
+  recoveryPath: [],
+};
+
+const operationAccepted = {
+  schemaVersion: 1,
+  operationType: "nginx.site_state.set/v1",
+  operationId: "op_fixture",
+  planId: "plan_fixture",
+  planHash,
+  actor: session.subject,
+  currentStage: "APPROVED",
+  eventStream: "/api/v1/operations/op_fixture/events",
 };
 
 const access = {
@@ -143,6 +247,12 @@ async function mockApi(
   page: Page,
   initiallyAuthenticated: boolean,
   healthFixture = health,
+  operationOptions: {
+    receipt?: OperationReceiptView;
+    onPlan?: (body: unknown) => void;
+    onApproval?: (body: unknown) => void;
+    onEvents?: () => void;
+  } = {},
 ): Promise<void> {
   let authenticated = initiallyAuthenticated;
   await page.route("**/api/v1/**", async (route) => {
@@ -161,8 +271,45 @@ async function mockApi(
             json: { type: "about:blank", title: "Authentication required", status: 401, code: "unauthorized" },
           });
     }
+    if (path === "/api/v1/auth/reauth" && request.method() === "POST") {
+      return route.fulfill({
+        json: {
+          session,
+          reauthToken: "reauth_fixture_token_1234567890",
+          expiresAt: "2026-07-21T02:14:00Z",
+        },
+      });
+    }
     if (path === "/api/v1/host") return route.fulfill({ json: host });
     if (path === "/api/v1/services/nginx/sites") return route.fulfill({ json: nginx });
+    if (path === "/api/v1/operations/nginx/site-state/plans" && request.method() === "POST") {
+      operationOptions.onPlan?.(request.postDataJSON());
+      return route.fulfill({ json: operationPlan });
+    }
+    if (path === "/api/v1/operations/nginx/site-state/approvals" && request.method() === "POST") {
+      operationOptions.onApproval?.(request.postDataJSON());
+      return route.fulfill({ status: 202, json: operationAccepted });
+    }
+    if (path === "/api/v1/operations/op_fixture/events") {
+      operationOptions.onEvents?.();
+      const receipt = operationOptions.receipt ?? operationReceipt;
+      const stage = receipt.stages.at(-1);
+      return route.fulfill({
+        status: 200,
+        headers: {
+          "cache-control": "no-store",
+          "content-type": "text/event-stream",
+          "x-accel-buffering": "no",
+        },
+        body:
+          stage === undefined
+            ? ""
+            : `id: ${String(stage.sequence)}\nevent: operation-stage\ndata: ${JSON.stringify(stage)}\n\n`,
+      });
+    }
+    if (path === "/api/v1/operations/op_fixture" && request.method() === "GET") {
+      return route.fulfill({ json: operationOptions.receipt ?? operationReceipt });
+    }
     if (path === "/api/v1/integrations") return route.fulfill({ json: integrations });
     if (path === "/api/v1/settings/access") return route.fulfill({ json: access });
     return route.fulfill({ status: 404, json: { type: "about:blank", title: "Not found", status: 404, code: "not_found" } });
@@ -243,6 +390,98 @@ test("access screen states provider limitation without false protection claim", 
   await expect(page.getByText(/G2 · 제한된 설정 자동 원복 지원/)).toBeVisible();
   const accessibility = await new AxeBuilder({ page }).analyze();
   expect(accessibility.violations.filter((violation) => ["critical", "serious"].includes(violation.impact ?? ""))).toEqual([]);
+});
+
+test("G2 Nginx change discloses rollback scope before exact-plan PAM approval", async ({ page }) => {
+  let planRequests = 0;
+  let approvalRequests = 0;
+  const planBodies: unknown[] = [];
+  const approvalBodies: unknown[] = [];
+  await page.setViewportSize({ width: 320, height: 800 });
+  await mockApi(page, true, health, {
+    onPlan: (body) => {
+      planRequests += 1;
+      planBodies.push(body);
+    },
+    onApproval: (body) => {
+      approvalRequests += 1;
+      approvalBodies.push(body);
+    },
+  });
+  await page.goto("/services/nginx");
+
+  await expect(
+    page.locator("span:visible").filter({ hasText: "G2 · 제한된 설정 자동 원복 지원" }).first(),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "변경 계획 열기" }).first().click();
+  await page.getByRole("button", { name: "비활성화 계획 만들기" }).dblclick();
+
+  await expect(page.getByRole("heading", { name: "실행 영향" })).toBeVisible();
+  await expect(page.getByText(/sites-available 설정 내용/)).toBeVisible();
+  await expect(page.getByRole("heading", { name: "원복 검증도 실패하면 수동 복구가 필요합니다" })).toBeVisible();
+  const recoveryHeading = page.getByRole("heading", {
+    name: "원복 검증도 실패하면 수동 복구가 필요합니다",
+  });
+  const approvalButton = page.getByRole("button", { name: "재인증 후 실행" });
+  const disclosureComesFirst = await recoveryHeading.evaluate((heading, button) => {
+    if (!(button instanceof Element)) return false;
+    return Boolean(heading.compareDocumentPosition(button) & Node.DOCUMENT_POSITION_FOLLOWING);
+  }, await approvalButton.elementHandle());
+  expect(disclosureComesFirst).toBe(true);
+
+  await page.getByLabel("Linux 계정 비밀번호로 이 계획 승인").fill("fixture-password");
+  await approvalButton.dblclick();
+  await expect(page.getByRole("heading", { name: "적용 완료" })).toBeVisible();
+  await expect(page.getByText("이전 상태 저장")).toBeVisible();
+  expect(planRequests).toBe(1);
+  expect(approvalRequests).toBe(1);
+  expect((approvalBodies[0] as Record<string, unknown>).planHash).toBe(planHash);
+  expect((approvalBodies[0] as Record<string, unknown>).idempotencyKey).toBe(
+    (planBodies[0] as Record<string, unknown>).idempotencyKey,
+  );
+  expect(JSON.stringify(approvalBodies)).not.toContain("fixture-password");
+  expect(page.url()).not.toContain("fixture-password");
+  const hasOverflow = await page.evaluate(
+    () => document.documentElement.scrollWidth > document.documentElement.clientWidth,
+  );
+  expect(hasOverflow).toBe(false);
+  const accessibility = await new AxeBuilder({ page }).analyze();
+  expect(
+    accessibility.violations.filter((violation) =>
+      ["critical", "serious"].includes(violation.impact ?? ""),
+    ),
+  ).toEqual([]);
+});
+
+test("G0 protected Nginx resource has no mutation action", async ({ page }) => {
+  await mockApi(page, true);
+  await page.goto("/services/nginx");
+  await page.getByRole("button", { name: "상세" }).click();
+  await expect(page.getByText("JW Agent 공개 관리 리소스는 일반 Nginx 작업에서 변경할 수 없습니다.")).toBeVisible();
+  await expect(page.getByRole("button", { name: /계획 만들기/ })).toHaveCount(0);
+});
+
+test("rollback failure is never shown as a successful recovery", async ({ page }) => {
+  const recoveryReceipt: OperationReceiptView = {
+    ...operationReceipt,
+    terminalState: "RECOVERY_REQUIRED",
+    rollbackResult: "rollback_verification_failed",
+    recoveryPath: operationPlan.recoveryPath,
+    stages: [
+      ...operationReceipt.stages.slice(0, 4),
+      { sequence: 5, stage: "ROLLING_BACK", recordedAt: "2026-07-21T02:12:04Z", resultCode: "rollback_started", evidenceDigest: availableDigest },
+      { sequence: 6, stage: "RECOVERY_REQUIRED", recordedAt: "2026-07-21T02:12:05Z", resultCode: "rollback_verification_failed", evidenceDigest: availableDigest },
+    ],
+  };
+  await mockApi(page, true, health, { receipt: recoveryReceipt });
+  await page.goto("/services/nginx");
+  await page.getByRole("button", { name: "계획 보기" }).first().click();
+  await page.getByRole("button", { name: "비활성화 계획 만들기" }).click();
+  await page.getByLabel("Linux 계정 비밀번호로 이 계획 승인").fill("fixture-password");
+  await page.getByRole("button", { name: "재인증 후 실행" }).click();
+  await expect(page.getByRole("heading", { name: "실패 · 수동 복구 필요" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "수동 복구 경로" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "적용 완료" })).toHaveCount(0);
 });
 
 for (const viewport of [

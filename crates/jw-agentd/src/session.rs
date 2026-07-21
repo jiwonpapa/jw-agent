@@ -262,6 +262,43 @@ impl SessionStore {
             .map_err(|error| PolicyUpdateError::Storage(error.to_string()))
     }
 
+    pub fn consume_operation_claim(
+        &self,
+        session_token: &str,
+        subject: &Subject,
+        plan_hash: &str,
+        reauth_token: &str,
+        now_unix_ms: i64,
+    ) -> Result<(), OperationClaimError> {
+        if !valid_token_shape(reauth_token) || plan_hash.is_empty() || plan_hash.len() > 128 {
+            return Err(OperationClaimError::Invalid);
+        }
+        let digest = claim_digest(reauth_token.as_bytes());
+        let session_digest = session_digest(session_token.as_bytes());
+        let changed = self
+            .connection()
+            .map_err(OperationClaimError::Storage)?
+            .execute(
+                "UPDATE reauth_claims SET consumed_at_unix_ms = ?1 \
+                 WHERE token_digest = ?2 AND session_digest = ?3 AND subject_uid = ?4 \
+                   AND purpose = 'operation' AND context_digest = ?5 \
+                   AND expires_at_unix_ms > ?1 AND consumed_at_unix_ms IS NULL",
+                params![
+                    now_unix_ms,
+                    digest.as_slice(),
+                    session_digest.as_slice(),
+                    subject.uid,
+                    plan_hash,
+                ],
+            )
+            .map_err(|error| OperationClaimError::Storage(error.to_string()))?;
+        if changed == 1 {
+            Ok(())
+        } else {
+            Err(OperationClaimError::Invalid)
+        }
+    }
+
     fn connection(&self) -> Result<Connection, String> {
         configure(Connection::open(&self.path).map_err(|error| error.to_string())?)
     }
@@ -272,6 +309,12 @@ pub enum PolicyUpdateError {
     Denied,
     ReauthRequired,
     InvalidReauth,
+    Storage(String),
+}
+
+#[derive(Debug)]
+pub enum OperationClaimError {
+    Invalid,
     Storage(String),
 }
 
@@ -560,7 +603,7 @@ mod tests {
 
     use jw_contracts::{AdditionalAuthPolicy, IngressChannel, ReauthPurpose, Role, Subject};
 
-    use super::{PolicyUpdateError, SessionStore};
+    use super::{OperationClaimError, PolicyUpdateError, SessionStore};
 
     fn test_path() -> Result<PathBuf, String> {
         let mut random = [0_u8; 8];
@@ -662,6 +705,49 @@ mod tests {
 
         drop(claim);
         drop(issued);
+        cleanup_test_database(&path)
+    }
+
+    #[test]
+    fn operation_claim_is_bound_to_rotated_session_uid_and_plan() -> Result<(), String> {
+        let path = test_path()?;
+        let store = SessionStore::open(path.clone(), 1_000)?;
+        let subject = Subject {
+            uid: 1_000,
+            username: String::from("admin"),
+            role: Role::Admin,
+        };
+        let session = store.issue_session(&subject, IngressChannel::Public, 1_000)?;
+        let purpose = ReauthPurpose::Operation {
+            plan_hash: String::from(
+                "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+            ),
+        };
+        let claim = store.issue_reauth_claim(session.token(), &subject, &purpose, 1_100)?;
+        store
+            .consume_operation_claim(
+                session.token(),
+                &subject,
+                match &purpose {
+                    ReauthPurpose::Operation { plan_hash } => plan_hash,
+                    ReauthPurpose::SecurityPolicyChange { .. } => "",
+                },
+                claim.token(),
+                1_200,
+            )
+            .map_err(|error| format!("{error:?}"))?;
+        assert!(matches!(
+            store.consume_operation_claim(
+                session.token(),
+                &subject,
+                "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+                claim.token(),
+                1_300,
+            ),
+            Err(OperationClaimError::Invalid)
+        ));
+        drop(claim);
+        drop(session);
         cleanup_test_database(&path)
     }
 

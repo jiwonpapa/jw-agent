@@ -5,6 +5,7 @@ mod auth;
 mod framing;
 mod integration;
 mod observation;
+mod operation;
 mod problem;
 mod settings;
 
@@ -24,8 +25,17 @@ pub use integration::{
 };
 pub use observation::{
     CapabilityStatus, CapabilityView, DiskObservation, HealthStatus, HealthView, HostObservation,
-    MemoryObservation, NginxSiteObservation, NginxSitesView, ObservationStatus,
-    OpsCapabilityRequest, OpsCapabilityResponse, ServiceSummary, ServicesView,
+    MemoryObservation, NginxSiteObservation, NginxSitesView, ObservationStatus, ServiceSummary,
+    ServicesView,
+};
+pub use operation::{
+    IDEMPOTENCY_KEY_MAX_BYTES, IDEMPOTENCY_KEY_MIN_BYTES, NGINX_LAYOUT_ID, NGINX_MANAGEMENT_MARKER,
+    NGINX_MANAGEMENT_PROXY_INCLUDE, NGINX_SITE_STATE_OPERATION, NginxSiteState,
+    NginxSiteStatePlanRequest, NginxSiteStatePlanView, OPERATION_SCHEMA_VERSION,
+    OperationAcceptedView, OperationApprovalRequest, OperationReceiptView, OperationStage,
+    OperationStageEvidenceView, OpsCapabilityResponse, OpsRejectedResponse, OpsRequest,
+    OpsRequestBody, OpsResponse, OpsResponseBody, nginx_enabled_state_digest,
+    nginx_management_config, nginx_site_id, sha256_digest, validate_digest,
 };
 pub use problem::ProblemDetails;
 pub use settings::{

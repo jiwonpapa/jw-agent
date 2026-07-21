@@ -75,4 +75,4 @@ Last reviewed: 2026-07-21
 - DB/log/journal/process/URL/browser trace secret scan
 - mobile password manager·authenticator paste와 accessibility
 
-실제 provider 구현과 dependency 추가는 P2 진입 승인 후 수행합니다.
+P2 진입은 승인되었습니다. 실제 provider 구현과 dependency 추가는 safety kernel, secret storage, recovery/replay gate를 먼저 고정한 뒤 수행합니다.

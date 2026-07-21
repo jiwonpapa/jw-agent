@@ -47,8 +47,9 @@ Last reviewed: 2026-07-21
 3. `opsd`는 typed privileged operation만 수행합니다. 비밀번호와 PAM을 처리하지 않습니다.
 4. `authd`와 `opsd`는 TCP listener가 없으며 각각 전용 Unix domain socket, peer UID, version, 크기, allowlist를 검증합니다.
 5. PAM C FFI의 `unsafe`는 `ffi-pam`에만 허용하고 나머지 crate는 `#![forbid(unsafe_code)]`를 적용합니다.
-6. UID 0 root의 웹 로그인, 임의 shell, PTY, root 웹 터미널, 범용 파일 CRUD, 임의 `/etc` 편집 API를 금지합니다.
-7. UI와 `agentd`는 안전 여부를 최종 판정하지 않습니다. 적용 직전 preflight의 권위는 `opsd`입니다.
+6. UID 0 root의 웹 로그인, `opsd` 임의 shell·PTY·사용자 argv, root 웹 터미널, 범용 root 파일 CRUD, 임의 `/etc` 편집 API를 금지합니다.
+7. 비-root 웹 터미널·SFTP는 기존 OpenSSH와 로그인한 Linux 계정 권한을 사용하는 명시적 수동 접근으로만 허용합니다. system-owned 설정 변경은 typed `opsd` operation을 우회할 수 없습니다.
+8. UI와 `agentd`는 안전 여부를 최종 판정하지 않습니다. 적용 직전 preflight의 권위는 `opsd`입니다.
 
 ## 제5조 — Spec before code
 
@@ -79,7 +80,7 @@ Last reviewed: 2026-07-21
 2. plan hash, 만료, precondition digest, idempotency key, resource lock이 필수입니다.
 3. side effect 전 durable state를 기록하고 재시작 후 OS read-back으로 재개·원복을 결정합니다.
 4. “rollback”은 operation별 보장 대상을 정확히 복원할 때만 사용합니다.
-5. 원복 불가능한 행동은 그렇게 표시하고 MVP 쓰기 기능으로 노출하지 않습니다.
+5. 자동화된 root mutation은 G2 이상만 노출합니다. 원복 불가능한 수동 OpenSSH terminal·SFTP 행동은 G1로 분리하고, 자동 원복 불가·권한·영향을 명시한 별도 승인 세션에서만 노출합니다.
 
 ## 제9조 — 로그·비밀·포렌식
 
@@ -110,5 +111,5 @@ Last reviewed: 2026-07-21
 
 1. 헌법 개정은 ADR, 영향 분석, 이전 규칙 migration, 명시적 승인으로만 가능합니다.
 2. 임시 예외는 이유·범위·owner·만료일·제거 gate를 기록합니다.
-3. root·PAM 경계, root 웹 로그인 금지, 임의 shell 금지, 비밀 비노출, release 서명, 고객/tenant 격리에는 예외가 없습니다.
+3. root·PAM 경계, root 웹 로그인 금지, `opsd` 임의 shell·PTY·사용자 argv 금지, 비밀 비노출, release 서명, 고객/tenant 격리에는 예외가 없습니다.
 4. “일단 구현”과 일정 압박은 예외 사유가 아닙니다.

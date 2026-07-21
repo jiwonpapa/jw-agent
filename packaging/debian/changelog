@@ -1,3 +1,11 @@
+jw-agent (0.2.0~p2.1) noble; urgency=medium
+
+  * Add the durable P2 operation ledger, snapshots, locks, and lockdown.
+  * Add bounded Nginx site-state mutation with validation and rollback.
+  * Return asynchronous operation acceptance with resumable SSE stage evidence.
+
+ -- JW Agent Maintainers <maintainers@example.invalid>  Tue, 21 Jul 2026 18:28:15 +0900
+
 jw-agent (0.1.0~p1.3) noble; urgency=medium
 
   * Record the P1 source baseline as a license-pending development snapshot.

@@ -1,7 +1,8 @@
 # JW Agent packaging basis
 
-This directory owns the Ubuntu 24.04 `.deb` assembly inputs. It is a P1
-packaging basis, not installation proof.
+This directory owns the Ubuntu 24.04 `.deb` assembly inputs. P2 package proof
+is accepted only after the disposable VM lane passes; source presence alone is
+not installation proof.
 
 - `debian/`: package metadata and artifact mapping
 - `systemd/`: least-privilege service and socket units
@@ -13,8 +14,9 @@ packaging basis, not installation proof.
 Public ingress stays disabled until an administrator supplies an exact FQDN,
 certificate paths, and explicitly installs the Nginx template. The package must
 not edit DNS, UFW, SSH, Certbot, or unrelated Nginx sites automatically.
-P1 accepts an existing valid certificate path only; it does not invoke Certbot
-issuance or renewal commands.
+The current P2 baseline still accepts an existing valid certificate path only;
+the separately accepted Certbot operation is not advertised until its own VM
+fault lane passes.
 
 The public proxy socket uses the dedicated `jw-agent-proxy` group and
 `/run/jw-agent-proxy`. Nginx is never added to the privileged `jw-agent` group

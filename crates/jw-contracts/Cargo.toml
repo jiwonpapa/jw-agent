@@ -1,6 +1,6 @@
 [package]
 name = "jw-contracts"
-version = "0.1.0"
+version = "0.2.0"
 edition.workspace = true
 rust-version.workspace = true
 publish = false
@@ -9,7 +9,9 @@ publish = false
 workspace = true
 
 [dependencies]
+base64 = { workspace = true, features = ["alloc"] }
 serde = { workspace = true, features = ["derive", "std"] }
 serde_json = { workspace = true, features = ["std"] }
+sha2.workspace = true
 utoipa = { workspace = true, features = ["macros"] }
 zeroize = { workspace = true, features = ["alloc"] }
