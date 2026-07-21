@@ -212,6 +212,44 @@
         }
       }
     },
+    "/api/v1/certificates": {
+      "get": {
+        "tags": [],
+        "operationId": "certificates",
+        "responses": {
+          "200": {
+            "description": "Sanitized Certbot certificate inventory",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CertificateInventoryView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Certificate inventory unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/config-resources/{resource_id}": {
       "get": {
         "tags": [],
@@ -1082,6 +1120,111 @@
             "items": {
               "type": "string"
             }
+          }
+        }
+      },
+      "CertificateInventoryView": {
+        "type": "object",
+        "required": [
+          "schemaVersion",
+          "observedAt",
+          "certbotInstalled",
+          "timerEnabled",
+          "timerActive",
+          "inventoryDigest",
+          "certificates",
+          "problems",
+          "assurance"
+        ],
+        "properties": {
+          "assurance": {
+            "$ref": "#/components/schemas/AssuranceView"
+          },
+          "certbotInstalled": {
+            "type": "boolean"
+          },
+          "certificates": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CertificateSummaryView"
+            }
+          },
+          "inventoryDigest": {
+            "type": "string"
+          },
+          "issueOperationType": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "observedAt": {
+            "type": "string"
+          },
+          "problems": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "renewTestOperationType": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "schemaVersion": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "timerActive": {
+            "type": "boolean"
+          },
+          "timerEnabled": {
+            "type": "boolean"
+          }
+        }
+      },
+      "CertificateSummaryView": {
+        "type": "object",
+        "required": [
+          "primaryDomain",
+          "sans",
+          "notAfter",
+          "fingerprintSha256",
+          "certificatePath",
+          "privateKeyPresent",
+          "renewalConfigPresent",
+          "webrootManaged"
+        ],
+        "properties": {
+          "certificatePath": {
+            "type": "string"
+          },
+          "fingerprintSha256": {
+            "type": "string"
+          },
+          "notAfter": {
+            "type": "string"
+          },
+          "primaryDomain": {
+            "type": "string"
+          },
+          "privateKeyPresent": {
+            "type": "boolean"
+          },
+          "renewalConfigPresent": {
+            "type": "boolean"
+          },
+          "sans": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "webrootManaged": {
+            "type": "boolean"
           }
         }
       },

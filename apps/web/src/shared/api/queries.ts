@@ -2,6 +2,7 @@ import { queryOptions } from "@tanstack/react-query";
 
 import {
   getAccessSettings,
+  getCertificates,
   getHealth,
   getHost,
   getIntegrations,
@@ -14,6 +15,7 @@ export const queryKeys = {
   session: ["session"] as const,
   host: ["host"] as const,
   nginxSites: ["services", "nginx", "sites"] as const,
+  certificates: ["certificates"] as const,
   integrations: ["integrations"] as const,
   accessSettings: ["settings", "access"] as const,
 };
@@ -43,6 +45,13 @@ export const nginxSitesQueryOptions = queryOptions({
   queryKey: queryKeys.nginxSites,
   queryFn: ({ signal }) => getNginxSites(signal),
   staleTime: 15_000,
+  retry: 1,
+});
+
+export const certificatesQueryOptions = queryOptions({
+  queryKey: queryKeys.certificates,
+  queryFn: ({ signal }) => getCertificates(signal),
+  staleTime: 30_000,
   retry: 1,
 });
 

@@ -22,11 +22,12 @@ use futures_core::Stream;
 use jw_contracts::{
     AccessSettingsView, AdditionalAuthPolicy, AdditionalAuthProviderStatus, AssuranceLevel,
     AssuranceView, AuthFailureClass, AuthPurpose, AuthRequest, AuthResult, CapabilityStatus,
-    CapabilityView, HealthStatus, HealthView, IPC_PROTOCOL_VERSION, IngressChannel,
-    IntegrationCatalogView, LoginRequest, MANAGED_CONFIG_OPERATION, ManagedConfigApprovalRequest,
-    ManagedConfigPlanRequest, ManagedConfigPlanView, ManagedConfigResourceView,
-    NGINX_SITE_STATE_OPERATION, NginxSiteStatePlanRequest, NginxSiteStatePlanView, NginxSitesView,
-    ObservationStatus, OperationAcceptedView, OperationApprovalRequest, OperationReceiptView,
+    CapabilityView, CertificateInventoryView, CertificateSummaryView, HealthStatus, HealthView,
+    IPC_PROTOCOL_VERSION, IngressChannel, IntegrationCatalogView, LoginRequest,
+    MANAGED_CONFIG_OPERATION, ManagedConfigApprovalRequest, ManagedConfigPlanRequest,
+    ManagedConfigPlanView, ManagedConfigResourceView, NGINX_SITE_STATE_OPERATION,
+    NginxSiteStatePlanRequest, NginxSiteStatePlanView, NginxSitesView, ObservationStatus,
+    OperationAcceptedView, OperationApprovalRequest, OperationReceiptView,
     OperationStageEvidenceView, ProblemDetails, ReauthPurpose, ReauthRequest, ReauthView, Role,
     RollbackSupport, ServiceAction, ServiceSummary, ServicesView, SessionView, Subject,
     UpdateAdditionalAuthRequest,
@@ -93,6 +94,7 @@ impl AppState {
         capabilities,
         services,
         nginx_sites,
+        certificates,
         integrations,
         access_settings,
         update_additional_auth,
@@ -118,6 +120,8 @@ impl AppState {
         jw_contracts::MemoryObservation,
         jw_contracts::DiskObservation,
         NginxSitesView,
+        CertificateInventoryView,
+        CertificateSummaryView,
         jw_contracts::NginxSiteObservation,
         jw_contracts::NginxSiteState,
         NginxSiteStatePlanRequest,
@@ -173,6 +177,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/v1/capabilities", get(capabilities))
         .route("/api/v1/services", get(services))
         .route("/api/v1/services/nginx/sites", get(nginx_sites))
+        .route("/api/v1/certificates", get(certificates))
         .route(
             "/api/v1/operations/nginx/site-state/plans",
             post(plan_nginx_site_state),
@@ -476,6 +481,24 @@ async fn nginx_sites(
         now_rfc3339()?,
         mutation_reason.as_deref(),
     )))
+}
+
+#[utoipa::path(get, path = "/api/v1/certificates", responses(
+    (status = 200, description = "Sanitized Certbot certificate inventory", body = CertificateInventoryView),
+    (status = 401, description = "Authentication required", body = ProblemDetails),
+    (status = 409, description = "Certificate inventory unavailable", body = ProblemDetails)
+))]
+async fn certificates(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<CertificateInventoryView>, ApiProblem> {
+    let (_, session) = current_session(&state, &headers, unix_milliseconds()?)?;
+    let inventory = state
+        .ops
+        .certificate_inventory(session.subject)
+        .await
+        .map_err(map_ops_error)?;
+    Ok(Json(inventory))
 }
 
 async fn nginx_mutation_gate_reason(
@@ -1538,6 +1561,13 @@ mod tests {
                     forensic_lockdown: false,
                 })
             })
+        }
+
+        fn certificate_inventory<'a>(
+            &'a self,
+            _actor: Subject,
+        ) -> OpsFuture<'a, jw_contracts::CertificateInventoryView> {
+            Box::pin(async move { Err(OpsBrokerError::Unavailable) })
         }
 
         fn read_managed_config<'a>(

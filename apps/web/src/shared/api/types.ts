@@ -7,6 +7,8 @@ export type HealthView = components["schemas"]["HealthView"];
 export type HostObservation = components["schemas"]["HostObservation"];
 export type NginxSitesView = components["schemas"]["NginxSitesView"];
 export type NginxSiteObservation = components["schemas"]["NginxSiteObservation"];
+export type CertificateInventoryView = components["schemas"]["CertificateInventoryView"];
+export type CertificateSummaryView = components["schemas"]["CertificateSummaryView"];
 export type NginxSiteState = components["schemas"]["NginxSiteState"];
 export type NginxSiteStatePlanRequest =
   components["schemas"]["NginxSiteStatePlanRequest"];

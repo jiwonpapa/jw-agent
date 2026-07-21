@@ -6,6 +6,7 @@ import type { paths } from "./generated/schema";
 import type {
   AccessSettingsView,
   AdditionalAuthPolicy,
+  CertificateInventoryView,
   HealthView,
   HostObservation,
   IntegrationCatalogView,
@@ -114,6 +115,14 @@ export async function getHost(signal?: AbortSignal): Promise<HostObservation> {
 
 export async function getNginxSites(signal?: AbortSignal): Promise<NginxSitesView> {
   const { data, error, response } = await api.GET("/api/v1/services/nginx/sites", {
+    signal: signal ?? null,
+  });
+  if (data !== undefined) return data;
+  throw new ApiError(error, response);
+}
+
+export async function getCertificates(signal?: AbortSignal): Promise<CertificateInventoryView> {
+  const { data, error, response } = await api.GET("/api/v1/certificates", {
     signal: signal ?? null,
   });
   if (data !== undefined) return data;

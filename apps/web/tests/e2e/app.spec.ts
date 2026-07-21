@@ -252,6 +252,36 @@ const access = {
   assurance: policyAssurance,
 };
 
+const certificates = {
+  schemaVersion: 1,
+  observedAt: "2026-07-21T02:10:00Z",
+  certbotInstalled: true,
+  timerEnabled: true,
+  timerActive: true,
+  inventoryDigest: `sha256:${"8".repeat(64)}`,
+  certificates: [
+    {
+      primaryDomain: "care.example.com",
+      sans: ["care.example.com", "www.care.example.com"],
+      notAfter: "2026-10-20 12:00:00Z",
+      fingerprintSha256: `sha256:${"a".repeat(64)}`,
+      certificatePath: "…/live/care.example.com/fullchain.pem",
+      privateKeyPresent: true,
+      renewalConfigPresent: true,
+      webrootManaged: true,
+    },
+  ],
+  problems: [],
+  issueOperationType: null,
+  renewTestOperationType: null,
+  assurance: {
+    ...observeAssurance,
+    scope: ["certificate SAN·만료·fingerprint와 Certbot timer 상태만 조회합니다."],
+    excludedEffects: ["private key·ACME account secret·certificate 원문"],
+    reason: "발급·attach 작업은 P2C operation fault gate 전까지 차단됩니다.",
+  },
+};
+
 const integrations = {
   observedAt: "2026-07-21T02:10:00Z",
   status: "observed",
@@ -356,6 +386,7 @@ async function mockApi(
       });
     }
     if (path === "/api/v1/host") return route.fulfill({ json: host });
+    if (path === "/api/v1/certificates") return route.fulfill({ json: certificates });
     if (path === "/api/v1/services/nginx/sites") return route.fulfill({ json: nginx });
     if (path === `/api/v1/config-resources/${configResourceId}` && request.method() === "GET") {
       return route.fulfill({ json: managedConfigResource });
@@ -626,6 +657,28 @@ test("rollback failure is never shown as a successful recovery", async ({ page }
   await expect(page.getByRole("heading", { name: "실패 · 수동 복구 필요" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "수동 복구 경로" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "적용 완료" })).toHaveCount(0);
+});
+
+test("certificate inventory stays read-only and responsive without exposing key material", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await mockApi(page, true);
+  await page.goto("/certificates");
+  await expect(page.getByRole("heading", { name: "TLS 인증서" })).toBeVisible();
+  await expect(page.getByText("care.example.com", { exact: true }).first()).toBeVisible();
+  await expect(page.getByText("webroot 관리")).toBeVisible();
+  await expect(page.getByText("조회 전용")).toBeVisible();
+  await expect(page.getByRole("button", { name: /발급|갱신|적용/ })).toHaveCount(0);
+  expect(await page.locator("body").innerText()).not.toContain("PRIVATE KEY");
+  const hasOverflow = await page.evaluate(
+    () => document.documentElement.scrollWidth > document.documentElement.clientWidth,
+  );
+  expect(hasOverflow).toBe(false);
+  const accessibility = await new AxeBuilder({ page }).analyze();
+  expect(
+    accessibility.violations.filter((violation) =>
+      ["critical", "serious"].includes(violation.impact ?? ""),
+    ),
+  ).toEqual([]);
 });
 
 for (const viewport of [

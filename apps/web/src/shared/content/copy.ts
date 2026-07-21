@@ -6,6 +6,7 @@ export const PRODUCT = {
 export const NAV_ITEMS = [
   { href: "/overview", label: "개요", key: "overview" },
   { href: "/services/nginx", label: "Nginx", key: "nginx" },
+  { href: "/certificates", label: "인증서", key: "certificates" },
   { href: "/integrations", label: "통합 카탈로그", key: "integrations" },
   { href: "/settings/access", label: "접속 및 인증", key: "access" },
 ] as const;

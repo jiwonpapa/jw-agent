@@ -13,6 +13,8 @@ pub enum CommandClass {
     NginxConfigTest,
     NginxReload,
     NginxActive,
+    CertbotTimerEnabled,
+    CertbotTimerActive,
 }
 
 impl CommandClass {
@@ -22,6 +24,8 @@ impl CommandClass {
             Self::NginxConfigTest => "nginx_config_test",
             Self::NginxReload => "nginx_reload",
             Self::NginxActive => "nginx_active",
+            Self::CertbotTimerEnabled => "certbot_timer_enabled",
+            Self::CertbotTimerActive => "certbot_timer_active",
         }
     }
 
@@ -32,6 +36,14 @@ impl CommandClass {
             Self::NginxActive => (
                 "/usr/bin/systemctl",
                 &["is-active", "--quiet", "nginx.service"],
+            ),
+            Self::CertbotTimerEnabled => (
+                "/usr/bin/systemctl",
+                &["is-enabled", "--quiet", "certbot.timer"],
+            ),
+            Self::CertbotTimerActive => (
+                "/usr/bin/systemctl",
+                &["is-active", "--quiet", "certbot.timer"],
             ),
         }
     }

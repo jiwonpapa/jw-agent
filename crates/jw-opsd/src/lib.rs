@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+mod certificate;
 mod config;
 mod digest;
 mod engine;

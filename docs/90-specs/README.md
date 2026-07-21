@@ -10,7 +10,7 @@ Last reviewed: 2026-07-21
 - [OPS-NGINX-SITE-STATE-V1](operations/nginx-site-state-set-v1.md) — Accepted, P2 active implementation
 - [OPS-PUBLIC-ACCESS-PROFILE-V1](operations/public-access-profile-v1.md) — Accepted
 - [OPS-MANAGED-CONFIG-FILE-V1](operations/managed-config-file-v1.md) — Accepted, Nginx active-resource implementation `VM_PASS`
-- [OPS-CERTBOT-CERTIFICATE-V1](operations/certbot-certificate-v1.md) — Accepted, blocked on managed Nginx gate
+- [OPS-CERTBOT-CERTIFICATE-V1](operations/certbot-certificate-v1.md) — Accepted, runner/inventory active; issuance blocked on operation fault gate
 
 ## Access specs
 

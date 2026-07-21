@@ -11,6 +11,9 @@ pub struct OpsPaths {
     pub checkpoint: PathBuf,
     pub nginx_available: PathBuf,
     pub nginx_enabled: PathBuf,
+    pub letsencrypt_live: PathBuf,
+    pub letsencrypt_archive: PathBuf,
+    pub letsencrypt_renewal: PathBuf,
     pub enforce_root_ownership: bool,
 }
 
@@ -24,6 +27,9 @@ impl Default for OpsPaths {
             checkpoint: state.join("ledger.checkpoint"),
             nginx_available: PathBuf::from("/etc/nginx/sites-available"),
             nginx_enabled: PathBuf::from("/etc/nginx/sites-enabled"),
+            letsencrypt_live: PathBuf::from("/etc/letsencrypt/live"),
+            letsencrypt_archive: PathBuf::from("/etc/letsencrypt/archive"),
+            letsencrypt_renewal: PathBuf::from("/etc/letsencrypt/renewal"),
             enforce_root_ownership: true,
         }
     }
@@ -41,6 +47,9 @@ impl OpsPaths {
             checkpoint: state.join("ledger.checkpoint"),
             nginx_available: root.join("etc/nginx/sites-available"),
             nginx_enabled: root.join("etc/nginx/sites-enabled"),
+            letsencrypt_live: root.join("etc/letsencrypt/live"),
+            letsencrypt_archive: root.join("etc/letsencrypt/archive"),
+            letsencrypt_renewal: root.join("etc/letsencrypt/renewal"),
             enforce_root_ownership: false,
         }
     }

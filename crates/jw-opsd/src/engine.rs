@@ -3,15 +3,16 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use jw_contracts::{
-    AssuranceLevel, AssuranceView, MANAGED_CONFIG_OPERATION, ManagedConfigApprovalIntent,
-    ManagedConfigPlanRequest, ManagedConfigPlanView, ManagedConfigResourceView,
-    NGINX_SITE_STATE_OPERATION, NginxSiteState, NginxSiteStatePlanRequest, OperationReceiptView,
-    OperationStage, OpsCapabilityResponse, OpsRejectedResponse, OpsRequest, OpsRequestBody,
-    OpsResponse, OpsResponseBody, Role, RollbackSupport, Subject,
-    nginx_enabled_state_digest as enabled_state_digest, sha256_digest,
+    AssuranceLevel, AssuranceView, CertificateInventoryView, MANAGED_CONFIG_OPERATION,
+    ManagedConfigApprovalIntent, ManagedConfigPlanRequest, ManagedConfigPlanView,
+    ManagedConfigResourceView, NGINX_SITE_STATE_OPERATION, NginxSiteState,
+    NginxSiteStatePlanRequest, OperationReceiptView, OperationStage, OpsCapabilityResponse,
+    OpsRejectedResponse, OpsRequest, OpsRequestBody, OpsResponse, OpsResponseBody, Role,
+    RollbackSupport, Subject, nginx_enabled_state_digest as enabled_state_digest, sha256_digest,
 };
 use serde::Serialize;
 
+use crate::certificate::certificate_inventory;
 use crate::config::{OpsPaths, OpsPolicy};
 use crate::digest::canonical_digest;
 use crate::error::OpsError;
@@ -165,6 +166,9 @@ impl OpsService {
     fn handle_body(&self, body: &OpsRequestBody, now_ms: i64) -> Result<OpsResponseBody, OpsError> {
         match body {
             OpsRequestBody::Capabilities => Ok(OpsResponseBody::Capabilities(self.capabilities())),
+            OpsRequestBody::CertificateInventory { .. } => self
+                .certificate_inventory(now_ms)
+                .map(OpsResponseBody::CertificateInventory),
             OpsRequestBody::ReadManagedConfig { actor, resource_id } => {
                 require_operator(actor)?;
                 self.read_managed_config(resource_id)
@@ -282,6 +286,10 @@ impl OpsService {
         resource_id: &str,
     ) -> Result<ManagedConfigResourceView, OpsError> {
         discover_managed_config(&self.paths, resource_id)?.view(managed_config_assurance())
+    }
+
+    fn certificate_inventory(&self, now_ms: i64) -> Result<CertificateInventoryView, OpsError> {
+        certificate_inventory(&self.paths, self.runner.as_ref(), now_ms)
     }
 
     fn plan_managed_config(

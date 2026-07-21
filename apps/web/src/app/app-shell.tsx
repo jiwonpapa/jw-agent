@@ -2,6 +2,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useRouter } from "@tanstack/react-router";
 import {
   Activity,
+  BadgeCheck,
   GlobeLock,
   LogOut,
   Menu,
@@ -24,6 +25,7 @@ import { StatusMark } from "../shared/ui/status-mark";
 const navigationIcons = {
   overview: Activity,
   nginx: Server,
+  certificates: BadgeCheck,
   integrations: PackageSearch,
   access: ShieldCheck,
 } as const;

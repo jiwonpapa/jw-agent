@@ -1,3 +1,11 @@
+jw-agent (0.2.0~p2.4) noble; urgency=medium
+
+  * Add sanitized Certbot lineage and renewal timer inventory.
+  * Validate archive targets and expose SAN, expiry, and fingerprint only.
+  * Add a responsive read-only certificate lifecycle screen.
+
+ -- JW Agent Maintainers <maintainers@example.invalid>  Tue, 21 Jul 2026 22:30:00 +0900
+
 jw-agent (0.2.0~p2.3) noble; urgency=medium
 
   * Add a root-only one-shot Certbot network runner boundary.

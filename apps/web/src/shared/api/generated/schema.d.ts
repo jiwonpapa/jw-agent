@@ -84,6 +84,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/certificates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["certificates"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/config-resources/{resource_id}": {
         parameters: {
             query?: never;
@@ -344,6 +360,30 @@ export interface components {
             opsd: components["schemas"]["CapabilityStatus"];
             readOnly: boolean;
             supportedOperations: string[];
+        };
+        CertificateInventoryView: {
+            assurance: components["schemas"]["AssuranceView"];
+            certbotInstalled: boolean;
+            certificates: components["schemas"]["CertificateSummaryView"][];
+            inventoryDigest: string;
+            issueOperationType?: string | null;
+            observedAt: string;
+            problems: string[];
+            renewTestOperationType?: string | null;
+            /** Format: int32 */
+            schemaVersion: number;
+            timerActive: boolean;
+            timerEnabled: boolean;
+        };
+        CertificateSummaryView: {
+            certificatePath: string;
+            fingerprintSha256: string;
+            notAfter: string;
+            primaryDomain: string;
+            privateKeyPresent: boolean;
+            renewalConfigPresent: boolean;
+            sans: string[];
+            webrootManaged: boolean;
         };
         DiskObservation: {
             /** Format: int64 */
@@ -851,6 +891,44 @@ export interface operations {
             };
             /** @description Authentication required */
             401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    certificates: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Sanitized Certbot certificate inventory */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CertificateInventoryView"];
+                };
+            };
+            /** @description Authentication required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Certificate inventory unavailable */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

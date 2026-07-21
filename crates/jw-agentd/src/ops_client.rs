@@ -4,10 +4,11 @@ use std::pin::Pin;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use jw_contracts::{
-    IPC_PROTOCOL_VERSION, ManagedConfigApprovalIntent, ManagedConfigPlanRequest,
-    ManagedConfigPlanView, ManagedConfigResourceView, NginxSiteStatePlanRequest,
-    NginxSiteStatePlanView, OPS_FRAME_MAX_BYTES, OperationReceiptView, OpsCapabilityResponse,
-    OpsRequest, OpsRequestBody, OpsResponse, OpsResponseBody, Subject, decode_frame, encode_frame,
+    CertificateInventoryView, IPC_PROTOCOL_VERSION, ManagedConfigApprovalIntent,
+    ManagedConfigPlanRequest, ManagedConfigPlanView, ManagedConfigResourceView,
+    NginxSiteStatePlanRequest, NginxSiteStatePlanView, OPS_FRAME_MAX_BYTES, OperationReceiptView,
+    OpsCapabilityResponse, OpsRequest, OpsRequestBody, OpsResponse, OpsResponseBody, Subject,
+    decode_frame, encode_frame,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixStream;
@@ -24,6 +25,11 @@ pub type OpsFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, OpsBrokerError
 
 pub trait OpsBroker: Send + Sync {
     fn capabilities<'a>(&'a self) -> OpsFuture<'a, OpsCapabilityResponse>;
+
+    fn certificate_inventory<'a>(
+        &'a self,
+        actor: Subject,
+    ) -> OpsFuture<'a, CertificateInventoryView>;
 
     fn read_managed_config<'a>(
         &'a self,
@@ -115,6 +121,21 @@ impl OpsBroker for UdsOpsBroker {
                 return Err(OpsBrokerError::InvalidResponse);
             };
             Ok(capabilities)
+        })
+    }
+
+    fn certificate_inventory<'a>(
+        &'a self,
+        actor: Subject,
+    ) -> OpsFuture<'a, CertificateInventoryView> {
+        Box::pin(async move {
+            let body = self
+                .request(OpsRequestBody::CertificateInventory { actor })
+                .await?;
+            let OpsResponseBody::CertificateInventory(inventory) = body else {
+                return Err(OpsBrokerError::InvalidResponse);
+            };
+            Ok(inventory)
         })
     }
 

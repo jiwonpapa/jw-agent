@@ -477,6 +477,9 @@ pub struct OpsRequest {
 )]
 pub enum OpsRequestBody {
     Capabilities,
+    CertificateInventory {
+        actor: Subject,
+    },
     ReadManagedConfig {
         actor: Subject,
         resource_id: String,
@@ -523,6 +526,7 @@ impl OpsRequest {
         }
         match &self.body {
             OpsRequestBody::Capabilities => Ok(()),
+            OpsRequestBody::CertificateInventory { .. } => Ok(()),
             OpsRequestBody::ReadManagedConfig { resource_id, .. } => {
                 validate_identifier(resource_id, "ngc_", "resource_id")
             }
@@ -574,6 +578,7 @@ pub struct OpsResponse {
 )]
 pub enum OpsResponseBody {
     Capabilities(OpsCapabilityResponse),
+    CertificateInventory(crate::CertificateInventoryView),
     ManagedConfigResource(ManagedConfigResourceView),
     NginxSiteStatePlan(NginxSiteStatePlanView),
     ManagedConfigPlan(ManagedConfigPlanView),

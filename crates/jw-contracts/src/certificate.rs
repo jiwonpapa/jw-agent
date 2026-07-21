@@ -1,13 +1,14 @@
 use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
 
-use crate::IPC_PROTOCOL_VERSION;
+use crate::{AssuranceView, IPC_PROTOCOL_VERSION};
 
 pub const CERT_FRAME_MAX_BYTES: usize = 16 * 1_024;
 pub const CERTBOT_ISSUE_OPERATION: &str = "certbot.certificate.issue/v1";
 pub const CERTBOT_RENEW_TEST_OPERATION: &str = "certbot.certificate.renew_test/v1";
 pub const CERTBOT_MAX_DOMAINS: usize = 5;
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum CertificateEnvironment {
     Staging,
@@ -128,6 +129,35 @@ pub struct CertbotCommandResponse {
 pub enum CertbotCommandResult {
     Completed(CertbotCommandEvidence),
     Rejected { code: String },
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CertificateSummaryView {
+    pub primary_domain: String,
+    pub sans: Vec<String>,
+    pub not_after: String,
+    pub fingerprint_sha256: String,
+    pub certificate_path: String,
+    pub private_key_present: bool,
+    pub renewal_config_present: bool,
+    pub webroot_managed: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CertificateInventoryView {
+    pub schema_version: u16,
+    pub observed_at: String,
+    pub certbot_installed: bool,
+    pub timer_enabled: bool,
+    pub timer_active: bool,
+    pub inventory_digest: String,
+    pub certificates: Vec<CertificateSummaryView>,
+    pub problems: Vec<String>,
+    pub issue_operation_type: Option<String>,
+    pub renew_test_operation_type: Option<String>,
+    pub assurance: AssuranceView,
 }
 
 #[must_use]

@@ -529,6 +529,105 @@ printf '%s' "$renew" | grep -Fq '"stderrDigest":"sha256:'
     require_success(&result, "Certbot runner boundary", false)
 }
 
+pub fn gate_p2_certificate_inventory(_root: &Path, timeout: Duration) -> Result<(), String> {
+    let config = VmConfig::load()?;
+    let password = read_secret(&config.password_file)?;
+    let cleanup = r#"sudo sh -eu -c '
+rm -rf /etc/letsencrypt/live/jw-agent-p1.test /etc/letsencrypt/archive/jw-agent-p1.test
+rm -f /etc/letsencrypt/renewal/jw-agent-p1.test.conf
+'"#;
+    let before = config.ssh(cleanup, None, timeout)?;
+    require_success(&before, "certificate inventory fixture cleanup", false)?;
+    let result = (|| {
+        let setup = r#"sudo sh -eu -c '
+mkdir -p /etc/letsencrypt/live/jw-agent-p1.test /etc/letsencrypt/archive/jw-agent-p1.test /etc/letsencrypt/renewal
+install -o root -g root -m 0644 /etc/jw-agent/tls/server.crt /etc/letsencrypt/archive/jw-agent-p1.test/cert1.pem
+install -o root -g root -m 0644 /etc/jw-agent/tls/server.crt /etc/letsencrypt/archive/jw-agent-p1.test/chain1.pem
+install -o root -g root -m 0644 /etc/jw-agent/tls/server.crt /etc/letsencrypt/archive/jw-agent-p1.test/fullchain1.pem
+install -o root -g root -m 0600 /etc/jw-agent/tls/server.key /etc/letsencrypt/archive/jw-agent-p1.test/privkey1.pem
+ln -s ../../archive/jw-agent-p1.test/cert1.pem /etc/letsencrypt/live/jw-agent-p1.test/cert.pem
+ln -s ../../archive/jw-agent-p1.test/chain1.pem /etc/letsencrypt/live/jw-agent-p1.test/chain.pem
+ln -s ../../archive/jw-agent-p1.test/fullchain1.pem /etc/letsencrypt/live/jw-agent-p1.test/fullchain.pem
+ln -s ../../archive/jw-agent-p1.test/privkey1.pem /etc/letsencrypt/live/jw-agent-p1.test/privkey.pem
+printf "%s\n" "version = 2.9.0" "archive_dir = /etc/letsencrypt/archive/jw-agent-p1.test" "cert = /etc/letsencrypt/live/jw-agent-p1.test/cert.pem" "privkey = /etc/letsencrypt/live/jw-agent-p1.test/privkey.pem" "chain = /etc/letsencrypt/live/jw-agent-p1.test/chain.pem" "fullchain = /etc/letsencrypt/live/jw-agent-p1.test/fullchain.pem" "[renewalparams]" "authenticator = webroot" "webroot_path = /var/lib/jw-agent/acme-webroot" > /etc/letsencrypt/renewal/jw-agent-p1.test.conf
+chmod 0600 /etc/letsencrypt/renewal/jw-agent-p1.test.conf
+'"#;
+        let installed = config.ssh(setup, None, timeout)?;
+        require_success(&installed, "certificate inventory fixture install", false)?;
+        let restarted = config.ssh(
+            "sudo systemctl restart jw-opsd.service jw-agentd.service",
+            None,
+            timeout,
+        )?;
+        require_success(&restarted, "certificate inventory service restart", false)?;
+        let session = P2ApiSession::login(&config, &password, timeout)?;
+        let inventory = session.get(&config, "/api/v1/certificates", timeout)?;
+        expect_http(&inventory, 200, "certificate inventory")?;
+        for expected in [
+            "\"primaryDomain\":\"jw-agent-p1.test\"",
+            "\"privateKeyPresent\":true",
+            "\"renewalConfigPresent\":true",
+            "\"webrootManaged\":true",
+            "\"timerEnabled\":true",
+            "\"timerActive\":true",
+            "\"fingerprintSha256\":\"sha256:",
+            "…/live/jw-agent-p1.test/fullchain.pem",
+        ] {
+            if !inventory.body.contains(expected) {
+                return Err(format!("certificate inventory omitted {expected}"));
+            }
+        }
+        for forbidden in ["/etc/letsencrypt", "BEGIN PRIVATE KEY", "server.key"] {
+            if inventory.body.contains(forbidden) {
+                return Err(format!("certificate inventory exposed {forbidden}"));
+            }
+        }
+        let escaped = config.ssh(
+            "sudo ln -sfn /etc/passwd /etc/letsencrypt/live/jw-agent-p1.test/fullchain.pem",
+            None,
+            timeout,
+        )?;
+        require_success(&escaped, "certificate escaped target fixture", false)?;
+        let rejected = session.get(&config, "/api/v1/certificates", timeout)?;
+        expect_http(&rejected, 200, "certificate escaped target rejection")?;
+        if !rejected
+            .body
+            .contains("certificate_invalid:jw-agent-p1.test")
+            || rejected
+                .body
+                .contains("\"primaryDomain\":\"jw-agent-p1.test\"")
+            || rejected.body.contains("/etc/passwd")
+        {
+            return Err(String::from(
+                "escaped certificate target was not rejected without path disclosure",
+            ));
+        }
+        Ok(())
+    })();
+    let cleaned = config.ssh(cleanup, None, timeout);
+    match (result, cleaned) {
+        (Ok(()), Ok(cleanup_result)) => require_success(
+            &cleanup_result,
+            "certificate inventory fixture cleanup",
+            false,
+        ),
+        (Err(error), Ok(cleanup_result)) => match require_success(
+            &cleanup_result,
+            "certificate inventory fixture cleanup",
+            false,
+        ) {
+            Ok(()) => Err(error),
+            Err(cleanup_error) => Err(format!(
+                "{error}; certificate cleanup also failed: {cleanup_error}"
+            )),
+        },
+        (Ok(()), Err(cleanup_error)) => Err(cleanup_error),
+        (Err(error), Err(cleanup_error)) => Err(format!(
+            "{error}; certificate cleanup also failed: {cleanup_error}"
+        )),
+    }
+}
+
 pub fn gate_p2_managed_config(_root: &Path, timeout: Duration) -> Result<(), String> {
     let config = VmConfig::load()?;
     let password = read_secret(&config.password_file)?;

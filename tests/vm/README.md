@@ -1,6 +1,6 @@
 # Ubuntu 24.04 VM evidence matrix
 
-Status: P2B VM_PASS; P2C Certbot runner verification in progress  
+Status: P2B VM_PASS; P2C runner and inventory VM_PASS, issuance in progress  
 Authority: Delivery  
 Owner: Verification Maintainer  
 Last reviewed: 2026-07-21
@@ -25,26 +25,27 @@ JW_VM_PUBLIC_ADDRESS=192.168.0.142
 JW_VM_CA_CERT=/path/to/test-ca.crt
 JW_VM_ADMIN_USER=jwvmadmin
 JW_VM_PASSWORD_FILE=/path/to/mode-0600-fixture-password
-JW_VM_REMOTE_PACKAGE=/home/neojins/jw-agent_0.2.0~p2.3_amd64.deb
-JW_VM_EXPECTED_PACKAGE_SHA256=51352a295956992e7832344524bdbb7e6c342461839f46d4605a025307eedef7
-JW_VM_EXPECTED_VERSION=0.2.0~p2.3
+JW_VM_REMOTE_PACKAGE=/home/neojins/jw-agent_0.2.0~p2.4_amd64.deb
+JW_VM_EXPECTED_PACKAGE_SHA256=47d8e57718c15c8933fc10e7b00bed5b5111791378e8e1dbbff91039103de9db
+JW_VM_EXPECTED_VERSION=0.2.0~p2.4
 cargo xtask verify p2-vm
 ```
 
 ## Current VM evidence
 
 - domain: `jw-agent-p1`, Ubuntu 24.04.4 LTS, kernel `6.8.0-136-generic`
-- package: `jw-agent 0.2.0~p2.3`, SHA-256 `51352a295956992e7832344524bdbb7e6c342461839f46d4605a025307eedef7`, Lintian clean
-- lanes: `p2-local` 19 PASS, `p2-browser` 8 PASS with 19 browser scenarios, `p2-vm` 16 PASS
+- package: `jw-agent 0.2.0~p2.4`, SHA-256 `47d8e57718c15c8933fc10e7b00bed5b5111791378e8e1dbbff91039103de9db`, Lintian clean
+- lanes: `p2-local` 19 PASS, `p2-browser` 8 PASS with 20 browser scenarios, `p2-vm` 17 PASS
 - automated VM scenarios: installed PAM fixture equality, no `pam_faillock`, `jw-authd → libpam.so.0`, `jw-agentd → libsqlite3.so.0`, repeated product-login failures followed by unchanged Linux password state and working OpenSSH key recovery
 - automated P2 faults: success, verified no-op, syntax failure rollback, injected reload failure rollback, 1 MiB snapshot filesystem cancellation before apply, deleted checkpoint lockdown and restoration
 - automated P2B config faults: >16 KiB active save/no-op, exact syntax/reload rollback, external drift preservation, inactive denial, private proposal cleanup, internal temp discovery exclusion and startup cleanup
 - automated P2C boundary: Ubuntu Certbot 2.9.0, root-only socket, non-root denial, expired request rejection, digest-only renewal dry-run result, one-shot worker and private-config cleanup
+- automated P2C inventory: sanitized SAN·expiry·fingerprint, timer state, masked path, private-key non-disclosure, escaped symlink rejection
 - package runtime: opsd private network namespace, exact `CAP_NET_BIND_SERVICE`, ephemeral Nginx test logs, no listening IP socket, root-owned `0600` ledger, bounded UDS
 - real browser: public HTTPS editor, 24 KiB counter, planned-only warning, G2 scope/exclusions and custom-basename protected vhost; internal temp absent and authenticated fresh-session console error 0
 
 This is a private-LAN `.test` host with a dedicated test CA. The Certbot runner
-boundary is VM-proven, but issuance and local TLS attachment are not. This is
+boundary and read-only inventory are VM-proven, but issuance and local TLS attachment are not. This is
 not evidence of public DNS, public-CA issuance, signed release distribution, or production
 operation.
 
