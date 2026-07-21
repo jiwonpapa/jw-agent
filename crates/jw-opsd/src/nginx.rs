@@ -7,13 +7,14 @@ use std::path::{Path, PathBuf};
 
 use jw_contracts::{
     NGINX_LAYOUT_ID, NginxSiteState, nginx_enabled_state_digest as enabled_state_digest,
-    nginx_management_config, nginx_site_id as site_id, sha256_digest,
+    nginx_internal_temporary_name, nginx_management_config, nginx_site_id as site_id,
+    sha256_digest,
 };
 
 use crate::config::OpsPaths;
 use crate::error::OpsError;
 
-const AVAILABLE_FILE_MAX_BYTES: u64 = 1024 * 1024;
+pub(crate) const AVAILABLE_FILE_MAX_BYTES: u64 = 1024 * 1024;
 const MANAGEMENT_SITE: &str = "jw-agent-management.conf";
 pub(crate) const NGINX_IMPACT: [&str; 2] = [
     "Nginx enabled symlink 상태가 변경됩니다.",
@@ -43,17 +44,20 @@ pub fn discover_site(paths: &OpsPaths, requested_site_id: &str) -> Result<NginxS
     for entry_result in entries {
         let entry = entry_result.map_err(|error| OpsError::Filesystem(error.to_string()))?;
         let basename = safe_basename(&entry.file_name())?;
+        if nginx_internal_temporary_name(&basename) {
+            continue;
+        }
         let candidate_id = site_id(NGINX_LAYOUT_ID, &basename);
         if candidate_id != requested_site_id {
             continue;
         }
-        let (available_digest, metadata, management_config) = read_available(paths, &basename)?;
+        let (bytes, metadata, management_config) = read_available_content(paths, &basename)?;
         validate_available_metadata(&metadata, paths.enforce_root_ownership)?;
         let enabled = read_enabled(paths, &basename, &entry.path())?;
         return Ok(NginxSite {
             site_id: candidate_id,
             basename: basename.clone(),
-            available_digest,
+            available_digest: sha256_digest(&bytes),
             enabled_state_digest: enabled_state_digest(enabled),
             state: if enabled {
                 NginxSiteState::Enabled
@@ -90,7 +94,10 @@ pub fn set_enabled(paths: &OpsPaths, site: &NginxSite, enabled: bool) -> Result<
     }
 }
 
-fn read_available(paths: &OpsPaths, basename: &str) -> Result<(String, Metadata, bool), OpsError> {
+pub(crate) fn read_available_content(
+    paths: &OpsPaths,
+    basename: &str,
+) -> Result<(Vec<u8>, Metadata, bool), OpsError> {
     #[cfg(target_os = "linux")]
     let mut file = open_available_linux(&paths.nginx_available, basename)?;
 
@@ -110,7 +117,7 @@ fn read_available(paths: &OpsPaths, basename: &str) -> Result<(String, Metadata,
     file.read_to_end(&mut bytes)
         .map_err(|error| OpsError::Filesystem(error.to_string()))?;
     let protected = nginx_management_config(&bytes);
-    Ok((sha256_digest(&bytes), metadata, protected))
+    Ok((bytes, metadata, protected))
 }
 
 #[cfg(target_os = "linux")]
@@ -152,7 +159,7 @@ fn read_enabled(paths: &OpsPaths, basename: &str, available: &Path) -> Result<bo
     }
 }
 
-fn validate_root(root: &Path, enforce_root_ownership: bool) -> Result<(), OpsError> {
+pub(crate) fn validate_root(root: &Path, enforce_root_ownership: bool) -> Result<(), OpsError> {
     let metadata = std::fs::symlink_metadata(root)
         .map_err(|_| OpsError::Rejected("unsupported_nginx_layout"))?;
     if !metadata.is_dir() || metadata.file_type().is_symlink() {
@@ -165,7 +172,7 @@ fn validate_root(root: &Path, enforce_root_ownership: bool) -> Result<(), OpsErr
     Ok(())
 }
 
-fn validate_available_metadata(
+pub(crate) fn validate_available_metadata(
     metadata: &Metadata,
     enforce_root_ownership: bool,
 ) -> Result<(), OpsError> {
@@ -184,7 +191,7 @@ fn validate_available_metadata(
     Ok(())
 }
 
-fn safe_basename(value: &OsStr) -> Result<String, OpsError> {
+pub(crate) fn safe_basename(value: &OsStr) -> Result<String, OpsError> {
     let basename = value
         .to_str()
         .ok_or(OpsError::Rejected("site_name_not_utf8"))?;

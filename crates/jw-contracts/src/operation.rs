@@ -2,12 +2,16 @@ use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::fmt;
 use utoipa::ToSchema;
 
 use crate::{AssuranceView, Subject};
 
 pub const NGINX_SITE_STATE_OPERATION: &str = "nginx.site_state.set/v1";
 pub const NGINX_LAYOUT_ID: &str = "ubuntu-nginx-sites-v1";
+pub const MANAGED_CONFIG_OPERATION: &str = "service.config_file.set/v1";
+pub const NGINX_CONFIG_ADAPTER_ID: &str = "nginx/ubuntu-standard-v1";
+pub const MANAGED_CONFIG_MAX_BYTES: usize = 24 * 1_024;
 pub const NGINX_MANAGEMENT_MARKER: &[u8] = b"jw-agent:protected-management-v1";
 pub const NGINX_MANAGEMENT_PROXY_INCLUDE: &[u8] =
     b"include /usr/share/jw-agent/nginx/proxy-common.conf;";
@@ -18,6 +22,25 @@ pub const DIGEST_BYTES: usize = 71;
 pub const PLAN_ID_MAX_BYTES: usize = 64;
 pub const OPERATION_ID_MAX_BYTES: usize = 64;
 const SITE_ID_BYTES: usize = 18;
+const CONFIG_RESOURCE_ID_BYTES: usize = 18;
+
+#[must_use]
+pub fn nginx_internal_temporary_name(value: &str) -> bool {
+    value
+        .strip_prefix(".jw-agent-")
+        .and_then(|name| name.strip_suffix(".tmp"))
+        .is_some_and(|suffix| {
+            suffix.len() == 16 && suffix.bytes().all(|byte| byte.is_ascii_hexdigit())
+        })
+}
+
+#[must_use]
+pub fn managed_config_bytes_supported(value: &[u8]) -> bool {
+    std::str::from_utf8(value).is_ok()
+        && value
+            .iter()
+            .all(|byte| !byte.is_ascii_control() || matches!(*byte, b'\n' | b'\r' | b'\t'))
+}
 
 #[must_use]
 pub fn nginx_management_config(bytes: &[u8]) -> bool {
@@ -37,6 +60,19 @@ pub fn nginx_site_id(layout_id: &str, basename: &str) -> String {
     hasher.update(basename.as_bytes());
     let digest = hasher.finalize();
     format!("ngs_{}", URL_SAFE_NO_PAD.encode(&digest[..SITE_ID_BYTES]))
+}
+
+#[must_use]
+pub fn nginx_config_resource_id(adapter_id: &str, basename: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(adapter_id.as_bytes());
+    hasher.update([0]);
+    hasher.update(basename.as_bytes());
+    let digest = hasher.finalize();
+    format!(
+        "ngc_{}",
+        URL_SAFE_NO_PAD.encode(&digest[..CONFIG_RESOURCE_ID_BYTES])
+    )
 }
 
 #[must_use]
@@ -158,6 +194,175 @@ impl NginxSiteStatePlanRequest {
     }
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ServiceAction {
+    Reload,
+    Restart,
+}
+
+impl ServiceAction {
+    #[must_use]
+    pub const fn as_storage_value(self) -> &'static str {
+        match self {
+            Self::Reload => "reload",
+            Self::Restart => "restart",
+        }
+    }
+}
+
+#[derive(Clone, Deserialize, Eq, PartialEq, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ManagedConfigPlanRequest {
+    pub schema_version: u16,
+    pub operation_type: String,
+    pub resource_id: String,
+    pub expected_content_digest: String,
+    pub expected_metadata_digest: String,
+    #[schema(max_length = 24576)]
+    pub proposed_content: String,
+    pub service_action: ServiceAction,
+    pub idempotency_key: String,
+}
+
+impl fmt::Debug for ManagedConfigPlanRequest {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ManagedConfigPlanRequest")
+            .field("schema_version", &self.schema_version)
+            .field("operation_type", &self.operation_type)
+            .field("resource_id", &self.resource_id)
+            .field("expected_content_digest", &self.expected_content_digest)
+            .field("expected_metadata_digest", &self.expected_metadata_digest)
+            .field("proposed_content", &"[REDACTED]")
+            .field("service_action", &self.service_action)
+            .field("idempotency_key", &self.idempotency_key)
+            .finish()
+    }
+}
+
+impl ManagedConfigPlanRequest {
+    pub fn validate(&self) -> Result<(), &'static str> {
+        if self.schema_version != OPERATION_SCHEMA_VERSION {
+            return Err("schema_version");
+        }
+        if self.operation_type != MANAGED_CONFIG_OPERATION {
+            return Err("operation_type");
+        }
+        validate_identifier(&self.resource_id, "ngc_", "resource_id")?;
+        validate_digest(&self.expected_content_digest)?;
+        validate_digest(&self.expected_metadata_digest)?;
+        if self.proposed_content.len() > MANAGED_CONFIG_MAX_BYTES {
+            return Err("size_limit");
+        }
+        if !managed_config_bytes_supported(self.proposed_content.as_bytes()) {
+            return Err("invalid_encoding");
+        }
+        if nginx_management_config(self.proposed_content.as_bytes()) {
+            return Err("protected_content");
+        }
+        if self.service_action != ServiceAction::Reload {
+            return Err("unsupported_service_action");
+        }
+        validate_ascii_range(
+            &self.idempotency_key,
+            IDEMPOTENCY_KEY_MIN_BYTES,
+            IDEMPOTENCY_KEY_MAX_BYTES,
+            "idempotency_key",
+        )
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ManagedConfigApprovalIntent {
+    pub validation_confirmed: bool,
+    pub service_action_confirmed: bool,
+}
+
+impl ManagedConfigApprovalIntent {
+    pub fn validate(&self) -> Result<(), &'static str> {
+        if self.validation_confirmed && self.service_action_confirmed {
+            Ok(())
+        } else {
+            Err("approval_intent")
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ManagedConfigApprovalRequest {
+    pub schema_version: u16,
+    pub plan_id: String,
+    pub plan_hash: String,
+    pub idempotency_key: String,
+    #[schema(format = Password)]
+    pub reauth_token: String,
+    #[schema(format = Password)]
+    pub additional_auth_claim: Option<String>,
+    pub approval_intent: ManagedConfigApprovalIntent,
+}
+
+impl ManagedConfigApprovalRequest {
+    pub fn validate_shape(&self) -> Result<(), &'static str> {
+        OperationApprovalRequest {
+            schema_version: self.schema_version,
+            plan_id: self.plan_id.clone(),
+            plan_hash: self.plan_hash.clone(),
+            idempotency_key: self.idempotency_key.clone(),
+            reauth_token: self.reauth_token.clone(),
+            additional_auth_claim: self.additional_auth_claim.clone(),
+        }
+        .validate_shape()?;
+        self.approval_intent.validate()
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ManagedConfigResourceView {
+    pub schema_version: u16,
+    pub adapter_id: String,
+    pub resource_id: String,
+    pub display_name: String,
+    pub masked_path: String,
+    pub content: String,
+    pub content_digest: String,
+    pub metadata_digest: String,
+    pub max_bytes: u32,
+    pub allowed_service_actions: Vec<ServiceAction>,
+    pub assurance: AssuranceView,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ManagedConfigPlanView {
+    pub schema_version: u16,
+    pub operation_type: String,
+    pub plan_id: String,
+    pub plan_hash: String,
+    pub created_at: String,
+    pub expires_at: String,
+    pub actor: Subject,
+    pub adapter_id: String,
+    pub resource_id: String,
+    pub display_name: String,
+    pub masked_path: String,
+    pub current_content_digest: String,
+    pub proposed_content_digest: String,
+    pub metadata_digest: String,
+    pub current_bytes: u32,
+    pub proposed_bytes: u32,
+    pub added_lines: u32,
+    pub removed_lines: u32,
+    pub diff_summary: Vec<String>,
+    pub service_action: ServiceAction,
+    pub impact: Vec<String>,
+    pub recovery_path: Vec<String>,
+    pub assurance: AssuranceView,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct OperationApprovalRequest {
@@ -272,6 +477,10 @@ pub struct OpsRequest {
 )]
 pub enum OpsRequestBody {
     Capabilities,
+    ReadManagedConfig {
+        actor: Subject,
+        resource_id: String,
+    },
     PlanNginxSiteState {
         actor: Subject,
         plan: NginxSiteStatePlanRequest,
@@ -281,6 +490,17 @@ pub enum OpsRequestBody {
         plan_id: String,
         plan_hash: String,
         idempotency_key: String,
+    },
+    PlanManagedConfig {
+        actor: Subject,
+        plan: ManagedConfigPlanRequest,
+    },
+    ApproveManagedConfig {
+        actor: Subject,
+        plan_id: String,
+        plan_hash: String,
+        idempotency_key: String,
+        approval_intent: ManagedConfigApprovalIntent,
     },
     ExecuteOperation {
         actor: Subject,
@@ -303,8 +523,18 @@ impl OpsRequest {
         }
         match &self.body {
             OpsRequestBody::Capabilities => Ok(()),
+            OpsRequestBody::ReadManagedConfig { resource_id, .. } => {
+                validate_identifier(resource_id, "ngc_", "resource_id")
+            }
             OpsRequestBody::PlanNginxSiteState { plan, .. } => plan.validate(),
+            OpsRequestBody::PlanManagedConfig { plan, .. } => plan.validate(),
             OpsRequestBody::ApproveNginxSiteState {
+                plan_id,
+                plan_hash,
+                idempotency_key,
+                ..
+            }
+            | OpsRequestBody::ApproveManagedConfig {
                 plan_id,
                 plan_hash,
                 idempotency_key,
@@ -344,7 +574,9 @@ pub struct OpsResponse {
 )]
 pub enum OpsResponseBody {
     Capabilities(OpsCapabilityResponse),
+    ManagedConfigResource(ManagedConfigResourceView),
     NginxSiteStatePlan(NginxSiteStatePlanView),
+    ManagedConfigPlan(ManagedConfigPlanView),
     OperationReceipt(OperationReceiptView),
     Rejected(OpsRejectedResponse),
 }
@@ -411,9 +643,11 @@ fn validate_ascii_range(
 #[cfg(test)]
 mod tests {
     use super::{
-        NGINX_LAYOUT_ID, NGINX_SITE_STATE_OPERATION, NginxSiteState, NginxSiteStatePlanRequest,
-        OPERATION_SCHEMA_VERSION, OperationStage, nginx_enabled_state_digest,
-        nginx_management_config, nginx_site_id, validate_digest,
+        MANAGED_CONFIG_OPERATION, ManagedConfigApprovalIntent, ManagedConfigPlanRequest,
+        NGINX_CONFIG_ADAPTER_ID, NGINX_LAYOUT_ID, NGINX_SITE_STATE_OPERATION, NginxSiteState,
+        NginxSiteStatePlanRequest, OPERATION_SCHEMA_VERSION, OperationStage, ServiceAction,
+        nginx_config_resource_id, nginx_enabled_state_digest, nginx_management_config,
+        nginx_site_id, validate_digest,
     };
 
     #[test]
@@ -432,6 +666,26 @@ mod tests {
             b"server { include /usr/share/jw-agent/nginx/proxy-common.conf; }\n"
         ));
         assert!(!nginx_management_config(b"server {}\n"));
+    }
+
+    #[test]
+    fn internal_temporary_name_is_exact_and_not_a_site() {
+        assert!(super::nginx_internal_temporary_name(
+            ".jw-agent-0123456789abcdef.tmp"
+        ));
+        assert!(!super::nginx_internal_temporary_name(
+            ".jw-agent-example.com.tmp"
+        ));
+        assert!(!super::nginx_internal_temporary_name("example.com"));
+    }
+
+    #[test]
+    fn managed_config_text_allows_layout_whitespace_but_rejects_controls() {
+        assert!(super::managed_config_bytes_supported(
+            b"server {\n\tlisten 80;\r\n}\n"
+        ));
+        assert!(!super::managed_config_bytes_supported(b"server {}\x07\n"));
+        assert!(!super::managed_config_bytes_supported(&[0xff]))
     }
 
     #[test]
@@ -468,6 +722,50 @@ mod tests {
         assert_eq!(
             nginx_enabled_state_digest(false),
             "sha256:601cad563455d69a3920b52c6936bb25fc48876bb62255b09b549b823bf0550c"
+        );
+    }
+
+    #[test]
+    fn managed_config_request_is_typed_bounded_and_debug_redacted() {
+        let mut request = ManagedConfigPlanRequest {
+            schema_version: OPERATION_SCHEMA_VERSION,
+            operation_type: String::from(MANAGED_CONFIG_OPERATION),
+            resource_id: nginx_config_resource_id(NGINX_CONFIG_ADAPTER_ID, "example.com"),
+            expected_content_digest: valid_digest(),
+            expected_metadata_digest: valid_digest(),
+            proposed_content: String::from("server { listen 8080; }\n"),
+            service_action: ServiceAction::Reload,
+            idempotency_key: String::from("managed-key-0001"),
+        };
+        assert!(request.validate().is_ok());
+        let rendered = format!("{request:?}");
+        assert!(rendered.contains("[REDACTED]"));
+        assert!(!rendered.contains("listen 8080"));
+
+        request.service_action = ServiceAction::Restart;
+        assert_eq!(request.validate(), Err("unsupported_service_action"));
+        request.service_action = ServiceAction::Reload;
+        request.proposed_content = String::from("# jw-agent:protected-management-v1\n");
+        assert_eq!(request.validate(), Err("protected_content"));
+    }
+
+    #[test]
+    fn managed_config_approval_requires_both_explicit_intents() {
+        assert_eq!(
+            ManagedConfigApprovalIntent {
+                validation_confirmed: true,
+                service_action_confirmed: false,
+            }
+            .validate(),
+            Err("approval_intent")
+        );
+        assert!(
+            ManagedConfigApprovalIntent {
+                validation_confirmed: true,
+                service_action_confirmed: true,
+            }
+            .validate()
+            .is_ok()
         );
     }
 

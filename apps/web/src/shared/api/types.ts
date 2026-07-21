@@ -11,12 +11,18 @@ export type NginxSiteState = components["schemas"]["NginxSiteState"];
 export type NginxSiteStatePlanRequest =
   components["schemas"]["NginxSiteStatePlanRequest"];
 export type NginxSiteStatePlanView = components["schemas"]["NginxSiteStatePlanView"];
+export type ManagedConfigResourceView = components["schemas"]["ManagedConfigResourceView"];
+export type ManagedConfigPlanRequest = components["schemas"]["ManagedConfigPlanRequest"];
+export type ManagedConfigPlanView = components["schemas"]["ManagedConfigPlanView"];
+export type ManagedConfigApprovalRequest =
+  components["schemas"]["ManagedConfigApprovalRequest"];
 export type OperationApprovalRequest = components["schemas"]["OperationApprovalRequest"];
 export type OperationAcceptedView = components["schemas"]["OperationAcceptedView"];
 export type OperationReceiptView = components["schemas"]["OperationReceiptView"];
 export type OperationStage = components["schemas"]["OperationStage"];
 export type OperationStageEvidenceView =
   components["schemas"]["OperationStageEvidenceView"];
+export type ServiceAction = components["schemas"]["ServiceAction"];
 export type AccessSettingsView = components["schemas"]["AccessSettingsView"];
 export type AdditionalAuthPolicy = components["schemas"]["AdditionalAuthPolicy"];
 export type AdditionalAuthProviderStatus =

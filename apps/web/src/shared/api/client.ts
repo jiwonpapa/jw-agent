@@ -9,6 +9,10 @@ import type {
   HealthView,
   HostObservation,
   IntegrationCatalogView,
+  ManagedConfigApprovalRequest,
+  ManagedConfigPlanRequest,
+  ManagedConfigPlanView,
+  ManagedConfigResourceView,
   NginxSiteStatePlanRequest,
   NginxSiteStatePlanView,
   NginxSitesView,
@@ -121,6 +125,46 @@ export async function planNginxSiteState(
 ): Promise<NginxSiteStatePlanView> {
   const { data, error, response } = await api.POST(
     "/api/v1/operations/nginx/site-state/plans",
+    {
+      body: input,
+      headers: mutationHeaders(),
+    },
+  );
+  if (data !== undefined) return data;
+  throw new ApiError(error, response);
+}
+
+export async function getManagedConfigResource(
+  resourceId: string,
+  signal?: AbortSignal,
+): Promise<ManagedConfigResourceView> {
+  const { data, error, response } = await api.GET("/api/v1/config-resources/{resource_id}", {
+    params: { path: { resource_id: resourceId } },
+    signal: signal ?? null,
+  });
+  if (data !== undefined) return data;
+  throw new ApiError(error, response);
+}
+
+export async function planManagedConfig(
+  input: ManagedConfigPlanRequest,
+): Promise<ManagedConfigPlanView> {
+  const { data, error, response } = await api.POST(
+    "/api/v1/operations/service/config-file/plans",
+    {
+      body: input,
+      headers: mutationHeaders(),
+    },
+  );
+  if (data !== undefined) return data;
+  throw new ApiError(error, response);
+}
+
+export async function approveManagedConfig(
+  input: ManagedConfigApprovalRequest,
+): Promise<OperationAcceptedView> {
+  const { data, error, response } = await api.POST(
+    "/api/v1/operations/service/config-file/approvals",
     {
       body: input,
       headers: mutationHeaders(),

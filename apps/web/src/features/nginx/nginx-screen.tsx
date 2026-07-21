@@ -3,6 +3,7 @@ import {
   ArrowRight,
   CheckCircle2,
   CircleDot,
+  FilePenLine,
   FileLock2,
   Info,
   KeyRound,
@@ -17,14 +18,19 @@ import { useEffect, useMemo, useRef, useState, type SyntheticEvent } from "react
 
 import {
   ApiError,
+  approveManagedConfig,
   approveNginxSiteState,
+  getManagedConfigResource,
   getOperationReceipt,
   planNginxSiteState,
+  planManagedConfig,
   reauthenticateForOperation,
   watchOperationEvents,
 } from "../../shared/api/client";
 import { nginxSitesQueryOptions, queryKeys } from "../../shared/api/queries";
 import type {
+  ManagedConfigPlanView,
+  ManagedConfigResourceView,
   NginxSiteObservation,
   NginxSiteState,
   NginxSiteStatePlanView,
@@ -56,6 +62,9 @@ interface NginxRowView {
   enabledStateDigest: string | null;
   operationType: string | null;
   operationSchemaVersion: number | null;
+  managedConfigResourceId: string | null;
+  managedConfigOperationType: string | null;
+  managedConfigSchemaVersion: number | null;
   assurance: NginxSiteObservation["assurance"];
 }
 
@@ -91,6 +100,9 @@ function toRow(site: NginxSiteObservation): NginxRowView {
     enabledStateDigest: site.enabledStateDigest ?? null,
     operationType: site.operationType ?? null,
     operationSchemaVersion: site.operationSchemaVersion ?? null,
+    managedConfigResourceId: site.managedConfigResourceId ?? null,
+    managedConfigOperationType: site.managedConfigOperationType ?? null,
+    managedConfigSchemaVersion: site.managedConfigSchemaVersion ?? null,
     assurance: site.assurance,
   };
 }
@@ -105,6 +117,11 @@ export function NginxScreen() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const [plan, setPlan] = useState<NginxSiteStatePlanView | null>(null);
+  const [configResource, setConfigResource] = useState<ManagedConfigResourceView | null>(null);
+  const [configPlan, setConfigPlan] = useState<ManagedConfigPlanView | null>(null);
+  const [configDraft, setConfigDraft] = useState("");
+  const [configMode, setConfigMode] = useState(false);
+  const [loadingConfig, setLoadingConfig] = useState(false);
   const [accepted, setAccepted] = useState<OperationAcceptedView | null>(null);
   const [receipt, setReceipt] = useState<OperationReceiptView | null>(null);
   const [planning, setPlanning] = useState(false);
@@ -156,12 +173,106 @@ export function NginxScreen() {
   function inspect(row: NginxRowView): void {
     setSelectedId(row.id);
     setPlan(null);
+    setConfigResource(null);
+    setConfigPlan(null);
+    setConfigDraft("");
+    setConfigMode(false);
     setAccepted(null);
     setReceipt(null);
     setErrorMessage(null);
     approvalKey.current = null;
     requestInFlight.current = false;
     setInspectorOpen(true);
+  }
+
+  async function openConfigEditor(row: NginxRowView): Promise<void> {
+    if (requestInFlight.current || !canEditConfig(row)) return;
+    requestInFlight.current = true;
+    setLoadingConfig(true);
+    setErrorMessage(null);
+    setAccepted(null);
+    setReceipt(null);
+    try {
+      const resource = await getManagedConfigResource(row.managedConfigResourceId);
+      setConfigResource(resource);
+      setConfigDraft(resource.content);
+      setConfigPlan(null);
+      setConfigMode(true);
+      approvalKey.current = null;
+    } catch (error) {
+      setErrorMessage(operationErrorCopy(error, "설정 파일을 안전하게 불러오지 못했습니다."));
+    } finally {
+      requestInFlight.current = false;
+      setLoadingConfig(false);
+    }
+  }
+
+  async function createConfigPlan(row: NginxRowView): Promise<void> {
+    if (
+      requestInFlight.current ||
+      !canEditConfig(row) ||
+      configResource === null ||
+      configDraft === configResource.content
+    ) {
+      return;
+    }
+    requestInFlight.current = true;
+    setPlanning(true);
+    setErrorMessage(null);
+    setAccepted(null);
+    setReceipt(null);
+    try {
+      const idempotencyKey = operationKey();
+      const nextPlan = await planManagedConfig({
+        schemaVersion: row.managedConfigSchemaVersion,
+        operationType: row.managedConfigOperationType,
+        resourceId: row.managedConfigResourceId,
+        expectedContentDigest: configResource.contentDigest,
+        expectedMetadataDigest: configResource.metadataDigest,
+        proposedContent: configDraft,
+        serviceAction: "reload",
+        idempotencyKey,
+      });
+      approvalKey.current = idempotencyKey;
+      setConfigPlan(nextPlan);
+    } catch (error) {
+      setErrorMessage(operationErrorCopy(error, "설정 변경 계획을 만들지 못했습니다."));
+      await queryClient.invalidateQueries({ queryKey: queryKeys.nginxSites });
+    } finally {
+      requestInFlight.current = false;
+      setPlanning(false);
+    }
+  }
+
+  async function approveConfigPlan(password: string): Promise<void> {
+    if (requestInFlight.current || configPlan === null || approvalKey.current === null) return;
+    requestInFlight.current = true;
+    setExecuting(true);
+    setErrorMessage(null);
+    try {
+      const reauth = await reauthenticateForOperation({
+        password,
+        planHash: configPlan.planHash,
+      });
+      queryClient.setQueryData(queryKeys.session, reauth.session);
+      const operation = await approveManagedConfig({
+        schemaVersion: configPlan.schemaVersion,
+        planId: configPlan.planId,
+        planHash: configPlan.planHash,
+        idempotencyKey: approvalKey.current,
+        reauthToken: reauth.reauthToken,
+        approvalIntent: {
+          validationConfirmed: true,
+          serviceActionConfirmed: true,
+        },
+      });
+      setAccepted(operation);
+    } catch (error) {
+      setErrorMessage(operationErrorCopy(error, "승인한 설정 작업을 완료하지 못했습니다."));
+    } finally {
+      requestInFlight.current = false;
+      setExecuting(false);
+    }
   }
 
   async function createPlan(row: NginxRowView): Promise<void> {
@@ -305,10 +416,37 @@ export function NginxScreen() {
         open={inspectorOpen}
         onOpenChange={setInspectorOpen}
         title={selected?.name ?? "사이트 상세"}
-        description={plan ? "변경 계획과 자동 원복 범위" : "발견된 Nginx site 상태"}
+        description={
+          configMode
+            ? "설정 편집·diff·문법검사·자동 원복"
+            : plan
+              ? "변경 계획과 자동 원복 범위"
+              : "발견된 Nginx site 상태"
+        }
         side="right"
       >
-        {selected ? (
+        {selected && configMode && configResource ? (
+          <ManagedConfigEditor
+            resource={configResource}
+            draft={configDraft}
+            plan={configPlan}
+            accepted={accepted}
+            receipt={receipt}
+            planning={planning}
+            executing={executing}
+            errorMessage={errorMessage}
+            onDraftChange={setConfigDraft}
+            onBack={() => {
+              setConfigMode(false);
+              setConfigPlan(null);
+              setAccepted(null);
+              setReceipt(null);
+              setErrorMessage(null);
+            }}
+            onCreatePlan={() => void createConfigPlan(selected)}
+            onApprove={approveConfigPlan}
+          />
+        ) : selected ? (
           <SiteInspector
             row={selected}
             plan={plan}
@@ -319,6 +457,8 @@ export function NginxScreen() {
             errorMessage={errorMessage}
             onCreatePlan={() => void createPlan(selected)}
             onApprove={(password) => approvePlan(password)}
+            loadingConfig={loadingConfig}
+            onEditConfig={() => void openConfigEditor(selected)}
           />
         ) : null}
       </Sheet>
@@ -425,6 +565,8 @@ function SiteInspector({
   errorMessage,
   onCreatePlan,
   onApprove,
+  loadingConfig,
+  onEditConfig,
 }: {
   row: NginxRowView;
   plan: NginxSiteStatePlanView | null;
@@ -435,6 +577,8 @@ function SiteInspector({
   errorMessage: string | null;
   onCreatePlan: () => void;
   onApprove: (password: string) => Promise<void>;
+  loadingConfig: boolean;
+  onEditConfig: () => void;
 }) {
   if (plan !== null) {
     return (
@@ -484,6 +628,284 @@ function SiteInspector({
           {planning ? "현재 상태 재검증 중" : `${row.enabled ? "비활성화" : "활성화"} 계획 만들기`}
         </Button>
       ) : null}
+      {canEditConfig(row) ? (
+        <Button
+          className="mt-3 w-full"
+          variant="secondary"
+          disabled={loadingConfig}
+          onClick={onEditConfig}
+        >
+          {loadingConfig ? (
+            <LoaderCircle aria-hidden="true" className="size-4 animate-spin" />
+          ) : (
+            <FilePenLine aria-hidden="true" className="size-4" />
+          )}
+          {loadingConfig ? "설정 안전성 확인 중" : "설정 파일 편집"}
+        </Button>
+      ) : null}
+    </div>
+  );
+}
+
+function ManagedConfigEditor({
+  resource,
+  draft,
+  plan,
+  accepted,
+  receipt,
+  planning,
+  executing,
+  errorMessage,
+  onDraftChange,
+  onBack,
+  onCreatePlan,
+  onApprove,
+}: {
+  resource: ManagedConfigResourceView;
+  draft: string;
+  plan: ManagedConfigPlanView | null;
+  accepted: OperationAcceptedView | null;
+  receipt: OperationReceiptView | null;
+  planning: boolean;
+  executing: boolean;
+  errorMessage: string | null;
+  onDraftChange: (value: string) => void;
+  onBack: () => void;
+  onCreatePlan: () => void;
+  onApprove: (password: string) => Promise<void>;
+}) {
+  if (receipt !== null) return <OperationResult receipt={receipt} />;
+  if (accepted !== null) {
+    return (
+      <div aria-live="polite" className="flex items-start gap-3">
+        <LoaderCircle aria-hidden="true" className="size-6 shrink-0 animate-spin text-warning" />
+        <div>
+          <h3 className="text-base font-semibold text-text">
+            {STAGE_LABELS[accepted.currentStage]}
+          </h3>
+          <p className="mt-1 text-sm leading-6 text-muted">
+            서버가 설정을 적용·검증하고 있습니다. 실패하면 snapshot으로 원복한 뒤 결과를 기록합니다.
+          </p>
+        </div>
+      </div>
+    );
+  }
+  if (plan !== null) {
+    return (
+      <ManagedConfigOperationPlan
+        plan={plan}
+        executing={executing}
+        errorMessage={errorMessage}
+        onApprove={onApprove}
+      />
+    );
+  }
+
+  const draftBytes = new TextEncoder().encode(draft).byteLength;
+  const unchanged = draft === resource.content;
+  const tooLarge = draftBytes > resource.maxBytes;
+  return (
+    <div>
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-muted">
+            {resource.adapterId}
+          </p>
+          <h3 className="mt-2 text-base font-semibold text-text">{resource.displayName}</h3>
+          <p className="mt-1 text-xs font-mono text-muted">{resource.maskedPath}</p>
+        </div>
+        <AssuranceMark assurance={resource.assurance} />
+      </div>
+
+      <section className="mt-5 border-y border-warning/35 py-4">
+        <div className="flex items-start gap-3">
+          <TriangleAlert aria-hidden="true" className="mt-0.5 size-5 shrink-0 text-warning" />
+          <div>
+            <p className="text-sm font-semibold text-text">저장 버튼으로 즉시 반영하지 않습니다</p>
+            <p className="mt-1 text-sm leading-6 text-muted">
+              먼저 diff 계획을 만든 뒤 Linux 비밀번호로 승인합니다. nginx -t가 실패하면 reload 없이
+              이전 파일을 복원합니다.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <label htmlFor="managed-config-content" className="mt-5 block text-sm font-medium text-text">
+        Nginx 설정 내용
+      </label>
+      <textarea
+        id="managed-config-content"
+        className="mt-2 min-h-80 w-full resize-y rounded-control border border-border bg-subtle px-3 py-3 font-mono text-[13px] leading-6 text-text outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/20"
+        spellCheck={false}
+        value={draft}
+        onChange={(event) => onDraftChange(event.currentTarget.value)}
+      />
+      <div className="mt-2 flex items-center justify-between gap-3 text-xs text-muted">
+        <span>{unchanged ? "변경 없음" : "편집 내용은 아직 서버에 적용되지 않음"}</span>
+        <span className={tooLarge ? "font-semibold text-danger" : undefined}>
+          {draftBytes.toLocaleString()} / {resource.maxBytes.toLocaleString()} bytes
+        </span>
+      </div>
+
+      <div className="mt-5">
+        <AssuranceDetails assurance={resource.assurance} />
+      </div>
+      {errorMessage ? (
+        <p role="alert" className="mt-5 text-sm font-medium leading-6 text-danger">
+          {errorMessage}
+        </p>
+      ) : null}
+      <Button
+        className="mt-6 w-full"
+        disabled={planning || unchanged || tooLarge}
+        onClick={onCreatePlan}
+      >
+        {planning ? (
+          <LoaderCircle aria-hidden="true" className="size-4 animate-spin" />
+        ) : (
+          <FilePenLine aria-hidden="true" className="size-4" />
+        )}
+        {planning ? "현재 파일 재검증·diff 생성 중" : "변경 계획 만들기"}
+      </Button>
+      <Button className="mt-3 w-full" variant="ghost" onClick={onBack}>
+        사이트 상세로 돌아가기
+      </Button>
+    </div>
+  );
+}
+
+function ManagedConfigOperationPlan({
+  plan,
+  executing,
+  errorMessage,
+  onApprove,
+}: {
+  plan: ManagedConfigPlanView;
+  executing: boolean;
+  errorMessage: string | null;
+  onApprove: (password: string) => Promise<void>;
+}) {
+  const [password, setPassword] = useState("");
+  const [validationConfirmed, setValidationConfirmed] = useState(false);
+  const [serviceActionConfirmed, setServiceActionConfirmed] = useState(false);
+
+  async function submit(event: SyntheticEvent<HTMLFormElement>): Promise<void> {
+    event.preventDefault();
+    if (!validationConfirmed || !serviceActionConfirmed) return;
+    const submittedPassword = password;
+    setPassword("");
+    await onApprove(submittedPassword);
+  }
+
+  return (
+    <div>
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <p className="text-xs font-mono text-muted">{plan.maskedPath}</p>
+          <h3 className="mt-2 text-base font-semibold text-text">설정 변경 계획</h3>
+        </div>
+        <AssuranceMark assurance={plan.assurance} />
+      </div>
+      <dl className="mt-5 grid grid-cols-2 gap-3 border-y border-border py-4 text-sm">
+        <div>
+          <dt className="text-xs text-muted">파일 크기</dt>
+          <dd className="mt-1 font-medium text-text">
+            {plan.currentBytes.toLocaleString()} → {plan.proposedBytes.toLocaleString()} bytes
+          </dd>
+        </div>
+        <div>
+          <dt className="text-xs text-muted">변경 줄</dt>
+          <dd className="mt-1 font-medium text-text">
+            +{plan.addedLines} / -{plan.removedLines}
+          </dd>
+        </div>
+        <div>
+          <dt className="text-xs text-muted">서비스 동작</dt>
+          <dd className="mt-1 font-medium text-text">nginx.service {plan.serviceAction}</dd>
+        </div>
+        <div>
+          <dt className="text-xs text-muted">계획 만료</dt>
+          <dd className="mt-1 font-medium text-text">{formatDateTime(plan.expiresAt)}</dd>
+        </div>
+      </dl>
+
+      <section className="mt-5" aria-labelledby="config-diff-heading">
+        <h4 id="config-diff-heading" className="text-xs font-semibold text-muted">
+          제한된 diff 미리보기
+        </h4>
+        <pre className="mt-2 max-h-64 overflow-auto rounded-control border border-border bg-subtle p-3 text-xs leading-5 text-text">
+          {plan.diffSummary.length > 0 ? plan.diffSummary.join("\n") : "내용 변경 없음"}
+        </pre>
+      </section>
+
+      <section className="mt-5 border-y border-border py-4">
+        <h4 className="text-xs font-semibold text-muted">실행 영향</h4>
+        <BulletList values={plan.impact} />
+      </section>
+      <div className="mt-5">
+        <AssuranceDetails assurance={plan.assurance} />
+      </div>
+      <section className="mt-5 border-y border-warning/35 py-4">
+        <h4 className="text-sm font-semibold text-text">원복도 검증 실패하면 수동 복구가 필요합니다</h4>
+        <BulletList values={plan.recoveryPath} />
+      </section>
+
+      {errorMessage ? (
+        <p role="alert" className="mt-5 text-sm font-medium leading-6 text-danger">
+          {errorMessage}
+        </p>
+      ) : null}
+
+      <form className="mt-6" onSubmit={(event) => void submit(event)}>
+        <label className="flex items-start gap-3 text-sm leading-6 text-text">
+          <input
+            type="checkbox"
+            className="mt-1 size-4 accent-accent"
+            checked={validationConfirmed}
+            onChange={(event) => setValidationConfirmed(event.currentTarget.checked)}
+          />
+          저장 후 nginx -t를 통과해야만 reload하며, 실패 시 자동 원복한다는 점을 확인했습니다.
+        </label>
+        <label className="mt-3 flex items-start gap-3 text-sm leading-6 text-text">
+          <input
+            type="checkbox"
+            className="mt-1 size-4 accent-accent"
+            checked={serviceActionConfirmed}
+            onChange={(event) => setServiceActionConfirmed(event.currentTarget.checked)}
+          />
+          이 계획이 nginx.service reload를 수행할 수 있음을 확인했습니다.
+        </label>
+        <label htmlFor="config-operation-password" className="mt-5 block text-sm font-medium text-text">
+          Linux 계정 비밀번호로 exact plan 승인
+        </label>
+        <Input
+          id="config-operation-password"
+          type="password"
+          autoComplete="current-password"
+          maxLength={1024}
+          required
+          disabled={executing}
+          value={password}
+          onChange={(event) => setPassword(event.currentTarget.value)}
+        />
+        <Button
+          className="mt-4 w-full"
+          type="submit"
+          disabled={
+            executing ||
+            password.length === 0 ||
+            !validationConfirmed ||
+            !serviceActionConfirmed
+          }
+        >
+          {executing ? (
+            <LoaderCircle aria-hidden="true" className="size-4 animate-spin" />
+          ) : (
+            <KeyRound aria-hidden="true" className="size-4" />
+          )}
+          {executing ? "적용·검증·원복 판단 중" : "재인증 후 설정 적용"}
+        </Button>
+      </form>
     </div>
   );
 }
@@ -608,6 +1030,7 @@ function OperationResult({ receipt }: { receipt: OperationReceiptView }) {
   const rolledBack = receipt.terminalState === "ROLLED_BACK";
   const succeeded = receipt.terminalState === "SUCCEEDED";
   const terminal = isTerminalStage(receipt.terminalState);
+  const managedConfig = receipt.operationType === "service.config_file.set/v1";
   return (
     <div aria-live="polite">
       <div className="flex items-start gap-3">
@@ -626,9 +1049,13 @@ function OperationResult({ receipt }: { receipt: OperationReceiptView }) {
           </h3>
           <p className="mt-1 text-sm leading-6 text-muted">
             {succeeded
-              ? "적용 후 문법·reload·active 상태를 확인했습니다."
+              ? managedConfig
+                ? "설정 bytes·metadata, 문법, reload, active 상태를 확인했습니다."
+                : "적용 후 문법·reload·active 상태를 확인했습니다."
               : rolledBack
-                ? "적용은 실패했지만 이전 link 상태 복원과 재검증을 마쳤습니다."
+                ? managedConfig
+                  ? "적용은 실패했지만 이전 파일 bytes·owner·mode 복원과 재검증을 마쳤습니다."
+                  : "적용은 실패했지만 이전 link 상태 복원과 재검증을 마쳤습니다."
                 : !terminal
                   ? "작업은 서버에서 계속됩니다. 표시된 단계는 감사 원장에 기록된 상태입니다."
                   : "성공으로 처리하지 않았습니다. 아래 단계와 복구 경로를 확인하세요."}
@@ -718,6 +1145,20 @@ function canPlan(row: NginxRowView): row is NginxRowView & {
     row.enabledStateDigest !== null &&
     row.operationType !== null &&
     row.operationSchemaVersion !== null
+  );
+}
+
+function canEditConfig(row: NginxRowView): row is NginxRowView & {
+  managedConfigResourceId: string;
+  managedConfigOperationType: string;
+  managedConfigSchemaVersion: number;
+} {
+  return (
+    !row.protected &&
+    row.sourceAvailable &&
+    row.managedConfigResourceId !== null &&
+    row.managedConfigOperationType === "service.config_file.set/v1" &&
+    row.managedConfigSchemaVersion !== null
   );
 }
 

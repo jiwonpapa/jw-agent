@@ -1,0 +1,40 @@
+{
+  "schemaVersion": 1,
+  "operationType": "service.config_file.set/v1",
+  "adapterId": "nginx/ubuntu-standard-v1",
+  "maxBytes": 24576,
+  "serviceAction": "reload",
+  "approvalIntent": {
+    "validationConfirmed": true,
+    "serviceActionConfirmed": true
+  },
+  "resourceIdentityVector": {
+    "basename": "example.com",
+    "resourceId": "ngc_EvUGaI1C1u-GchqLSzrL-o-u"
+  },
+  "cases": [
+    {
+      "id": "active-save-success",
+      "active": true,
+      "currentContent": "server {}\n",
+      "currentContentDigest": "sha256:355da02c030cafce7f50bba6a64ec89983df42d6d1861cb9c9a8f38db15f674d",
+      "proposedContent": "server { listen 8080; }\n",
+      "proposedContentDigest": "sha256:909f64f9975b2daaa6daf221c2eb710c951d528b15c84f012a67489cc416dbef",
+      "expectedTerminalState": "SUCCEEDED",
+      "expectedAssurance": "g2_reversible_config"
+    },
+    {
+      "id": "syntax-failure-restores-exact-content",
+      "active": true,
+      "proposedContent": "server { invalid_directive; }\n",
+      "expectedTerminalState": "ROLLED_BACK",
+      "expectedResultCode": "rollback_verified"
+    },
+    {
+      "id": "inactive-resource-rejected",
+      "active": false,
+      "expectedTerminalState": "REJECTED",
+      "expectedError": "resource_not_active"
+    }
+  ]
+}

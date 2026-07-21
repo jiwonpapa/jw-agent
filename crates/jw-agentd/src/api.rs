@@ -23,11 +23,13 @@ use jw_contracts::{
     AccessSettingsView, AdditionalAuthPolicy, AdditionalAuthProviderStatus, AssuranceLevel,
     AssuranceView, AuthFailureClass, AuthPurpose, AuthRequest, AuthResult, CapabilityStatus,
     CapabilityView, HealthStatus, HealthView, IPC_PROTOCOL_VERSION, IngressChannel,
-    IntegrationCatalogView, LoginRequest, NGINX_SITE_STATE_OPERATION, NginxSiteStatePlanRequest,
-    NginxSiteStatePlanView, NginxSitesView, ObservationStatus, OperationAcceptedView,
-    OperationApprovalRequest, OperationReceiptView, OperationStageEvidenceView, ProblemDetails,
-    ReauthPurpose, ReauthRequest, ReauthView, Role, RollbackSupport, ServiceSummary, ServicesView,
-    SessionView, Subject, UpdateAdditionalAuthRequest,
+    IntegrationCatalogView, LoginRequest, MANAGED_CONFIG_OPERATION, ManagedConfigApprovalRequest,
+    ManagedConfigPlanRequest, ManagedConfigPlanView, ManagedConfigResourceView,
+    NGINX_SITE_STATE_OPERATION, NginxSiteStatePlanRequest, NginxSiteStatePlanView, NginxSitesView,
+    ObservationStatus, OperationAcceptedView, OperationApprovalRequest, OperationReceiptView,
+    OperationStageEvidenceView, ProblemDetails, ReauthPurpose, ReauthRequest, ReauthView, Role,
+    RollbackSupport, ServiceAction, ServiceSummary, ServicesView, SessionView, Subject,
+    UpdateAdditionalAuthRequest,
 };
 use sha2::{Digest, Sha256};
 use tower_http::services::{ServeDir, ServeFile};
@@ -40,7 +42,7 @@ use crate::ops_client::OpsBrokerError;
 use crate::session::{OperationClaimError, PolicyUpdateError};
 use crate::{AgentConfig, AuthBroker, OpsBroker, SessionStore};
 
-const API_BODY_MAX_BYTES: usize = 16 * 1_024;
+const API_BODY_MAX_BYTES: usize = 64 * 1_024;
 const CLIENT_ADDRESS_HEADER: &str = "x-jw-client-address";
 const CSRF_HEADER: &str = "x-csrf-token";
 const AUTH_WINDOW: Duration = Duration::from_secs(60);
@@ -96,6 +98,9 @@ impl AppState {
         update_additional_auth,
         plan_nginx_site_state,
         approve_nginx_site_state,
+        managed_config_resource,
+        plan_managed_config,
+        approve_managed_config,
         operation_events,
         operation_receipt,
     ),
@@ -117,6 +122,12 @@ impl AppState {
         jw_contracts::NginxSiteState,
         NginxSiteStatePlanRequest,
         NginxSiteStatePlanView,
+        ManagedConfigResourceView,
+        ManagedConfigPlanRequest,
+        ManagedConfigPlanView,
+        ManagedConfigApprovalRequest,
+        jw_contracts::ManagedConfigApprovalIntent,
+        ServiceAction,
         OperationAcceptedView,
         OperationApprovalRequest,
         OperationReceiptView,
@@ -169,6 +180,18 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             "/api/v1/operations/nginx/site-state/approvals",
             post(approve_nginx_site_state),
+        )
+        .route(
+            "/api/v1/config-resources/{resource_id}",
+            get(managed_config_resource),
+        )
+        .route(
+            "/api/v1/operations/service/config-file/plans",
+            post(plan_managed_config),
+        )
+        .route(
+            "/api/v1/operations/service/config-file/approvals",
+            post(approve_managed_config),
         )
         .route(
             "/api/v1/operations/{operation_id}/events",
@@ -583,6 +606,127 @@ async fn approve_nginx_site_state(
     Ok((StatusCode::ACCEPTED, Json(accepted)))
 }
 
+#[utoipa::path(get, path = "/api/v1/config-resources/{resource_id}", params(
+    ("resource_id" = String, Path, description = "Opaque allowlisted configuration resource identifier")
+), responses(
+    (status = 200, description = "Managed configuration resource", body = ManagedConfigResourceView),
+    (status = 400, description = "Invalid resource identifier", body = ProblemDetails),
+    (status = 401, description = "Authentication required", body = ProblemDetails),
+    (status = 403, description = "Protected resource", body = ProblemDetails),
+    (status = 404, description = "Resource not found", body = ProblemDetails)
+))]
+async fn managed_config_resource(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(resource_id): Path<String>,
+) -> Result<Json<ManagedConfigResourceView>, ApiProblem> {
+    validate_managed_config_resource_id(&resource_id)?;
+    let (_, session) = current_session(&state, &headers, unix_milliseconds()?)?;
+    let resource = state
+        .ops
+        .read_managed_config(session.subject, resource_id)
+        .await
+        .map_err(map_ops_error)?;
+    Ok(Json(resource))
+}
+
+#[utoipa::path(post, path = "/api/v1/operations/service/config-file/plans", request_body = ManagedConfigPlanRequest, responses(
+    (status = 200, description = "Immutable managed configuration plan", body = ManagedConfigPlanView),
+    (status = 400, description = "Invalid typed request", body = ProblemDetails),
+    (status = 401, description = "Authentication required", body = ProblemDetails),
+    (status = 403, description = "Role, protected resource, or CSRF rejected", body = ProblemDetails),
+    (status = 409, description = "Stale, busy, or idempotency conflict", body = ProblemDetails),
+    (status = 423, description = "Forensic lockdown", body = ProblemDetails)
+))]
+async fn plan_managed_config(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(input): Json<ManagedConfigPlanRequest>,
+) -> Result<Json<ManagedConfigPlanView>, ApiProblem> {
+    input.validate().map_err(ApiProblem::bad_request)?;
+    let now = unix_milliseconds()?;
+    let (token, session) = current_session(&state, &headers, now)?;
+    require_csrf(&headers, token.as_str())?;
+    let plan = state
+        .ops
+        .plan_managed_config(session.subject, input)
+        .await
+        .map_err(map_ops_error)?;
+    Ok(Json(plan))
+}
+
+#[utoipa::path(post, path = "/api/v1/operations/service/config-file/approvals", request_body = ManagedConfigApprovalRequest, responses(
+    (status = 202, description = "Managed configuration operation accepted", body = OperationAcceptedView),
+    (status = 400, description = "Invalid approval shape", body = ProblemDetails),
+    (status = 401, description = "Authentication required", body = ProblemDetails),
+    (status = 403, description = "Claim, role, or CSRF rejected", body = ProblemDetails),
+    (status = 409, description = "Expired, stale, busy, or conflicting operation", body = ProblemDetails),
+    (status = 423, description = "Forensic lockdown", body = ProblemDetails),
+    (status = 428, description = "Additional authentication is configured but unavailable", body = ProblemDetails)
+))]
+async fn approve_managed_config(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(input): Json<ManagedConfigApprovalRequest>,
+) -> Result<(StatusCode, Json<OperationAcceptedView>), ApiProblem> {
+    input.validate_shape().map_err(ApiProblem::bad_request)?;
+    let now = unix_milliseconds()?;
+    let (token, session) = current_session(&state, &headers, now)?;
+    require_csrf(&headers, token.as_str())?;
+    if session.additional_auth_policy != AdditionalAuthPolicy::Disabled {
+        return Err(ApiProblem::new(
+            StatusCode::PRECONDITION_REQUIRED,
+            "additional_authentication_unavailable",
+        ));
+    }
+    if input.additional_auth_claim.is_some() {
+        return Err(ApiProblem::bad_request(
+            "additional_authentication_claim_unexpected",
+        ));
+    }
+    state
+        .store
+        .consume_operation_claim(
+            token.as_str(),
+            &session.subject,
+            &input.plan_hash,
+            &input.reauth_token,
+            now,
+        )
+        .map_err(map_operation_claim_error)?;
+    let actor = session.subject;
+    let receipt = state
+        .ops
+        .approve_managed_config(
+            actor.clone(),
+            input.plan_id,
+            input.plan_hash,
+            input.idempotency_key,
+            input.approval_intent,
+        )
+        .await
+        .map_err(map_ops_error)?;
+    if receipt.operation_type != MANAGED_CONFIG_OPERATION {
+        return Err(ApiProblem::internal());
+    }
+    let operation_id = receipt.operation_id.clone();
+    let accepted = OperationAcceptedView {
+        schema_version: receipt.schema_version,
+        operation_type: receipt.operation_type,
+        operation_id: operation_id.clone(),
+        plan_id: receipt.plan_id,
+        plan_hash: receipt.plan_hash,
+        actor: receipt.actor,
+        current_stage: receipt.terminal_state,
+        event_stream: format!("/api/v1/operations/{operation_id}/events"),
+    };
+    let ops = Arc::clone(&state.ops);
+    let _execution_task = tokio::spawn(async move {
+        let _execution_result = ops.execute_operation(actor, operation_id).await;
+    });
+    Ok((StatusCode::ACCEPTED, Json(accepted)))
+}
+
 #[utoipa::path(get, path = "/api/v1/operations/{operation_id}/events", params(
     ("operation_id" = String, Path, description = "Opaque operation identifier")
 ), responses(
@@ -760,6 +904,20 @@ fn validate_operation_id(operation_id: &str) -> Result<(), ApiProblem> {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
     {
         Err(ApiProblem::bad_request("operation_id"))
+    } else {
+        Ok(())
+    }
+}
+
+fn validate_managed_config_resource_id(resource_id: &str) -> Result<(), ApiProblem> {
+    if resource_id.len() < 12
+        || resource_id.len() > 64
+        || !resource_id.starts_with("ngc_")
+        || !resource_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+    {
+        Err(ApiProblem::bad_request("resource_id"))
     } else {
         Ok(())
     }
@@ -1094,15 +1252,27 @@ fn map_ops_error(error: OpsBrokerError) -> ApiProblem {
             ApiProblem::unavailable("operation_service_unavailable")
         }
         OpsBrokerError::Rejected(code) => match code.as_str() {
-            "role_denied" | "protected_resource" | "operation_access_denied" => {
-                ApiProblem::forbidden(code)
-            }
+            "role_denied"
+            | "protected_resource"
+            | "protected_content"
+            | "operation_access_denied" => ApiProblem::forbidden(code),
             "forensic_lockdown" => ApiProblem::new(StatusCode::LOCKED, code),
-            "site_missing" | "plan_missing" | "operation_missing" => {
+            "site_missing" | "resource_missing" | "plan_missing" | "operation_missing" => {
                 ApiProblem::new(StatusCode::NOT_FOUND, code)
             }
-            "schema_version" | "operation_type" | "site_id" | "digest" | "idempotency_key"
-            | "plan_id" | "plan_hash" | "operation_id" => ApiProblem::bad_request(code),
+            "schema_version"
+            | "operation_type"
+            | "site_id"
+            | "digest"
+            | "idempotency_key"
+            | "plan_id"
+            | "plan_hash"
+            | "operation_id"
+            | "resource_id"
+            | "size_limit"
+            | "invalid_encoding"
+            | "unsupported_service_action"
+            | "approval_intent" => ApiProblem::bad_request(code),
             _ => ApiProblem::new(StatusCode::CONFLICT, code),
         },
     }
@@ -1370,6 +1540,14 @@ mod tests {
             })
         }
 
+        fn read_managed_config<'a>(
+            &'a self,
+            _actor: Subject,
+            _resource_id: String,
+        ) -> OpsFuture<'a, jw_contracts::ManagedConfigResourceView> {
+            Box::pin(async move { Err(OpsBrokerError::Unavailable) })
+        }
+
         fn plan_nginx_site_state<'a>(
             &'a self,
             _actor: Subject,
@@ -1384,6 +1562,25 @@ mod tests {
             _plan_id: String,
             _plan_hash: String,
             _idempotency_key: String,
+        ) -> OpsFuture<'a, jw_contracts::OperationReceiptView> {
+            Box::pin(async move { Err(OpsBrokerError::Unavailable) })
+        }
+
+        fn plan_managed_config<'a>(
+            &'a self,
+            _actor: Subject,
+            _plan: jw_contracts::ManagedConfigPlanRequest,
+        ) -> OpsFuture<'a, jw_contracts::ManagedConfigPlanView> {
+            Box::pin(async move { Err(OpsBrokerError::Unavailable) })
+        }
+
+        fn approve_managed_config<'a>(
+            &'a self,
+            _actor: Subject,
+            _plan_id: String,
+            _plan_hash: String,
+            _idempotency_key: String,
+            _approval_intent: jw_contracts::ManagedConfigApprovalIntent,
         ) -> OpsFuture<'a, jw_contracts::OperationReceiptView> {
             Box::pin(async move { Err(OpsBrokerError::Unavailable) })
         }

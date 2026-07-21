@@ -80,6 +80,9 @@ pub struct NginxSiteObservation {
     pub enabled_state_digest: Option<String>,
     pub operation_type: Option<String>,
     pub operation_schema_version: Option<u16>,
+    pub managed_config_resource_id: Option<String>,
+    pub managed_config_operation_type: Option<String>,
+    pub managed_config_schema_version: Option<u16>,
     pub assurance: AssuranceView,
 }
 

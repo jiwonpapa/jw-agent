@@ -10,7 +10,7 @@ Last reviewed: 2026-07-21
 | OS | Ubuntu 24.04 LTS amd64 | Supported |
 | init | systemd | Observe |
 | package source | Ubuntu apt packages | Discover |
-| Nginx | Ubuntu standard layout | Observe + site-state G2 `VM_PASS`; managed config after gate |
+| Nginx | Ubuntu standard layout | Observe + site-state and active managed-config G2 `VM_PASS` |
 | PHP-FPM | apt-installed units | Observe |
 | MySQL/MariaDB | apt-installed units | Observe |
 | Redis | apt-installed unit | Observe |
@@ -23,7 +23,7 @@ Last reviewed: 2026-07-21
 | Responsive web | 320px mobile through desktop | Supported |
 | Web terminal | existing OpenSSH, non-root Linux user | P2 G1 after gate |
 | SFTP | existing OpenSSH subsystem, non-root Linux user | P2 G0/G1 after gate |
-| Managed config | adapter allowlisted resource | P2 G2 after per-adapter VM gate |
+| Managed config | adapter allowlisted resource | Nginx active profile `VM_PASS`; others after gate |
 | Direct agentd Internet bind | any TCP port | Unsupported |
 
 ## 판정 원칙
@@ -33,7 +33,8 @@ Last reviewed: 2026-07-21
 - custom source build, containerized service, non-standard path는 write `UNSUPPORTED`입니다.
 - LDAP·SSSD·Kerberos·multi-prompt PAM은 별도 VM 증거 전 `UNVERIFIED`입니다.
 - P1은 Certbot command를 호출하지 않습니다. P2 guided issuance·renewal은 해당 capability와 VM gate 전까지 `UNSUPPORTED`입니다.
-- `nginx.site_state.set/v1`만 현재 `SUPPORTED + VM_PASS + G2`입니다. Nginx 설정 파일 편집은 P2B gate 전까지 write `UNSUPPORTED`입니다.
+- `nginx.site_state.set/v1`과 활성 standard-layout 리소스의 `service.config_file.set/v1`은 `SUPPORTED + VM_PASS + G2`입니다.
+- 비활성 site, 24 KiB 초과, UTF-8이 아닌 파일, NUL·보호 marker, 비표준 owner/mode·symlink·hardlink는 설정 편집 `UNSUPPORTED`입니다.
 - terminal·SFTP는 OpenSSH 발견, non-root account, same-origin WSS와 session policy가 모두 충족될 때만 capability를 반환합니다.
 - 관찰 실패, 미설치, 지원 불가, 권한 부족을 서로 다른 상태로 표시합니다.
 - 지원표는 구현 단계에서 capability registry로 이전하고 문서를 생성합니다.

@@ -5,7 +5,7 @@ After=local-fs.target
 [Service]
 Type=simple
 User=root
-Group=jw-agent
+Group=root
 EnvironmentFile=-/etc/default/jw-agent
 ExecStart=/usr/lib/jw-agent/jw-opsd
 Restart=on-failure
@@ -23,7 +23,7 @@ ProtectKernelLogs=yes
 ProtectKernelModules=yes
 ProtectKernelTunables=yes
 ProtectSystem=strict
-ReadWritePaths=/run/jw-agent /var/lib/jw-agent/opsd /etc/nginx/sites-enabled
+ReadWritePaths=/run/jw-agent /var/lib/jw-agent/opsd /etc/nginx/sites-enabled /etc/nginx/sites-available
 TemporaryFileSystem=/var/log/nginx:rw
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 IPAddressDeny=any

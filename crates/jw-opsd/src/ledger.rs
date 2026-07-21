@@ -5,9 +5,9 @@ use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::Path;
 
 use jw_contracts::{
-    AssuranceView, NGINX_SITE_STATE_OPERATION, NginxSiteState, NginxSiteStatePlanView,
-    OPERATION_SCHEMA_VERSION, OperationReceiptView, OperationStage, OperationStageEvidenceView,
-    Role, Subject,
+    AssuranceView, MANAGED_CONFIG_OPERATION, ManagedConfigPlanView, NGINX_SITE_STATE_OPERATION,
+    NginxSiteState, NginxSiteStatePlanView, OPERATION_SCHEMA_VERSION, OperationReceiptView,
+    OperationStage, OperationStageEvidenceView, Role, Subject,
 };
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use serde::{Deserialize, Serialize};
@@ -15,6 +15,9 @@ use serde::{Deserialize, Serialize};
 use crate::config::OpsPaths;
 use crate::digest::ledger_event_digest;
 use crate::error::OpsError;
+use crate::managed_config::{
+    MANAGED_CONFIG_IMPACT, MANAGED_CONFIG_RECOVERY_PATH, ManagedConfigPlanPayload,
+};
 use crate::nginx::{NGINX_IMPACT, NGINX_RECOVERY_PATH};
 use crate::snapshot::SnapshotRecord;
 
@@ -24,6 +27,7 @@ const CHECKPOINT_PENDING_KEY: &str = "checkpoint_required_sequence";
 
 #[derive(Clone, Debug)]
 pub struct StoredPlan {
+    pub operation_type: String,
     pub plan_id: String,
     pub plan_hash: String,
     pub actor: Subject,
@@ -39,6 +43,18 @@ pub struct StoredPlan {
     pub request_digest: String,
     pub resource_key: String,
     pub assurance: AssuranceView,
+    pub managed_config: Option<ManagedConfigPlanPayload>,
+}
+
+impl StoredPlan {
+    #[must_use]
+    pub fn before_digest(&self) -> &str {
+        if self.operation_type == MANAGED_CONFIG_OPERATION {
+            &self.available_digest
+        } else {
+            &self.enabled_state_digest
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -107,7 +123,7 @@ impl Ledger {
         connection.pragma_update(None, "synchronous", "FULL")?;
         connection.pragma_update(None, "foreign_keys", "ON")?;
         connection.busy_timeout(std::time::Duration::from_secs(2))?;
-        connection.execute_batch(include_str!("../migrations/0001_initial.sql"))?;
+        migrate(&connection)?;
         secure_database_files(paths)?;
         let mut ledger = Self {
             connection,
@@ -143,16 +159,18 @@ impl Ledger {
             .map_err(|error| OpsError::Storage(error.to_string()))?;
         let assurance = serde_json::to_string(&plan.assurance)
             .map_err(|error| OpsError::Storage(error.to_string()))?;
+        let payload = serde_json::to_string(&plan.managed_config)
+            .map_err(|error| OpsError::Storage(error.to_string()))?;
         transaction.execute(
             "INSERT INTO plans (
                 plan_id, operation_type, plan_hash, actor_uid, actor_username, actor_role,
                 site_id, display_name, current_state, target_state, available_digest,
                 enabled_state_digest, created_at_ms, expires_at_ms, idempotency_key,
-                request_digest, resource_key, assurance_json
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
+                request_digest, resource_key, assurance_json, payload_json
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)",
             params![
                 plan.plan_id,
-                NGINX_SITE_STATE_OPERATION,
+                plan.operation_type,
                 plan.plan_hash,
                 i64::from(plan.actor.uid),
                 plan.actor.username,
@@ -169,6 +187,7 @@ impl Ledger {
                 plan.request_digest,
                 plan.resource_key,
                 assurance,
+                payload,
             ],
         )?;
         transaction.execute(
@@ -234,7 +253,7 @@ impl Ledger {
                 operation_id,
                 plan_id,
                 OperationStage::Approved.as_storage_value(),
-                plan.enabled_state_digest,
+                plan.before_digest(),
                 now_ms,
             ],
         )?;
@@ -372,6 +391,10 @@ impl Ledger {
         load_operation_from(&self.connection, operation_id)
     }
 
+    pub fn load_plan(&self, plan_id: &str) -> Result<StoredPlan, OpsError> {
+        load_plan_from(&self.connection, plan_id)
+    }
+
     pub fn incomplete_operations(&self) -> Result<Vec<StoredOperation>, OpsError> {
         let mut statement = self.connection.prepare(
             "SELECT operation_id FROM operations
@@ -384,6 +407,28 @@ impl Ledger {
             operations.push(self.load_operation(&row?)?);
         }
         Ok(operations)
+    }
+
+    pub fn expired_unexecuted_managed_plans(
+        &self,
+        now_ms: i64,
+    ) -> Result<Vec<StoredPlan>, OpsError> {
+        let mut statement = self.connection.prepare(
+            "SELECT plans.plan_id FROM plans
+             LEFT JOIN operations ON operations.plan_id = plans.plan_id
+             WHERE plans.operation_type = ?1
+               AND plans.expires_at_ms <= ?2
+               AND operations.operation_id IS NULL
+             ORDER BY plans.expires_at_ms, plans.plan_id",
+        )?;
+        let rows = statement.query_map(params![MANAGED_CONFIG_OPERATION, now_ms], |row| {
+            row.get::<_, String>(0)
+        })?;
+        let mut plans = Vec::new();
+        for row in rows {
+            plans.push(self.load_plan(&row?)?);
+        }
+        Ok(plans)
     }
 
     pub fn receipt(&self, operation_id: &str) -> Result<OperationReceiptView, OpsError> {
@@ -414,7 +459,7 @@ impl Ledger {
         }
         Ok(OperationReceiptView {
             schema_version: OPERATION_SCHEMA_VERSION,
-            operation_type: String::from(NGINX_SITE_STATE_OPERATION),
+            operation_type: operation.plan.operation_type.clone(),
             operation_id: operation.operation_id,
             plan_id: operation.plan.plan_id,
             plan_hash: operation.plan.plan_hash,
@@ -426,10 +471,7 @@ impl Ledger {
             assurance: operation.plan.assurance,
             rollback_result: operation.rollback_result,
             recovery_path: if operation.stage == OperationStage::RecoveryRequired {
-                NGINX_RECOVERY_PATH
-                    .iter()
-                    .map(ToString::to_string)
-                    .collect()
+                recovery_path_for(&operation.plan.operation_type)
             } else {
                 Vec::new()
             },
@@ -437,6 +479,9 @@ impl Ledger {
     }
 
     pub fn plan_view(&self, plan: &StoredPlan) -> Result<NginxSiteStatePlanView, OpsError> {
+        if plan.operation_type != NGINX_SITE_STATE_OPERATION {
+            return Err(OpsError::Rejected("operation_type"));
+        }
         Ok(NginxSiteStatePlanView {
             schema_version: OPERATION_SCHEMA_VERSION,
             operation_type: String::from(NGINX_SITE_STATE_OPERATION),
@@ -453,6 +498,50 @@ impl Ledger {
             enabled_state_digest: plan.enabled_state_digest.clone(),
             impact: NGINX_IMPACT.iter().map(ToString::to_string).collect(),
             recovery_path: NGINX_RECOVERY_PATH
+                .iter()
+                .map(ToString::to_string)
+                .collect(),
+            assurance: plan.assurance.clone(),
+        })
+    }
+
+    pub fn managed_config_plan_view(
+        &self,
+        plan: &StoredPlan,
+    ) -> Result<ManagedConfigPlanView, OpsError> {
+        if plan.operation_type != MANAGED_CONFIG_OPERATION {
+            return Err(OpsError::Rejected("operation_type"));
+        }
+        let payload = plan
+            .managed_config
+            .as_ref()
+            .ok_or(OpsError::ForensicLockdown)?;
+        Ok(ManagedConfigPlanView {
+            schema_version: OPERATION_SCHEMA_VERSION,
+            operation_type: plan.operation_type.clone(),
+            plan_id: plan.plan_id.clone(),
+            plan_hash: plan.plan_hash.clone(),
+            created_at: format_time(plan.created_at_ms)?,
+            expires_at: format_time(plan.expires_at_ms)?,
+            actor: plan.actor.clone(),
+            adapter_id: String::from(jw_contracts::NGINX_CONFIG_ADAPTER_ID),
+            resource_id: plan.site_id.clone(),
+            display_name: plan.display_name.clone(),
+            masked_path: format!("…/sites-available/{}", plan.display_name),
+            current_content_digest: plan.available_digest.clone(),
+            proposed_content_digest: payload.proposed_content_digest.clone(),
+            metadata_digest: plan.enabled_state_digest.clone(),
+            current_bytes: payload.current_bytes,
+            proposed_bytes: payload.proposed_bytes,
+            added_lines: payload.added_lines,
+            removed_lines: payload.removed_lines,
+            diff_summary: payload.diff_summary.clone(),
+            service_action: payload.service_action,
+            impact: MANAGED_CONFIG_IMPACT
+                .iter()
+                .map(ToString::to_string)
+                .collect(),
+            recovery_path: MANAGED_CONFIG_RECOVERY_PATH
                 .iter()
                 .map(ToString::to_string)
                 .collect(),
@@ -679,18 +768,18 @@ fn mark_checkpoint_if_needed(
 fn load_plan_from(connection: &Connection, plan_id: &str) -> Result<StoredPlan, OpsError> {
     connection
         .query_row(
-            "SELECT plan_id, plan_hash, actor_uid, actor_username, actor_role, site_id,
+            "SELECT operation_type, plan_id, plan_hash, actor_uid, actor_username, actor_role, site_id,
                     display_name, current_state, target_state, available_digest,
                     enabled_state_digest, created_at_ms, expires_at_ms, idempotency_key,
-                    request_digest, resource_key, assurance_json
+                    request_digest, resource_key, assurance_json, payload_json
              FROM plans WHERE plan_id = ?1",
             [plan_id],
             |row| {
                 Ok((
                     row.get::<_, String>(0)?,
                     row.get::<_, String>(1)?,
-                    row.get::<_, i64>(2)?,
-                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, i64>(3)?,
                     row.get::<_, String>(4)?,
                     row.get::<_, String>(5)?,
                     row.get::<_, String>(6)?,
@@ -698,12 +787,14 @@ fn load_plan_from(connection: &Connection, plan_id: &str) -> Result<StoredPlan, 
                     row.get::<_, String>(8)?,
                     row.get::<_, String>(9)?,
                     row.get::<_, String>(10)?,
-                    row.get::<_, i64>(11)?,
+                    row.get::<_, String>(11)?,
                     row.get::<_, i64>(12)?,
-                    row.get::<_, String>(13)?,
+                    row.get::<_, i64>(13)?,
                     row.get::<_, String>(14)?,
                     row.get::<_, String>(15)?,
                     row.get::<_, String>(16)?,
+                    row.get::<_, String>(17)?,
+                    row.get::<_, String>(18)?,
                 ))
             },
         )
@@ -712,37 +803,69 @@ fn load_plan_from(connection: &Connection, plan_id: &str) -> Result<StoredPlan, 
             other => OpsError::from(other),
         })
         .and_then(|row| {
-            let uid = u32::try_from(row.2).map_err(|_| OpsError::ForensicLockdown)?;
+            let uid = u32::try_from(row.3).map_err(|_| OpsError::ForensicLockdown)?;
             let role: Role =
-                serde_json::from_str(&row.4).map_err(|_| OpsError::ForensicLockdown)?;
+                serde_json::from_str(&row.5).map_err(|_| OpsError::ForensicLockdown)?;
             let current_state: NginxSiteState =
-                serde_json::from_str(&row.7).map_err(|_| OpsError::ForensicLockdown)?;
-            let target_state: NginxSiteState =
                 serde_json::from_str(&row.8).map_err(|_| OpsError::ForensicLockdown)?;
+            let target_state: NginxSiteState =
+                serde_json::from_str(&row.9).map_err(|_| OpsError::ForensicLockdown)?;
             let assurance: AssuranceView =
-                serde_json::from_str(&row.16).map_err(|_| OpsError::ForensicLockdown)?;
+                serde_json::from_str(&row.17).map_err(|_| OpsError::ForensicLockdown)?;
+            let managed_config: Option<ManagedConfigPlanPayload> =
+                serde_json::from_str(&row.18).map_err(|_| OpsError::ForensicLockdown)?;
             Ok(StoredPlan {
-                plan_id: row.0,
-                plan_hash: row.1,
+                operation_type: row.0,
+                plan_id: row.1,
+                plan_hash: row.2,
                 actor: Subject {
                     uid,
-                    username: row.3,
+                    username: row.4,
                     role,
                 },
-                site_id: row.5,
-                display_name: row.6,
+                site_id: row.6,
+                display_name: row.7,
                 current_state,
                 target_state,
-                available_digest: row.9,
-                enabled_state_digest: row.10,
-                created_at_ms: row.11,
-                expires_at_ms: row.12,
-                idempotency_key: row.13,
-                request_digest: row.14,
-                resource_key: row.15,
+                available_digest: row.10,
+                enabled_state_digest: row.11,
+                created_at_ms: row.12,
+                expires_at_ms: row.13,
+                idempotency_key: row.14,
+                request_digest: row.15,
+                resource_key: row.16,
                 assurance,
+                managed_config,
             })
         })
+}
+
+fn migrate(connection: &Connection) -> Result<(), OpsError> {
+    connection.execute_batch(include_str!("../migrations/0001_initial.sql"))?;
+    let version: i64 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+    match version {
+        0 => {
+            connection.pragma_update(None, "user_version", 1)?;
+            connection.execute_batch(include_str!("../migrations/0002_managed_config.sql"))?;
+            connection.pragma_update(None, "user_version", 2)?;
+        }
+        1 => {
+            connection.execute_batch(include_str!("../migrations/0002_managed_config.sql"))?;
+            connection.pragma_update(None, "user_version", 2)?;
+        }
+        2 => {}
+        _ => return Err(OpsError::ForensicLockdown),
+    }
+    Ok(())
+}
+
+fn recovery_path_for(operation_type: &str) -> Vec<String> {
+    let values: &[&str] = if operation_type == MANAGED_CONFIG_OPERATION {
+        &MANAGED_CONFIG_RECOVERY_PATH
+    } else {
+        &NGINX_RECOVERY_PATH
+    };
+    values.iter().map(ToString::to_string).collect()
 }
 
 fn load_operation_from(
@@ -943,8 +1066,8 @@ fn format_time(milliseconds: i64) -> Result<String, OpsError> {
 #[cfg(test)]
 mod tests {
     use jw_contracts::{
-        AssuranceLevel, AssuranceView, NginxSiteState, OperationStage, Role, RollbackSupport,
-        Subject, sha256_digest,
+        AssuranceLevel, AssuranceView, NGINX_SITE_STATE_OPERATION, NginxSiteState, OperationStage,
+        Role, RollbackSupport, Subject, sha256_digest,
     };
 
     use crate::config::OpsPaths;
@@ -1054,6 +1177,7 @@ mod tests {
 
     fn fixture_plan() -> StoredPlan {
         StoredPlan {
+            operation_type: String::from(NGINX_SITE_STATE_OPERATION),
             plan_id: String::from("plan-1"),
             plan_hash: sha256_digest(b"plan"),
             actor: Subject {
@@ -1082,6 +1206,7 @@ mod tests {
                 rollback_verifier: vec![String::from("restore")],
                 reason: None,
             },
+            managed_config: None,
         }
     }
 

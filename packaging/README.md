@@ -14,7 +14,11 @@ not installation proof.
 Public ingress stays disabled until an administrator supplies an exact FQDN,
 certificate paths, and explicitly installs the Nginx template. The package must
 not edit DNS, UFW, SSH, Certbot, or unrelated Nginx sites automatically.
-The current P2 baseline still accepts an existing valid certificate path only;
+An existing public-edge site remains administrator-owned: upgrading the package
+does not replace it. P2B managed-config requests require the reviewed `64k`
+JSON-envelope limit from the current template while decoded configuration content
+remains capped at `24 KiB`.
+The current P2B package still accepts an existing valid certificate path only;
 the separately accepted Certbot operation is not advertised until its own VM
 fault lane passes.
 

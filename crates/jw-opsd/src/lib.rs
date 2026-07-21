@@ -5,6 +5,7 @@ mod digest;
 mod engine;
 mod error;
 mod ledger;
+mod managed_config;
 mod nginx;
 mod runner;
 mod snapshot;

@@ -1,3 +1,13 @@
+jw-agent (0.2.0~p2.2) noble; urgency=medium
+
+  * Add allowlisted Nginx configuration editing with diff and exact-plan PAM.
+  * Atomically replace, validate, reload, read back, and roll back on failure.
+  * Reject protected or inactive resources, stale edits, and unsafe content.
+  * Exclude and clean crash-left internal temporary files.
+  * Raise the bounded public JSON envelope to 64 KiB for 24 KiB configs.
+
+ -- JW Agent Maintainers <maintainers@example.invalid>  Tue, 21 Jul 2026 20:30:00 +0900
+
 jw-agent (0.2.0~p2.1) noble; urgency=medium
 
   * Add the durable P2 operation ledger, snapshots, locks, and lockdown.

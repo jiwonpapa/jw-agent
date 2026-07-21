@@ -173,15 +173,18 @@ const P1_REQUIRED_PATHS: &[&str] = &[
 const P2_REQUIRED_PATHS: &[&str] = &[
     "crates/jw-contracts/src/operation.rs",
     "crates/jw-opsd/migrations/0001_initial.sql",
+    "crates/jw-opsd/migrations/0002_managed_config.sql",
     "crates/jw-opsd/src/config.rs",
     "crates/jw-opsd/src/digest.rs",
     "crates/jw-opsd/src/engine.rs",
     "crates/jw-opsd/src/error.rs",
     "crates/jw-opsd/src/ledger.rs",
+    "crates/jw-opsd/src/managed_config.rs",
     "crates/jw-opsd/src/nginx.rs",
     "crates/jw-opsd/src/runner.rs",
     "crates/jw-opsd/src/snapshot.rs",
     "tests/spec-fixtures/nginx-site-state-set-v1.json",
+    "tests/spec-fixtures/managed-config-file-v1.json",
 ];
 
 const GATES: &[Gate] = &[
@@ -459,6 +462,17 @@ const GATES: &[Gate] = &[
         evidence: "success, no-op, syntax failure, reload failure, and disk guard receipts passed",
         failure_policy: "fail lane on unsafe apply, missing rollback, wrong receipt, or leaked secret",
         run: vm::gate_p2_nginx_operation,
+    },
+    Gate {
+        id: "VM-P2-MANAGED-CONFIG",
+        owner: "Managed Configuration Maintainers",
+        scope: "active Nginx config G2 plan, atomic replace, validation, reload, and exact rollback",
+        inputs: "installed P2 package, public TLS API, PAM fixture, active Nginx resource, opsd ledger",
+        lanes: P2_VM_LANES,
+        timeout_seconds: 300,
+        evidence: "save, no-op, syntax/reload rollback, external drift, inactive denial, and proposal cleanup passed",
+        failure_policy: "fail lane on unvalidated save, inexact rollback, inactive edit, stale overwrite, or retained proposal",
+        run: vm::gate_p2_managed_config,
     },
     Gate {
         id: "VM-P2-FORENSIC-LOCKDOWN",

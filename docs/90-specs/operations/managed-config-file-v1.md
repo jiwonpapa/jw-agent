@@ -24,6 +24,9 @@ Ubuntu 24.04 표준 layout에서 service adapter가 등록한 텍스트 설정 r
 - Target: discovery가 반환한 `resourceId`
 - Assurance target: `G2 REVERSIBLE_CONFIG`
 - 최초 지원 adapter: `nginx/ubuntu-standard-v1`
+- 최초 profile: exact `sites-enabled` symlink로 활성화된 root:root regular file
+- inline UTF-8 body 최대: `24 KiB`; service action은 `reload`만 허용
+- JSON request envelope: `64 KiB`; NUL과 layout whitespace 외 ASCII control 거부
 - PHP-FPM·Redis는 adapter별 fixture와 VM evidence 전 `UNSUPPORTED`
 
 resource registry는 logical ID, supported package/layout, root-owned canonical path, 최대 byte, encoding, syntax command class, service action, health verifier, protected 여부를 소유합니다. API는 canonical root path를 identity로 받지 않습니다.
@@ -57,6 +60,7 @@ plan은 resource display name, masked path, unified diff summary, current/propos
 - regular file, expected owner/mode, max size, UTF-8, no NUL
 - canonical parent와 file descriptor가 allowlisted root 안이며 symlink·hardlink policy 충족
 - current content·metadata digest가 plan과 일치
+- 비활성 site는 전체 Nginx 문법 검증 대상이 아닐 수 있으므로 `resource_not_active`로 거부
 - ledger continuity, snapshot 공간, temp file용 동일 filesystem 공간 확인
 - lock key `config/{adapterId}/{resourceId}`와 service action global lock
 
@@ -80,6 +84,8 @@ Nginx처럼 temp 단일 파일 검사가 불가능한 include layout은 snapshot
 - 이전 syntax check와 같은 service action, health, digest read-back을 수행
 - 검증된 복원은 `ROLLED_BACK`, 불명확하거나 실패하면 `RECOVERY_REQUIRED`
 - crash restart는 ledger와 OS digest를 비교하고 이미 수행된 effect를 맹목적으로 반복하지 않음
+- root-only 제안 원문은 성공·취소·원복·복구필요 terminal과 만료 cleanup에서 제거
+- `.jw-agent-<16 hex>.tmp`는 operator resource에서 제외하며 restart 시 owner·hardlink를 검증한 뒤 제거
 
 보장 범위는 대상 파일 bytes·owner·mode와 해당 설정으로 재검증된 service입니다. active connection, in-memory history, 다른 관리자의 동시 외부 변경, include된 다른 파일은 제외합니다.
 
@@ -105,4 +111,4 @@ executable, argv, cwd, environment allowlist, timeout, output cap은 adapter reg
 - rollback failure produces `RECOVERY_REQUIRED` and exact runbook
 - desktop/tablet/mobile UI shows G2 scope, diff, service action and exclusions before approval
 
-이 spec은 safety kernel의 first operation이 `VM_PASS + G2`를 획득한 뒤 capability별로 활성화합니다.
+Nginx active-resource profile은 `0.2.0~p2.2`에서 `VM_PASS + G2`를 획득했습니다. 다른 adapter와 비활성 resource는 계속 `UNSUPPORTED`입니다.

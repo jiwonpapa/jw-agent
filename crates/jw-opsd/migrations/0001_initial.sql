@@ -66,5 +66,3 @@ CREATE TABLE IF NOT EXISTS ledger_events (
 
 CREATE INDEX IF NOT EXISTS ledger_events_operation_sequence
 ON ledger_events(operation_id, sequence);
-
-PRAGMA user_version = 1;

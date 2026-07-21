@@ -4,9 +4,10 @@ use std::pin::Pin;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use jw_contracts::{
-    IPC_PROTOCOL_VERSION, NginxSiteStatePlanRequest, NginxSiteStatePlanView, OPS_FRAME_MAX_BYTES,
-    OperationReceiptView, OpsCapabilityResponse, OpsRequest, OpsRequestBody, OpsResponse,
-    OpsResponseBody, Subject, decode_frame, encode_frame,
+    IPC_PROTOCOL_VERSION, ManagedConfigApprovalIntent, ManagedConfigPlanRequest,
+    ManagedConfigPlanView, ManagedConfigResourceView, NginxSiteStatePlanRequest,
+    NginxSiteStatePlanView, OPS_FRAME_MAX_BYTES, OperationReceiptView, OpsCapabilityResponse,
+    OpsRequest, OpsRequestBody, OpsResponse, OpsResponseBody, Subject, decode_frame, encode_frame,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixStream;
@@ -24,6 +25,12 @@ pub type OpsFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, OpsBrokerError
 pub trait OpsBroker: Send + Sync {
     fn capabilities<'a>(&'a self) -> OpsFuture<'a, OpsCapabilityResponse>;
 
+    fn read_managed_config<'a>(
+        &'a self,
+        actor: Subject,
+        resource_id: String,
+    ) -> OpsFuture<'a, ManagedConfigResourceView>;
+
     fn plan_nginx_site_state<'a>(
         &'a self,
         actor: Subject,
@@ -36,6 +43,21 @@ pub trait OpsBroker: Send + Sync {
         plan_id: String,
         plan_hash: String,
         idempotency_key: String,
+    ) -> OpsFuture<'a, OperationReceiptView>;
+
+    fn plan_managed_config<'a>(
+        &'a self,
+        actor: Subject,
+        plan: ManagedConfigPlanRequest,
+    ) -> OpsFuture<'a, ManagedConfigPlanView>;
+
+    fn approve_managed_config<'a>(
+        &'a self,
+        actor: Subject,
+        plan_id: String,
+        plan_hash: String,
+        idempotency_key: String,
+        approval_intent: ManagedConfigApprovalIntent,
     ) -> OpsFuture<'a, OperationReceiptView>;
 
     fn operation_receipt<'a>(
@@ -96,6 +118,22 @@ impl OpsBroker for UdsOpsBroker {
         })
     }
 
+    fn read_managed_config<'a>(
+        &'a self,
+        actor: Subject,
+        resource_id: String,
+    ) -> OpsFuture<'a, ManagedConfigResourceView> {
+        Box::pin(async move {
+            let body = self
+                .request(OpsRequestBody::ReadManagedConfig { actor, resource_id })
+                .await?;
+            let OpsResponseBody::ManagedConfigResource(resource) = body else {
+                return Err(OpsBrokerError::InvalidResponse);
+            };
+            Ok(resource)
+        })
+    }
+
     fn plan_nginx_site_state<'a>(
         &'a self,
         actor: Subject,
@@ -126,6 +164,47 @@ impl OpsBroker for UdsOpsBroker {
                     plan_id,
                     plan_hash,
                     idempotency_key,
+                })
+                .await?;
+            let OpsResponseBody::OperationReceipt(receipt) = body else {
+                return Err(OpsBrokerError::InvalidResponse);
+            };
+            Ok(receipt)
+        })
+    }
+
+    fn plan_managed_config<'a>(
+        &'a self,
+        actor: Subject,
+        plan: ManagedConfigPlanRequest,
+    ) -> OpsFuture<'a, ManagedConfigPlanView> {
+        Box::pin(async move {
+            let body = self
+                .request(OpsRequestBody::PlanManagedConfig { actor, plan })
+                .await?;
+            let OpsResponseBody::ManagedConfigPlan(plan) = body else {
+                return Err(OpsBrokerError::InvalidResponse);
+            };
+            Ok(plan)
+        })
+    }
+
+    fn approve_managed_config<'a>(
+        &'a self,
+        actor: Subject,
+        plan_id: String,
+        plan_hash: String,
+        idempotency_key: String,
+        approval_intent: ManagedConfigApprovalIntent,
+    ) -> OpsFuture<'a, OperationReceiptView> {
+        Box::pin(async move {
+            let body = self
+                .request(OpsRequestBody::ApproveManagedConfig {
+                    actor,
+                    plan_id,
+                    plan_hash,
+                    idempotency_key,
+                    approval_intent,
                 })
                 .await?;
             let OpsResponseBody::OperationReceipt(receipt) = body else {

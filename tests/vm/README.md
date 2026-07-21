@@ -1,6 +1,6 @@
 # Ubuntu 24.04 VM evidence matrix
 
-Status: P2 Nginx baseline VM_PASS  
+Status: P2B Nginx managed configuration VM_PASS  
 Authority: Delivery  
 Owner: Verification Maintainer  
 Last reviewed: 2026-07-21
@@ -25,21 +25,22 @@ JW_VM_PUBLIC_ADDRESS=192.168.0.142
 JW_VM_CA_CERT=/path/to/test-ca.crt
 JW_VM_ADMIN_USER=jwvmadmin
 JW_VM_PASSWORD_FILE=/path/to/mode-0600-fixture-password
-JW_VM_REMOTE_PACKAGE=/home/neojins/jw-agent_0.2.0~p2.1_amd64.deb
-JW_VM_EXPECTED_PACKAGE_SHA256=<lowercase sha256>
-JW_VM_EXPECTED_VERSION=0.2.0~p2.1
+JW_VM_REMOTE_PACKAGE=/home/neojins/jw-agent_0.2.0~p2.2_amd64.deb
+JW_VM_EXPECTED_PACKAGE_SHA256=6a4772b53829f5f6150baa6c5d6cef6e115146d9b5e23fadc6e8138528916850
+JW_VM_EXPECTED_VERSION=0.2.0~p2.2
 cargo xtask verify p2-vm
 ```
 
 ## Current VM evidence
 
 - domain: `jw-agent-p1`, Ubuntu 24.04.4 LTS, kernel `6.8.0-136-generic`
-- package: `jw-agent 0.2.0~p2.1`, SHA-256 `20d2e3df5c2fc205721685a25d1583d164a75e3da5cc48f83a870a02082aef25`, Lintian clean
-- lanes: `p2-local` 19 PASS, `p2-browser` 8 PASS with 18 browser scenarios, `p2-vm` 14 PASS
+- package: `jw-agent 0.2.0~p2.2`, SHA-256 `6a4772b53829f5f6150baa6c5d6cef6e115146d9b5e23fadc6e8138528916850`, Lintian clean
+- lanes: `p2-local` 19 PASS, `p2-browser` 8 PASS with 19 browser scenarios, `p2-vm` 15 PASS
 - automated VM scenarios: installed PAM fixture equality, no `pam_faillock`, `jw-authd → libpam.so.0`, `jw-agentd → libsqlite3.so.0`, repeated product-login failures followed by unchanged Linux password state and working OpenSSH key recovery
 - automated P2 faults: success, verified no-op, syntax failure rollback, injected reload failure rollback, 1 MiB snapshot filesystem cancellation before apply, deleted checkpoint lockdown and restoration
+- automated P2B config faults: >16 KiB active save/no-op, exact syntax/reload rollback, external drift preservation, inactive denial, private proposal cleanup, internal temp discovery exclusion and startup cleanup
 - package runtime: opsd private network namespace, exact `CAP_NET_BIND_SERVICE`, ephemeral Nginx test logs, no listening IP socket, root-owned `0600` ledger, bounded UDS
-- real browser: public HTTPS Nginx inventory, G2 disclosure, and custom-basename management vhost shown as `제품 보호 / G0 변경 없음`; console error 0
+- real browser: public HTTPS editor, 24 KiB counter, planned-only warning, G2 scope/exclusions and custom-basename protected vhost; internal temp absent and authenticated fresh-session console error 0
 
 This is a private-LAN `.test` host with a dedicated test CA. It is not evidence
 of public DNS, Certbot issuance, signed release distribution, or production

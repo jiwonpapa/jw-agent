@@ -84,6 +84,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/config-resources/{resource_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["managed_config_resource"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/health": {
         parameters: {
             query?: never;
@@ -158,6 +174,38 @@ export interface paths {
         get?: never;
         put?: never;
         post: operations["plan_nginx_site_state"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/operations/service/config-file/approvals": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["approve_managed_config"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/operations/service/config-file/plans": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["plan_managed_config"];
         delete?: never;
         options?: never;
         head?: never;
@@ -362,6 +410,78 @@ export interface components {
             password: string;
             username: string;
         };
+        ManagedConfigApprovalIntent: {
+            serviceActionConfirmed: boolean;
+            validationConfirmed: boolean;
+        };
+        ManagedConfigApprovalRequest: {
+            /** Format: password */
+            additionalAuthClaim?: string | null;
+            approvalIntent: components["schemas"]["ManagedConfigApprovalIntent"];
+            idempotencyKey: string;
+            planHash: string;
+            planId: string;
+            /** Format: password */
+            reauthToken: string;
+            /** Format: int32 */
+            schemaVersion: number;
+        };
+        ManagedConfigPlanRequest: {
+            expectedContentDigest: string;
+            expectedMetadataDigest: string;
+            idempotencyKey: string;
+            operationType: string;
+            proposedContent: string;
+            resourceId: string;
+            /** Format: int32 */
+            schemaVersion: number;
+            serviceAction: components["schemas"]["ServiceAction"];
+        };
+        ManagedConfigPlanView: {
+            actor: components["schemas"]["Subject"];
+            adapterId: string;
+            /** Format: int32 */
+            addedLines: number;
+            assurance: components["schemas"]["AssuranceView"];
+            createdAt: string;
+            /** Format: int32 */
+            currentBytes: number;
+            currentContentDigest: string;
+            diffSummary: string[];
+            displayName: string;
+            expiresAt: string;
+            impact: string[];
+            maskedPath: string;
+            metadataDigest: string;
+            operationType: string;
+            planHash: string;
+            planId: string;
+            /** Format: int32 */
+            proposedBytes: number;
+            proposedContentDigest: string;
+            recoveryPath: string[];
+            /** Format: int32 */
+            removedLines: number;
+            resourceId: string;
+            /** Format: int32 */
+            schemaVersion: number;
+            serviceAction: components["schemas"]["ServiceAction"];
+        };
+        ManagedConfigResourceView: {
+            adapterId: string;
+            allowedServiceActions: components["schemas"]["ServiceAction"][];
+            assurance: components["schemas"]["AssuranceView"];
+            content: string;
+            contentDigest: string;
+            displayName: string;
+            maskedPath: string;
+            /** Format: int32 */
+            maxBytes: number;
+            metadataDigest: string;
+            resourceId: string;
+            /** Format: int32 */
+            schemaVersion: number;
+        };
         MemoryObservation: {
             /** Format: int64 */
             availableBytes: number;
@@ -374,6 +494,10 @@ export interface components {
             availableDigest?: string | null;
             enabled: boolean;
             enabledStateDigest?: string | null;
+            managedConfigOperationType?: string | null;
+            managedConfigResourceId?: string | null;
+            /** Format: int32 */
+            managedConfigSchemaVersion?: number | null;
             name: string;
             /** Format: int32 */
             operationSchemaVersion?: number | null;
@@ -499,6 +623,8 @@ export interface components {
         Role: "admin" | "operator" | "viewer";
         /** @enum {string} */
         RollbackSupport: "not_applicable" | "not_guaranteed" | "automatic_bounded" | "restore_validated";
+        /** @enum {string} */
+        ServiceAction: "reload" | "restart";
         ServiceSummary: {
             readOnly: boolean;
             service: string;
@@ -734,6 +860,65 @@ export interface operations {
             };
         };
     };
+    managed_config_resource: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Opaque allowlisted configuration resource identifier */
+                resource_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Managed configuration resource */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ManagedConfigResourceView"];
+                };
+            };
+            /** @description Invalid resource identifier */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Authentication required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Protected resource */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Resource not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
     health: {
         parameters: {
             query?: never;
@@ -940,6 +1125,153 @@ export interface operations {
                 };
             };
             /** @description Role or CSRF rejected */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Stale, busy, or idempotency conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Forensic lockdown */
+            423: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    approve_managed_config: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ManagedConfigApprovalRequest"];
+            };
+        };
+        responses: {
+            /** @description Managed configuration operation accepted */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OperationAcceptedView"];
+                };
+            };
+            /** @description Invalid approval shape */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Authentication required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Claim, role, or CSRF rejected */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Expired, stale, busy, or conflicting operation */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Forensic lockdown */
+            423: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Additional authentication is configured but unavailable */
+            428: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    plan_managed_config: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ManagedConfigPlanRequest"];
+            };
+        };
+        responses: {
+            /** @description Immutable managed configuration plan */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ManagedConfigPlanView"];
+                };
+            };
+            /** @description Invalid typed request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Authentication required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Role, protected resource, or CSRF rejected */
             403: {
                 headers: {
                     [name: string]: unknown;

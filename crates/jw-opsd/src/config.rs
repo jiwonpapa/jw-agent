@@ -7,6 +7,7 @@ use std::time::Duration;
 pub struct OpsPaths {
     pub database: PathBuf,
     pub snapshots: PathBuf,
+    pub proposals: PathBuf,
     pub checkpoint: PathBuf,
     pub nginx_available: PathBuf,
     pub nginx_enabled: PathBuf,
@@ -19,6 +20,7 @@ impl Default for OpsPaths {
         Self {
             database: state.join("opsd.sqlite3"),
             snapshots: state.join("snapshots"),
+            proposals: state.join("proposals"),
             checkpoint: state.join("ledger.checkpoint"),
             nginx_available: PathBuf::from("/etc/nginx/sites-available"),
             nginx_enabled: PathBuf::from("/etc/nginx/sites-enabled"),
@@ -35,6 +37,7 @@ impl OpsPaths {
         Self {
             database: state.join("opsd.sqlite3"),
             snapshots: state.join("snapshots"),
+            proposals: state.join("proposals"),
             checkpoint: state.join("ledger.checkpoint"),
             nginx_available: root.join("etc/nginx/sites-available"),
             nginx_enabled: root.join("etc/nginx/sites-enabled"),

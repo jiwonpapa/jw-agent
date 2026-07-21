@@ -2,7 +2,7 @@
 
 Ubuntu 24.04 LTS 서버의 **범용 서비스 설정·유지보수 작업을 안전하게 수행하는 단일 서버 우선 관리 콘솔**입니다.
 
-현재 단계는 `P2 Safe local operations`입니다. P1의 PAM·공개 HTTPS·loopback 복구 기반 위에 durable ledger·snapshot·lock·forensic lockdown과 첫 G2 작업인 Nginx site enable/disable을 구현했으며, P2 완료 주장은 Ubuntu VM fault lane 통과 후에만 합니다.
+현재 단계는 `P2 Safe local operations`입니다. P1 기반 위에 durable safety kernel, Nginx site state와 활성 Nginx 설정 파일의 제한된 G2 편집을 Ubuntu VM에서 검증했습니다. Certbot·terminal·SFTP를 포함한 P2 전체 완료는 아직 주장하지 않습니다.
 
 이 저장소의 P1 기준점은 공개 개발 스냅샷이며 아직 오픈소스 릴리스가 아닙니다. `LICENSE`가 추가되기 전에는 사용·수정·재배포 권한을 부여하지 않으며, 정식 라이선스는 P3 release 준비에서 명시적으로 결정합니다.
 
@@ -20,7 +20,7 @@ Ubuntu 24.04 LTS 서버의 **범용 서비스 설정·유지보수 작업을 안
 - Rust `agentd` 비-root / `authd`·`opsd` root·networkless 분리
 - React + TypeScript + Bun + Vite + Tailwind CSS CLI + shadcn/ui
 - desktop·tablet·mobile 반응형 웹
-- 호스트·Nginx 관찰과 발견된 Nginx site의 typed enable/disable
+- 호스트·Nginx 관찰, typed site state, 활성 allowlisted Nginx 설정 편집
 - 계획→snapshot→적용→검증→자동 원복, 비동기 실행과 SSE 진행 증거
 - 임의 shell·임의 path·보호된 관리 vhost 변경은 제공하지 않음
 - 원격 GitHub Actions 사용 금지, 로컬 단일 `xtask` 검증

@@ -57,7 +57,10 @@ pub fn decode_sha256(value: &str) -> Result<[u8; 32], OpsError> {
 mod tests {
     use serde_json::Value;
 
-    use jw_contracts::{nginx_enabled_state_digest, nginx_site_id, sha256_digest};
+    use jw_contracts::{
+        MANAGED_CONFIG_MAX_BYTES, NGINX_CONFIG_ADAPTER_ID, nginx_config_resource_id,
+        nginx_enabled_state_digest, nginx_site_id, sha256_digest,
+    };
 
     #[test]
     fn site_identity_matches_normative_fixture() -> Result<(), String> {
@@ -104,6 +107,59 @@ mod tests {
             .and_then(Value::as_str)
             .ok_or_else(|| String::from("fixture beforeLinkStateDigest missing"))?;
         assert_eq!(nginx_enabled_state_digest(before_enabled), state_digest);
+        Ok(())
+    }
+
+    #[test]
+    fn managed_config_identity_matches_normative_fixture() -> Result<(), String> {
+        let fixture: Value = serde_json::from_str(include_str!(
+            "../../../tests/spec-fixtures/managed-config-file-v1.json"
+        ))
+        .map_err(|error| error.to_string())?;
+        let adapter = fixture
+            .get("adapterId")
+            .and_then(Value::as_str)
+            .ok_or_else(|| String::from("fixture adapterId missing"))?;
+        assert_eq!(adapter, NGINX_CONFIG_ADAPTER_ID);
+        let max_bytes = fixture
+            .get("maxBytes")
+            .and_then(Value::as_u64)
+            .ok_or_else(|| String::from("fixture maxBytes missing"))?;
+        assert_eq!(
+            usize::try_from(max_bytes).map_err(|_| String::from("fixture maxBytes overflow"))?,
+            MANAGED_CONFIG_MAX_BYTES
+        );
+        let vector = fixture
+            .get("resourceIdentityVector")
+            .ok_or_else(|| String::from("fixture resourceIdentityVector missing"))?;
+        let basename = vector
+            .get("basename")
+            .and_then(Value::as_str)
+            .ok_or_else(|| String::from("fixture basename missing"))?;
+        let expected = vector
+            .get("resourceId")
+            .and_then(Value::as_str)
+            .ok_or_else(|| String::from("fixture resourceId missing"))?;
+        assert_eq!(nginx_config_resource_id(adapter, basename), expected);
+        let first_case = fixture
+            .get("cases")
+            .and_then(Value::as_array)
+            .and_then(|cases| cases.first())
+            .ok_or_else(|| String::from("fixture first case missing"))?;
+        for (content_key, digest_key) in [
+            ("currentContent", "currentContentDigest"),
+            ("proposedContent", "proposedContentDigest"),
+        ] {
+            let content = first_case
+                .get(content_key)
+                .and_then(Value::as_str)
+                .ok_or_else(|| format!("fixture {content_key} missing"))?;
+            let expected_digest = first_case
+                .get(digest_key)
+                .and_then(Value::as_str)
+                .ok_or_else(|| format!("fixture {digest_key} missing"))?;
+            assert_eq!(sha256_digest(content.as_bytes()), expected_digest);
+        }
         Ok(())
     }
 }

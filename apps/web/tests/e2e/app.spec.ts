@@ -77,6 +77,9 @@ const reversibleAssurance = {
 const availableDigest = `sha256:${"1".repeat(64)}`;
 const enabledStateDigest = `sha256:${"2".repeat(64)}`;
 const planHash = `sha256:${"3".repeat(64)}`;
+const metadataDigest = `sha256:${"5".repeat(64)}`;
+const configPlanHash = `sha256:${"6".repeat(64)}`;
+const configResourceId = "ngc_fixtureResource123456789";
 
 const nginx = {
   observedAt: "2026-07-21T02:10:00Z",
@@ -92,6 +95,9 @@ const nginx = {
       enabledStateDigest,
       operationType: "nginx.site_state.set/v1",
       operationSchemaVersion: 1,
+      managedConfigResourceId: configResourceId,
+      managedConfigOperationType: "service.config_file.set/v1",
+      managedConfigSchemaVersion: 1,
       assurance: reversibleAssurance,
     },
     {
@@ -104,6 +110,9 @@ const nginx = {
       enabledStateDigest: null,
       operationType: null,
       operationSchemaVersion: null,
+      managedConfigResourceId: null,
+      managedConfigOperationType: null,
+      managedConfigSchemaVersion: null,
       assurance: protectedAssurance,
     },
   ],
@@ -168,6 +177,69 @@ const operationAccepted = {
   actor: session.subject,
   currentStage: "APPROVED",
   eventStream: "/api/v1/operations/op_fixture/events",
+};
+
+const managedConfigResource = {
+  schemaVersion: 1,
+  adapterId: "nginx/ubuntu-standard-v1",
+  resourceId: configResourceId,
+  displayName: "example.com",
+  maskedPath: "…/sites-available/example.com",
+  content: "server {\n  listen 80;\n}\n",
+  contentDigest: availableDigest,
+  metadataDigest,
+  maxBytes: 24576,
+  allowedServiceActions: ["reload"],
+  assurance: {
+    ...reversibleAssurance,
+    scope: ["등록된 Nginx 설정 파일 하나의 bytes·owner·mode와 검증된 reload"],
+    excludedEffects: ["include된 다른 파일과 active connection", "제품 밖 root 사용자의 동시 변경"],
+  },
+};
+
+const managedConfigPlan = {
+  schemaVersion: 1,
+  operationType: "service.config_file.set/v1",
+  planId: "plan_config_fixture",
+  planHash: configPlanHash,
+  createdAt: "2026-07-21T02:11:00Z",
+  expiresAt: "2026-07-21T02:16:00Z",
+  actor: session.subject,
+  adapterId: "nginx/ubuntu-standard-v1",
+  resourceId: configResourceId,
+  displayName: "example.com",
+  maskedPath: "…/sites-available/example.com",
+  currentContentDigest: availableDigest,
+  proposedContentDigest: `sha256:${"7".repeat(64)}`,
+  metadataDigest,
+  currentBytes: 26,
+  proposedBytes: 44,
+  addedLines: 1,
+  removedLines: 0,
+  diffSummary: ["+  client_max_body_size 20m;"],
+  serviceAction: "reload",
+  impact: [
+    "등록된 Nginx 설정 파일 하나의 bytes·owner·mode를 교체합니다.",
+    "nginx -t가 성공한 경우에만 nginx.service reload를 실행합니다.",
+  ],
+  recoveryPath: ["SSH로 서버에 접속합니다.", "대상 Nginx 설정을 검토하고 nginx -t를 실행합니다."],
+  assurance: managedConfigResource.assurance,
+};
+
+const managedConfigReceipt: OperationReceiptView = {
+  ...operationReceipt,
+  operationType: "service.config_file.set/v1",
+  planId: "plan_config_fixture",
+  planHash: configPlanHash,
+  beforeDigest: availableDigest,
+  afterDigest: managedConfigPlan.proposedContentDigest,
+};
+
+const managedConfigAccepted = {
+  ...operationAccepted,
+  operationType: "service.config_file.set/v1",
+  planId: "plan_config_fixture",
+  planHash: configPlanHash,
 };
 
 const access = {
@@ -251,10 +323,13 @@ async function mockApi(
     receipt?: OperationReceiptView;
     onPlan?: (body: unknown) => void;
     onApproval?: (body: unknown) => void;
+    onConfigPlan?: (body: unknown) => void;
+    onConfigApproval?: (body: unknown) => void;
     onEvents?: () => void;
   } = {},
 ): Promise<void> {
   let authenticated = initiallyAuthenticated;
+  let activeReceipt = operationOptions.receipt ?? operationReceipt;
   await page.route("**/api/v1/**", async (route) => {
     const request = route.request();
     const path = new URL(request.url()).pathname;
@@ -282,17 +357,30 @@ async function mockApi(
     }
     if (path === "/api/v1/host") return route.fulfill({ json: host });
     if (path === "/api/v1/services/nginx/sites") return route.fulfill({ json: nginx });
+    if (path === `/api/v1/config-resources/${configResourceId}` && request.method() === "GET") {
+      return route.fulfill({ json: managedConfigResource });
+    }
     if (path === "/api/v1/operations/nginx/site-state/plans" && request.method() === "POST") {
       operationOptions.onPlan?.(request.postDataJSON());
       return route.fulfill({ json: operationPlan });
     }
     if (path === "/api/v1/operations/nginx/site-state/approvals" && request.method() === "POST") {
       operationOptions.onApproval?.(request.postDataJSON());
+      activeReceipt = operationOptions.receipt ?? operationReceipt;
       return route.fulfill({ status: 202, json: operationAccepted });
+    }
+    if (path === "/api/v1/operations/service/config-file/plans" && request.method() === "POST") {
+      operationOptions.onConfigPlan?.(request.postDataJSON());
+      return route.fulfill({ json: managedConfigPlan });
+    }
+    if (path === "/api/v1/operations/service/config-file/approvals" && request.method() === "POST") {
+      operationOptions.onConfigApproval?.(request.postDataJSON());
+      activeReceipt = managedConfigReceipt;
+      return route.fulfill({ status: 202, json: managedConfigAccepted });
     }
     if (path === "/api/v1/operations/op_fixture/events") {
       operationOptions.onEvents?.();
-      const receipt = operationOptions.receipt ?? operationReceipt;
+      const receipt = activeReceipt;
       const stage = receipt.stages.at(-1);
       return route.fulfill({
         status: 200,
@@ -308,7 +396,7 @@ async function mockApi(
       });
     }
     if (path === "/api/v1/operations/op_fixture" && request.method() === "GET") {
-      return route.fulfill({ json: operationOptions.receipt ?? operationReceipt });
+      return route.fulfill({ json: activeReceipt });
     }
     if (path === "/api/v1/integrations") return route.fulfill({ json: integrations });
     if (path === "/api/v1/settings/access") return route.fulfill({ json: access });
@@ -453,12 +541,68 @@ test("G2 Nginx change discloses rollback scope before exact-plan PAM approval", 
   ).toEqual([]);
 });
 
+test("managed Nginx editor requires diff, two intents, and exact-plan PAM before reload", async ({
+  page,
+}) => {
+  const planBodies: unknown[] = [];
+  const approvalBodies: unknown[] = [];
+  await page.setViewportSize({ width: 390, height: 844 });
+  await mockApi(page, true, health, {
+    onConfigPlan: (body) => planBodies.push(body),
+    onConfigApproval: (body) => approvalBodies.push(body),
+  });
+  await page.goto("/services/nginx");
+  await page.getByRole("button", { name: "변경 계획 열기" }).first().click();
+  await page.getByRole("button", { name: "설정 파일 편집" }).click();
+
+  const editor = page.getByLabel("Nginx 설정 내용");
+  await expect(editor).toHaveValue(managedConfigResource.content);
+  await expect(page.getByText("저장 버튼으로 즉시 반영하지 않습니다")).toBeVisible();
+  await editor.fill("server {\n  listen 80;\n  client_max_body_size 20m;\n}\n");
+  await page.getByRole("button", { name: "변경 계획 만들기" }).dblclick();
+
+  await expect(page.getByRole("heading", { name: "설정 변경 계획" })).toBeVisible();
+  await expect(page.getByText("+  client_max_body_size 20m;")).toBeVisible();
+  await expect(page.getByText(/include된 다른 파일과 active connection/)).toBeVisible();
+  const approval = page.getByRole("button", { name: "재인증 후 설정 적용" });
+  await page.getByLabel("Linux 계정 비밀번호로 exact plan 승인").fill("fixture-password");
+  await expect(approval).toBeDisabled();
+  await page.getByLabel(/nginx -t를 통과해야만 reload/).check();
+  await expect(approval).toBeDisabled();
+  await page.getByLabel(/nginx.service reload를 수행/).check();
+  await approval.dblclick();
+
+  await expect(page.getByRole("heading", { name: "적용 완료" })).toBeVisible();
+  await expect(page.getByText(/설정 bytes·metadata, 문법, reload, active/)).toBeVisible();
+  expect(planBodies).toHaveLength(1);
+  expect(approvalBodies).toHaveLength(1);
+  const approvalBody = approvalBodies[0] as Record<string, unknown>;
+  expect(approvalBody.planHash).toBe(configPlanHash);
+  expect(approvalBody.approvalIntent).toEqual({
+    validationConfirmed: true,
+    serviceActionConfirmed: true,
+  });
+  expect(JSON.stringify(approvalBodies)).not.toContain("fixture-password");
+  expect(JSON.stringify(approvalBodies)).not.toContain("client_max_body_size");
+  const hasOverflow = await page.evaluate(
+    () => document.documentElement.scrollWidth > document.documentElement.clientWidth,
+  );
+  expect(hasOverflow).toBe(false);
+  const accessibility = await new AxeBuilder({ page }).analyze();
+  expect(
+    accessibility.violations.filter((violation) =>
+      ["critical", "serious"].includes(violation.impact ?? ""),
+    ),
+  ).toEqual([]);
+});
+
 test("G0 protected Nginx resource has no mutation action", async ({ page }) => {
   await mockApi(page, true);
   await page.goto("/services/nginx");
   await page.getByRole("button", { name: "상세" }).click();
   await expect(page.getByText("JW Agent 공개 관리 리소스는 일반 Nginx 작업에서 변경할 수 없습니다.")).toBeVisible();
   await expect(page.getByRole("button", { name: /계획 만들기/ })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "설정 파일 편집" })).toHaveCount(0);
 });
 
 test("rollback failure is never shown as a successful recovery", async ({ page }) => {

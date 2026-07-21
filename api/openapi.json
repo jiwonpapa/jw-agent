@@ -212,6 +212,75 @@
         }
       }
     },
+    "/api/v1/config-resources/{resource_id}": {
+      "get": {
+        "tags": [],
+        "operationId": "managed_config_resource",
+        "parameters": [
+          {
+            "name": "resource_id",
+            "in": "path",
+            "description": "Opaque allowlisted configuration resource identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Managed configuration resource",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManagedConfigResourceView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid resource identifier",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Protected resource",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/health": {
       "get": {
         "tags": [],
@@ -431,6 +500,172 @@
           },
           "403": {
             "description": "Role or CSRF rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Stale, busy, or idempotency conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "Forensic lockdown",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/operations/service/config-file/approvals": {
+      "post": {
+        "tags": [],
+        "operationId": "approve_managed_config",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ManagedConfigApprovalRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Managed configuration operation accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperationAcceptedView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid approval shape",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Claim, role, or CSRF rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Expired, stale, busy, or conflicting operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "Forensic lockdown",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "428": {
+            "description": "Additional authentication is configured but unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/operations/service/config-file/plans": {
+      "post": {
+        "tags": [],
+        "operationId": "plan_managed_config",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ManagedConfigPlanRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Immutable managed configuration plan",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManagedConfigPlanView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid typed request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role, protected resource, or CSRF rejected",
             "content": {
               "application/json": {
                 "schema": {
@@ -1137,6 +1372,283 @@
         },
         "additionalProperties": false
       },
+      "ManagedConfigApprovalIntent": {
+        "type": "object",
+        "required": [
+          "validationConfirmed",
+          "serviceActionConfirmed"
+        ],
+        "properties": {
+          "serviceActionConfirmed": {
+            "type": "boolean"
+          },
+          "validationConfirmed": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      },
+      "ManagedConfigApprovalRequest": {
+        "type": "object",
+        "required": [
+          "schemaVersion",
+          "planId",
+          "planHash",
+          "idempotencyKey",
+          "reauthToken",
+          "approvalIntent"
+        ],
+        "properties": {
+          "additionalAuthClaim": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "password"
+          },
+          "approvalIntent": {
+            "$ref": "#/components/schemas/ManagedConfigApprovalIntent"
+          },
+          "idempotencyKey": {
+            "type": "string"
+          },
+          "planHash": {
+            "type": "string"
+          },
+          "planId": {
+            "type": "string"
+          },
+          "reauthToken": {
+            "type": "string",
+            "format": "password"
+          },
+          "schemaVersion": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        },
+        "additionalProperties": false
+      },
+      "ManagedConfigPlanRequest": {
+        "type": "object",
+        "required": [
+          "schemaVersion",
+          "operationType",
+          "resourceId",
+          "expectedContentDigest",
+          "expectedMetadataDigest",
+          "proposedContent",
+          "serviceAction",
+          "idempotencyKey"
+        ],
+        "properties": {
+          "expectedContentDigest": {
+            "type": "string"
+          },
+          "expectedMetadataDigest": {
+            "type": "string"
+          },
+          "idempotencyKey": {
+            "type": "string"
+          },
+          "operationType": {
+            "type": "string"
+          },
+          "proposedContent": {
+            "type": "string",
+            "maxLength": 24576
+          },
+          "resourceId": {
+            "type": "string"
+          },
+          "schemaVersion": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "serviceAction": {
+            "$ref": "#/components/schemas/ServiceAction"
+          }
+        },
+        "additionalProperties": false
+      },
+      "ManagedConfigPlanView": {
+        "type": "object",
+        "required": [
+          "schemaVersion",
+          "operationType",
+          "planId",
+          "planHash",
+          "createdAt",
+          "expiresAt",
+          "actor",
+          "adapterId",
+          "resourceId",
+          "displayName",
+          "maskedPath",
+          "currentContentDigest",
+          "proposedContentDigest",
+          "metadataDigest",
+          "currentBytes",
+          "proposedBytes",
+          "addedLines",
+          "removedLines",
+          "diffSummary",
+          "serviceAction",
+          "impact",
+          "recoveryPath",
+          "assurance"
+        ],
+        "properties": {
+          "actor": {
+            "$ref": "#/components/schemas/Subject"
+          },
+          "adapterId": {
+            "type": "string"
+          },
+          "addedLines": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "assurance": {
+            "$ref": "#/components/schemas/AssuranceView"
+          },
+          "createdAt": {
+            "type": "string"
+          },
+          "currentBytes": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "currentContentDigest": {
+            "type": "string"
+          },
+          "diffSummary": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "displayName": {
+            "type": "string"
+          },
+          "expiresAt": {
+            "type": "string"
+          },
+          "impact": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "maskedPath": {
+            "type": "string"
+          },
+          "metadataDigest": {
+            "type": "string"
+          },
+          "operationType": {
+            "type": "string"
+          },
+          "planHash": {
+            "type": "string"
+          },
+          "planId": {
+            "type": "string"
+          },
+          "proposedBytes": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "proposedContentDigest": {
+            "type": "string"
+          },
+          "recoveryPath": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "removedLines": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "resourceId": {
+            "type": "string"
+          },
+          "schemaVersion": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "serviceAction": {
+            "$ref": "#/components/schemas/ServiceAction"
+          }
+        }
+      },
+      "ManagedConfigResourceView": {
+        "type": "object",
+        "required": [
+          "schemaVersion",
+          "adapterId",
+          "resourceId",
+          "displayName",
+          "maskedPath",
+          "content",
+          "contentDigest",
+          "metadataDigest",
+          "maxBytes",
+          "allowedServiceActions",
+          "assurance"
+        ],
+        "properties": {
+          "adapterId": {
+            "type": "string"
+          },
+          "allowedServiceActions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ServiceAction"
+            }
+          },
+          "assurance": {
+            "$ref": "#/components/schemas/AssuranceView"
+          },
+          "content": {
+            "type": "string"
+          },
+          "contentDigest": {
+            "type": "string"
+          },
+          "displayName": {
+            "type": "string"
+          },
+          "maskedPath": {
+            "type": "string"
+          },
+          "maxBytes": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "metadataDigest": {
+            "type": "string"
+          },
+          "resourceId": {
+            "type": "string"
+          },
+          "schemaVersion": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        }
+      },
       "MemoryObservation": {
         "type": "object",
         "required": [
@@ -1186,6 +1698,26 @@
               "string",
               "null"
             ]
+          },
+          "managedConfigOperationType": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "managedConfigResourceId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "managedConfigSchemaVersion": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
           },
           "name": {
             "type": "string"
@@ -1688,6 +2220,13 @@
           "not_guaranteed",
           "automatic_bounded",
           "restore_validated"
+        ]
+      },
+      "ServiceAction": {
+        "type": "string",
+        "enum": [
+          "reload",
+          "restart"
         ]
       },
       "ServiceSummary": {

@@ -80,6 +80,7 @@ dpkg-query -W -f='${{db:Status-Abbrev}}' libpam0g | grep -q '^ii'
 dpkg-query -W -f='${{db:Status-Abbrev}}' libsqlite3-0 | grep -q '^ii'
 ldd /usr/lib/jw-agent/jw-authd | grep -q 'libpam\.so\.0'
 ldd /usr/lib/jw-agent/jw-agentd | grep -q 'libsqlite3\.so\.0'
+grep -Fq 'client_max_body_size 64k;' "$tmpdir/usr/share/jw-agent/nginx/jw-agent-management.conf.template"
 "#
     );
     let native = config.ssh(&native_script, None, Duration::from_secs(20))?;
@@ -92,6 +93,7 @@ for unit in jw-agentd.service jw-opsd.service jw-authd.socket; do
 done
 test "$(systemctl show -p User --value jw-agentd.service)" = jw-agent
 test "$(systemctl show -p User --value jw-opsd.service)" = root
+test "$(systemctl show -p Group --value jw-opsd.service)" = root
 test "$(systemctl show -p NoNewPrivileges --value jw-agentd.service)" = yes
 test "$(systemctl show -p NoNewPrivileges --value jw-opsd.service)" = yes
 test "$(systemctl show -p ProtectSystem --value jw-agentd.service)" = strict
@@ -103,6 +105,7 @@ sudo test -S /run/jw-agent/opsd.sock
 sudo test -S /run/jw-agent-proxy/agentd.sock
 test "$(sudo stat -c '%U:%G:%a' /run/jw-agent/authd.sock)" = jw-agent:jw-agent:600
 test "$(sudo stat -c '%U:%G:%a' /run/jw-agent/opsd.sock)" = root:jw-agent:660
+test "$(sudo stat -c '%U:%G:%a' /run/jw-agent)" = root:jw-agent:2750
 test "$(sudo stat -c '%U:%G:%a' /var/lib/jw-agent/opsd)" = root:root:700
 test "$(sudo stat -c '%U:%G:%a' /var/lib/jw-agent/opsd/snapshots)" = root:root:700
 test "$(sudo stat -c '%U:%G:%a' /var/lib/jw-agent/opsd/opsd.sqlite3)" = root:jw-agent:600
@@ -227,6 +230,16 @@ pub fn gate_pam_matrix(_root: &Path, timeout: Duration) -> Result<(), String> {
 
 pub fn gate_public_recovery(_root: &Path, timeout: Duration) -> Result<(), String> {
     let config = VmConfig::load()?;
+    let edge_profile = config.ssh(
+        "sudo nginx -T 2>/dev/null | grep -Fq 'client_max_body_size 64k;'",
+        None,
+        timeout,
+    )?;
+    require_success(
+        &edge_profile,
+        "public edge managed-config body envelope",
+        false,
+    )?;
     let public_health = config.public_curl(
         &["--fail", "--output", "-", "/api/v1/health"],
         None,
@@ -389,6 +402,19 @@ test "$found" -eq 0
 
 const P2_VALID_SITE: &str = "jw-agent-vm-operation.conf";
 const P2_INVALID_SITE: &str = "jw-agent-vm-invalid.conf";
+const P2_MANAGED_SITE: &str = "jw-agent-vm-managed.conf";
+const P2_INTERNAL_TEMP: &str = ".jw-agent-0123456789abcdef.tmp";
+const P2_MANAGED_BASELINE: &[u8] =
+    b"server { listen 127.0.0.1:18082; server_name jw-agent-vm-managed.invalid; return 204; }\n";
+const P2_MANAGED_RELOAD_CHANGE: &str = "server { listen 127.0.0.1:18082; server_name jw-agent-vm-managed.invalid; add_header X-JW-Agent-VM config-v2 always; return 204; }\n";
+const P2_MANAGED_EXTERNAL: &[u8] = b"server { listen 127.0.0.1:18082; server_name jw-agent-vm-managed.invalid; add_header X-JW-Agent-VM external-owner always; return 204; }\n";
+
+fn managed_config_large_saved() -> String {
+    format!(
+        "{}server {{ listen 127.0.0.1:18082; server_name jw-agent-vm-managed.invalid; add_header X-JW-Agent-VM config-v1 always; return 204; }}\n",
+        "# jw-agent-vm-padding\n".repeat(850)
+    )
+}
 
 pub fn gate_p2_nginx_operation(_root: &Path, timeout: Duration) -> Result<(), String> {
     let config = VmConfig::load()?;
@@ -473,10 +499,171 @@ pub fn gate_p2_nginx_operation(_root: &Path, timeout: Duration) -> Result<(), St
     }
 }
 
+pub fn gate_p2_managed_config(_root: &Path, timeout: Duration) -> Result<(), String> {
+    let config = VmConfig::load()?;
+    let password = read_secret(&config.password_file)?;
+    restart_edge_and_agentd_and_wait(&config, timeout)?;
+    cleanup_managed_config_fixture(&config, timeout)?;
+    let result = (|| {
+        let managed_saved = managed_config_large_saved();
+        if managed_saved.len() <= 16 * 1_024 || managed_saved.len() > 24 * 1_024 {
+            return Err(format!(
+                "managed config envelope fixture must be >16 KiB and <=24 KiB, got {} bytes",
+                managed_saved.len()
+            ));
+        }
+        install_active_nginx_fixture(&config, P2_MANAGED_SITE, P2_MANAGED_BASELINE, timeout)?;
+        let mut session = P2ApiSession::login(&config, &password, timeout)?;
+        install_nginx_fixture(
+            &config,
+            P2_INTERNAL_TEMP,
+            b"not an operator resource\n",
+            timeout,
+        )?;
+        let inventory = session.get(&config, "/api/v1/services/nginx/sites", timeout)?;
+        expect_http(&inventory, 200, "internal temporary inventory exclusion")?;
+        if inventory.body.contains(P2_INTERNAL_TEMP) {
+            return Err(String::from(
+                "internal managed-config temporary file was exposed as a site",
+            ));
+        }
+        let restarted = config.ssh("sudo systemctl restart jw-opsd.service", None, timeout)?;
+        require_success(&restarted, "internal temporary startup cleanup", false)?;
+        session.wait_for_operation_available(&config, timeout)?;
+        let removed = config.ssh(
+            &format!("sudo test ! -e /etc/nginx/sites-available/{P2_INTERNAL_TEMP}"),
+            None,
+            timeout,
+        )?;
+        require_success(&removed, "internal temporary removal", false)?;
+
+        let saved = session.operate_managed_config(
+            &config,
+            &password,
+            P2_MANAGED_SITE,
+            &managed_saved,
+            timeout,
+        )?;
+        require_terminal(&saved, "SUCCEEDED", "managed config save")?;
+        if !saved.contains("\"resultCode\":\"config_verified\"") {
+            return Err(String::from(
+                "managed config receipt omitted config_verified evidence",
+            ));
+        }
+        require_file_equals(&config, P2_MANAGED_SITE, managed_saved.as_bytes(), timeout)?;
+
+        let noop = session.operate_managed_config(
+            &config,
+            &password,
+            P2_MANAGED_SITE,
+            &managed_saved,
+            timeout,
+        )?;
+        require_terminal(&noop, "SUCCEEDED", "managed config no-op")?;
+        if !noop.contains("\"resultCode\":\"verified_noop\"") {
+            return Err(String::from(
+                "managed config no-op omitted verified_noop evidence",
+            ));
+        }
+
+        let syntax_rollback = session.operate_managed_config(
+            &config,
+            &password,
+            P2_MANAGED_SITE,
+            "server { this_is_not_valid_nginx_syntax; }\n",
+            timeout,
+        )?;
+        require_terminal(
+            &syntax_rollback,
+            "ROLLED_BACK",
+            "managed config syntax rollback",
+        )?;
+        if !syntax_rollback.contains("\"resultCode\":\"nginx_config_test_failed\"") {
+            return Err(String::from(
+                "managed config syntax receipt omitted failure evidence",
+            ));
+        }
+        require_file_equals(&config, P2_MANAGED_SITE, managed_saved.as_bytes(), timeout)?;
+
+        install_reload_fail_once(&config, timeout)?;
+        let reload_rollback = session.operate_managed_config(
+            &config,
+            &password,
+            P2_MANAGED_SITE,
+            P2_MANAGED_RELOAD_CHANGE,
+            timeout,
+        )?;
+        require_terminal(
+            &reload_rollback,
+            "ROLLED_BACK",
+            "managed config reload rollback",
+        )?;
+        if !reload_rollback.contains("\"resultCode\":\"nginx_reload_failed\"") {
+            return Err(String::from(
+                "managed config reload receipt omitted failure evidence",
+            ));
+        }
+        require_file_equals(&config, P2_MANAGED_SITE, managed_saved.as_bytes(), timeout)?;
+        remove_reload_fixture(&config, timeout)?;
+
+        let stale_plan = session.plan_managed_config(
+            &config,
+            P2_MANAGED_SITE,
+            P2_MANAGED_RELOAD_CHANGE,
+            timeout,
+        )?;
+        install_nginx_fixture(&config, P2_MANAGED_SITE, P2_MANAGED_EXTERNAL, timeout)?;
+        let syntax = config.ssh("sudo nginx -t", None, timeout)?;
+        require_success(&syntax, "external managed config edit syntax", false)?;
+        let stale = session.approve_managed_config(&config, &password, &stale_plan, timeout)?;
+        require_terminal(
+            &stale,
+            "CANCELLED_BEFORE_APPLY",
+            "managed config external drift",
+        )?;
+        if !stale.contains("\"resultCode\":\"stale_resource\"") {
+            return Err(String::from(
+                "managed config stale receipt omitted stale_resource evidence",
+            ));
+        }
+        require_file_equals(&config, P2_MANAGED_SITE, P2_MANAGED_EXTERNAL, timeout)?;
+
+        let resource_id = session.managed_resource_id(&config, P2_MANAGED_SITE, timeout)?;
+        disable_nginx_fixture(&config, P2_MANAGED_SITE, timeout)?;
+        session.require_managed_config_unavailable(&config, P2_MANAGED_SITE, timeout)?;
+        let inactive = session.get(
+            &config,
+            &format!("/api/v1/config-resources/{resource_id}"),
+            timeout,
+        )?;
+        expect_http(&inactive, 409, "inactive managed config resource")?;
+        if !inactive.body.contains("\"code\":\"resource_not_active\"") {
+            return Err(String::from(
+                "inactive managed config denial omitted resource_not_active",
+            ));
+        }
+        let proposals = config.ssh(
+            "sudo test -d /var/lib/jw-agent/opsd/proposals && sudo test -z \"$(sudo find /var/lib/jw-agent/opsd/proposals -mindepth 1 -maxdepth 1 -type d -print -quit)\"",
+            None,
+            timeout,
+        )?;
+        require_success(&proposals, "managed config proposal cleanup", false)
+    })();
+    let cleanup = cleanup_managed_config_fixture(&config, timeout);
+    match (result, cleanup) {
+        (Ok(()), Ok(())) => Ok(()),
+        (Err(error), Ok(())) => Err(error),
+        (Ok(()), Err(cleanup_error)) => Err(cleanup_error),
+        (Err(error), Err(cleanup_error)) => Err(format!(
+            "{error}; managed config cleanup also failed: {cleanup_error}"
+        )),
+    }
+}
+
 pub fn gate_p2_forensic_lockdown(_root: &Path, timeout: Duration) -> Result<(), String> {
     let config = VmConfig::load()?;
     let password = read_secret(&config.password_file)?;
-    restart_agentd_and_wait(&config, timeout)?;
+    restart_edge_and_agentd_and_wait(&config, timeout)?;
     let backup = "/var/tmp/jw-agent-ledger.checkpoint.backup";
     let remove_checkpoint = config.ssh(
         &format!(
@@ -585,6 +772,9 @@ impl P2ApiSession {
             .map_or(after_protected, |(before, _)| before);
         if !before_assurance.contains("\"operationType\":null")
             || !before_assurance.contains("\"operationSchemaVersion\":null")
+            || !before_assurance.contains("\"managedConfigResourceId\":null")
+            || !before_assurance.contains("\"managedConfigOperationType\":null")
+            || !before_assurance.contains("\"managedConfigSchemaVersion\":null")
         {
             return Err(String::from(
                 "protected public management vhost exposed a mutation contract",
@@ -744,12 +934,203 @@ impl P2ApiSession {
         }
         Ok(receipt.body)
     }
-}
 
-fn restart_agentd_and_wait(config: &VmConfig, timeout: Duration) -> Result<(), String> {
-    let restarted = config.ssh("sudo systemctl restart jw-agentd.service", None, timeout)?;
-    require_success(&restarted, "agentd restart", false)?;
-    wait_for_public_agent(config, timeout)
+    fn managed_resource_id(
+        &self,
+        config: &VmConfig,
+        site_name: &str,
+        timeout: Duration,
+    ) -> Result<String, String> {
+        let sites = self.get(config, "/api/v1/services/nginx/sites", timeout)?;
+        expect_http(&sites, 200, "managed config Nginx observation")?;
+        Ok(json_managed_config_site_fields(&sites.body, site_name)?.resource_id)
+    }
+
+    fn require_managed_config_unavailable(
+        &self,
+        config: &VmConfig,
+        site_name: &str,
+        timeout: Duration,
+    ) -> Result<(), String> {
+        let sites = self.get(config, "/api/v1/services/nginx/sites", timeout)?;
+        expect_http(&sites, 200, "inactive managed config observation")?;
+        let object = json_site_object(&sites.body, site_name)?;
+        if object.contains("\"managedConfigResourceId\":null")
+            && object.contains("\"managedConfigOperationType\":null")
+            && object.contains("\"managedConfigSchemaVersion\":null")
+        {
+            Ok(())
+        } else {
+            Err(String::from(
+                "inactive Nginx site exposed a managed config mutation contract",
+            ))
+        }
+    }
+
+    fn plan_managed_config(
+        &self,
+        config: &VmConfig,
+        site_name: &str,
+        proposed_content: &str,
+        timeout: Duration,
+    ) -> Result<ManagedConfigPlanFields, String> {
+        let sites = self.get(config, "/api/v1/services/nginx/sites", timeout)?;
+        expect_http(&sites, 200, "managed config Nginx observation")?;
+        let site = json_managed_config_site_fields(&sites.body, site_name)?;
+        let resource = self.get(
+            config,
+            &format!("/api/v1/config-resources/{}", site.resource_id),
+            timeout,
+        )?;
+        expect_http(&resource, 200, "managed config resource")?;
+        if json_unsigned_field(&resource.body, "maxBytes")? != 24_576
+            || !resource
+                .body
+                .contains("\"allowedServiceActions\":[\"reload\"]")
+            || !resource.body.contains("\"level\":\"g2_reversible_config\"")
+        {
+            return Err(String::from(
+                "managed config resource omitted its bounded G2 contract",
+            ));
+        }
+        let idempotency_key = operation_idempotency_key()?;
+        let plan_body = format!(
+            "{{\"schemaVersion\":{},\"operationType\":{},\"resourceId\":{},\"expectedContentDigest\":{},\"expectedMetadataDigest\":{},\"proposedContent\":{},\"serviceAction\":\"reload\",\"idempotencyKey\":{}}}",
+            site.schema_version,
+            json_string(&site.operation_type),
+            json_string(&site.resource_id),
+            json_string(&json_string_field(&resource.body, "contentDigest")?),
+            json_string(&json_string_field(&resource.body, "metadataDigest")?),
+            json_string(proposed_content),
+            json_string(&idempotency_key),
+        );
+        let plan = public_api_request(
+            config,
+            "POST",
+            "/api/v1/operations/service/config-file/plans",
+            &self.cookie_jar.path,
+            Some(&self.csrf_token),
+            Some(plan_body.as_bytes()),
+            timeout,
+        )?;
+        expect_http(&plan, 200, "managed config plan")?;
+        if !plan.body.contains("\"serviceAction\":\"reload\"")
+            || !plan.body.contains("\"level\":\"g2_reversible_config\"")
+            || !plan.body.contains("\"maskedPath\":\"…/sites-available/")
+        {
+            return Err(String::from(
+                "managed config plan omitted action, assurance, or masked path",
+            ));
+        }
+        Ok(ManagedConfigPlanFields {
+            schema_version: site.schema_version,
+            plan_id: json_string_field(&plan.body, "planId")?,
+            plan_hash: json_string_field(&plan.body, "planHash")?,
+            idempotency_key,
+        })
+    }
+
+    fn approve_managed_config(
+        &mut self,
+        config: &VmConfig,
+        password: &str,
+        plan: &ManagedConfigPlanFields,
+        timeout: Duration,
+    ) -> Result<String, String> {
+        let reauth_body = format!(
+            "{{\"password\":{},\"purpose\":{{\"kind\":\"operation\",\"planHash\":{}}}}}",
+            json_string(password),
+            json_string(&plan.plan_hash),
+        );
+        let reauth = public_api_request(
+            config,
+            "POST",
+            "/api/v1/auth/reauth",
+            &self.cookie_jar.path,
+            Some(&self.csrf_token),
+            Some(reauth_body.as_bytes()),
+            timeout,
+        )?;
+        expect_http(
+            &reauth,
+            200,
+            "managed config exact-plan PAM reauthentication",
+        )?;
+        self.csrf_token = json_string_field(&reauth.body, "csrfToken")?;
+        let reauth_token = json_string_field(&reauth.body, "reauthToken")?;
+        let approval_body = format!(
+            "{{\"schemaVersion\":{},\"planId\":{},\"planHash\":{},\"idempotencyKey\":{},\"reauthToken\":{},\"approvalIntent\":{{\"validationConfirmed\":true,\"serviceActionConfirmed\":true}}}}",
+            plan.schema_version,
+            json_string(&plan.plan_id),
+            json_string(&plan.plan_hash),
+            json_string(&plan.idempotency_key),
+            json_string(&reauth_token),
+        );
+        let accepted = public_api_request(
+            config,
+            "POST",
+            "/api/v1/operations/service/config-file/approvals",
+            &self.cookie_jar.path,
+            Some(&self.csrf_token),
+            Some(approval_body.as_bytes()),
+            timeout,
+        )?;
+        expect_http(&accepted, 202, "managed config approval")?;
+        let operation_id = json_string_field(&accepted.body, "operationId")?;
+        let event_stream = json_string_field(&accepted.body, "eventStream")?;
+        let expected_stream = format!("/api/v1/operations/{operation_id}/events");
+        if event_stream != expected_stream {
+            return Err(String::from(
+                "managed config returned a non-canonical event stream",
+            ));
+        }
+        let operation_path = format!("/api/v1/operations/{operation_id}");
+        let started = Instant::now();
+        let receipt = loop {
+            let current = self.get(config, &operation_path, timeout)?;
+            expect_http(&current, 200, "managed config receipt")?;
+            let stage = json_string_field(&current.body, "terminalState")?;
+            if matches!(
+                stage.as_str(),
+                "SUCCEEDED"
+                    | "ROLLED_BACK"
+                    | "RECOVERY_REQUIRED"
+                    | "REJECTED"
+                    | "EXPIRED"
+                    | "CANCELLED_BEFORE_APPLY"
+            ) {
+                break current;
+            }
+            if started.elapsed() >= timeout {
+                return Err(String::from(
+                    "managed config did not reach a terminal receipt before timeout",
+                ));
+            }
+            thread::sleep(Duration::from_millis(250));
+        };
+        let events = self.get(config, &event_stream, timeout)?;
+        expect_http(&events, 200, "managed config event stream")?;
+        if !events.body.contains("event:operation-stage")
+            && !events.body.contains("event: operation-stage")
+        {
+            return Err(String::from(
+                "managed config event stream omitted durable stage evidence",
+            ));
+        }
+        Ok(receipt.body)
+    }
+
+    fn operate_managed_config(
+        &mut self,
+        config: &VmConfig,
+        password: &str,
+        site_name: &str,
+        proposed_content: &str,
+        timeout: Duration,
+    ) -> Result<String, String> {
+        let plan = self.plan_managed_config(config, site_name, proposed_content, timeout)?;
+        self.approve_managed_config(config, password, &plan, timeout)
+    }
 }
 
 fn restart_edge_and_agentd_and_wait(config: &VmConfig, timeout: Duration) -> Result<(), String> {
@@ -791,7 +1172,20 @@ struct NginxSiteFields {
     enabled_state_digest: String,
 }
 
-fn json_site_fields(body: &str, site_name: &str) -> Result<NginxSiteFields, String> {
+struct ManagedConfigSiteFields {
+    schema_version: u16,
+    operation_type: String,
+    resource_id: String,
+}
+
+struct ManagedConfigPlanFields {
+    schema_version: u16,
+    plan_id: String,
+    plan_hash: String,
+    idempotency_key: String,
+}
+
+fn json_site_object<'a>(body: &'a str, site_name: &str) -> Result<&'a str, String> {
     let marker = format!("\"name\":{}", json_string(site_name));
     let Some(marker_index) = body.find(&marker) else {
         return Err(format!("Nginx fixture `{site_name}` was not observed"));
@@ -803,7 +1197,11 @@ fn json_site_fields(body: &str, site_name: &str) -> Result<NginxSiteFields, Stri
     let end = remainder
         .find("\"assurance\":")
         .map_or(remainder.len(), std::convert::identity);
-    let object = &remainder[..end];
+    Ok(&remainder[..end])
+}
+
+fn json_site_fields(body: &str, site_name: &str) -> Result<NginxSiteFields, String> {
+    let object = json_site_object(body, site_name)?;
     let schema = json_unsigned_field(object, "operationSchemaVersion")?;
     Ok(NginxSiteFields {
         schema_version: u16::try_from(schema)
@@ -812,6 +1210,20 @@ fn json_site_fields(body: &str, site_name: &str) -> Result<NginxSiteFields, Stri
         site_id: json_string_field(object, "siteId")?,
         available_digest: json_string_field(object, "availableDigest")?,
         enabled_state_digest: json_string_field(object, "enabledStateDigest")?,
+    })
+}
+
+fn json_managed_config_site_fields(
+    body: &str,
+    site_name: &str,
+) -> Result<ManagedConfigSiteFields, String> {
+    let object = json_site_object(body, site_name)?;
+    let schema = json_unsigned_field(object, "managedConfigSchemaVersion")?;
+    Ok(ManagedConfigSiteFields {
+        schema_version: u16::try_from(schema)
+            .map_err(|_| String::from("managed config schema version overflow"))?,
+        operation_type: json_string_field(object, "managedConfigOperationType")?,
+        resource_id: json_string_field(object, "managedConfigResourceId")?,
     })
 }
 
@@ -947,6 +1359,51 @@ fn install_nginx_fixture(
     require_success(&result, "Nginx fixture install", false)
 }
 
+fn install_active_nginx_fixture(
+    config: &VmConfig,
+    name: &str,
+    contents: &[u8],
+    timeout: Duration,
+) -> Result<(), String> {
+    install_nginx_fixture(config, name, contents, timeout)?;
+    validate_atom(name, "Nginx fixture name", ".-_")?;
+    let result = config.ssh(
+        &format!(
+            "sudo ln -s ../sites-available/{name} /etc/nginx/sites-enabled/{name}\nsudo nginx -t\nsudo systemctl reload nginx.service"
+        ),
+        None,
+        timeout,
+    )?;
+    require_success(&result, "active Nginx fixture install", false)
+}
+
+fn disable_nginx_fixture(config: &VmConfig, name: &str, timeout: Duration) -> Result<(), String> {
+    validate_atom(name, "Nginx fixture name", ".-_")?;
+    let result = config.ssh(
+        &format!(
+            "sudo rm -f /etc/nginx/sites-enabled/{name}\nsudo nginx -t\nsudo systemctl reload nginx.service"
+        ),
+        None,
+        timeout,
+    )?;
+    require_success(&result, "inactive Nginx fixture", false)
+}
+
+fn require_file_equals(
+    config: &VmConfig,
+    name: &str,
+    expected: &[u8],
+    timeout: Duration,
+) -> Result<(), String> {
+    validate_atom(name, "Nginx fixture name", ".-_")?;
+    let result = config.ssh(
+        &format!("sudo cmp -s /dev/stdin /etc/nginx/sites-available/{name}"),
+        Some(expected),
+        timeout,
+    )?;
+    require_success(&result, "exact managed config bytes", false)
+}
+
 fn require_link_absent(config: &VmConfig, name: &str, timeout: Duration) -> Result<(), String> {
     validate_atom(name, "Nginx fixture name", ".-_")?;
     let result = config.ssh(
@@ -1005,6 +1462,15 @@ fn cleanup_p2_fixtures(config: &VmConfig, timeout: Duration) -> Result<(), Strin
         timeout,
     )?;
     require_success(&result, "P2 VM fixture cleanup", false)
+}
+
+fn cleanup_managed_config_fixture(config: &VmConfig, timeout: Duration) -> Result<(), String> {
+    let result = config.ssh(
+        "sudo rm -f /etc/nginx/sites-enabled/jw-agent-vm-managed.conf\nsudo rm -f /etc/nginx/sites-available/jw-agent-vm-managed.conf /etc/nginx/sites-available/.jw-agent-0123456789abcdef.tmp\nsudo rm -f /etc/systemd/system/nginx.service.d/90-jw-agent-vm.conf /run/jw-agent-vm-reload-fail-once\nsudo systemctl daemon-reload\nsudo nginx -t\nsudo systemctl reload nginx.service",
+        None,
+        timeout,
+    )?;
+    require_success(&result, "managed config VM fixture cleanup", false)
 }
 
 struct TemporarySecretFile {

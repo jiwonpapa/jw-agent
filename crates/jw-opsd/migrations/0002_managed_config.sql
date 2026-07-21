@@ -1,0 +1,1 @@
+ALTER TABLE plans ADD COLUMN payload_json TEXT NOT NULL DEFAULT 'null';

@@ -4,10 +4,12 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use jw_contracts::{
-    AssuranceLevel, AssuranceView, DiskObservation, HostObservation, MemoryObservation,
-    NGINX_LAYOUT_ID, NGINX_SITE_STATE_OPERATION, NginxSiteObservation, NginxSitesView,
-    OPERATION_SCHEMA_VERSION, ObservationStatus, RollbackSupport, nginx_enabled_state_digest,
-    nginx_management_config, nginx_site_id, sha256_digest,
+    AssuranceLevel, AssuranceView, DiskObservation, HostObservation, MANAGED_CONFIG_MAX_BYTES,
+    MANAGED_CONFIG_OPERATION, MemoryObservation, NGINX_CONFIG_ADAPTER_ID, NGINX_LAYOUT_ID,
+    NGINX_SITE_STATE_OPERATION, NginxSiteObservation, NginxSitesView, OPERATION_SCHEMA_VERSION,
+    ObservationStatus, RollbackSupport, managed_config_bytes_supported, nginx_config_resource_id,
+    nginx_enabled_state_digest, nginx_internal_temporary_name, nginx_management_config,
+    nginx_site_id, sha256_digest,
 };
 
 const MAX_TEXT_BYTES: u64 = 64 * 1_024;
@@ -138,17 +140,30 @@ fn observe_nginx_site(
     mutation_gate_reason: Option<&str>,
 ) -> NginxSiteObservation {
     let preconditions = inspect_nginx_preconditions(profile, &name, available, enabled);
-    let (site_id, available_digest, enabled_state_digest, content_protected, path_reason) =
-        match preconditions {
-            Ok((site_id, available_digest, enabled_state_digest, content_protected)) => (
-                Some(site_id),
-                Some(available_digest),
-                Some(enabled_state_digest),
-                content_protected,
-                None,
-            ),
-            Err(reason) => (None, None, None, false, Some(reason)),
-        };
+    let (
+        site_id,
+        available_digest,
+        enabled_state_digest,
+        content_protected,
+        managed_config_supported,
+        path_reason,
+    ) = match preconditions {
+        Ok((
+            site_id,
+            available_digest,
+            enabled_state_digest,
+            content_protected,
+            managed_config_supported,
+        )) => (
+            Some(site_id),
+            Some(available_digest),
+            Some(enabled_state_digest),
+            content_protected,
+            managed_config_supported,
+            None,
+        ),
+        Err(reason) => (None, None, None, false, false, Some(reason)),
+    };
     let protected = name == MANAGEMENT_SITE || content_protected;
     let reason = if protected {
         Some("JW Agent 공개 관리 리소스는 일반 Nginx 작업에서 변경할 수 없습니다.")
@@ -162,6 +177,9 @@ fn observe_nginx_site(
     let operation_schema_version = assurance
         .operation_available
         .then_some(OPERATION_SCHEMA_VERSION);
+    let managed_config_available = assurance.operation_available && managed_config_supported;
+    let managed_config_resource_id =
+        managed_config_available.then(|| nginx_config_resource_id(NGINX_CONFIG_ADAPTER_ID, &name));
     NginxSiteObservation {
         name,
         site_id,
@@ -172,6 +190,10 @@ fn observe_nginx_site(
         enabled_state_digest,
         operation_type,
         operation_schema_version,
+        managed_config_resource_id,
+        managed_config_operation_type: managed_config_available
+            .then(|| String::from(MANAGED_CONFIG_OPERATION)),
+        managed_config_schema_version: managed_config_available.then_some(OPERATION_SCHEMA_VERSION),
         assurance,
     }
 }
@@ -181,7 +203,7 @@ fn inspect_nginx_preconditions(
     name: &str,
     available: bool,
     enabled: bool,
-) -> Result<(String, String, String, bool), &'static str> {
+) -> Result<(String, String, String, bool, bool), &'static str> {
     if !available {
         return Err("원본 설정 파일이 없어 변경 계획을 만들 수 없습니다.");
     }
@@ -219,12 +241,31 @@ fn inspect_nginx_preconditions(
             return Err("활성 링크가 발견된 원본 설정을 가리키지 않습니다.");
         }
     }
+    let managed_config_supported = enabled
+        && bytes.len() <= MANAGED_CONFIG_MAX_BYTES
+        && managed_config_bytes_supported(&bytes)
+        && managed_mode_supported(&metadata);
     Ok((
         nginx_site_id(NGINX_LAYOUT_ID, name),
         sha256_digest(&bytes),
         nginx_enabled_state_digest(enabled),
         nginx_management_config(&bytes),
+        managed_config_supported,
     ))
+}
+
+fn managed_mode_supported(metadata: &fs::Metadata) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+
+        metadata.mode() & 0o133 == 0
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = metadata;
+        false
+    }
 }
 
 fn nginx_assurance(reason: Option<&str>) -> AssuranceView {
@@ -282,7 +323,12 @@ fn collect_sites(
         let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
             continue;
         };
-        if name.is_empty() || name.len() > 255 || name == "." || name == ".." {
+        if name.is_empty()
+            || name.len() > 255
+            || name == "."
+            || name == ".."
+            || nginx_internal_temporary_name(&name)
+        {
             continue;
         }
         let flags = sites.entry(name).or_insert((false, false));
@@ -360,6 +406,7 @@ fn observe_root_disk() -> Option<DiskObservation> {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
     use std::fs;
 
     use jw_contracts::{
@@ -367,7 +414,23 @@ mod tests {
         sha256_digest,
     };
 
-    use super::{ObservationProfile, inspect_nginx_preconditions};
+    use super::{ObservationProfile, collect_sites, inspect_nginx_preconditions};
+
+    #[test]
+    fn nginx_inventory_excludes_exact_internal_temporary_files() -> Result<(), String> {
+        let root = test_root("internal-temporary")?;
+        fs::create_dir_all(&root).map_err(|error| error.to_string())?;
+        fs::write(root.join(".jw-agent-0123456789abcdef.tmp"), b"pending")
+            .map_err(|error| error.to_string())?;
+        fs::write(root.join("example.com"), b"server {}\n").map_err(|error| error.to_string())?;
+        let mut sites = BTreeMap::new();
+        let mut truncated = false;
+        collect_sites(&root, true, &mut sites, &mut truncated);
+        assert_eq!(sites.len(), 1);
+        assert!(sites.contains_key("example.com"));
+        assert!(!truncated);
+        fs::remove_dir_all(root).map_err(|error| error.to_string())
+    }
 
     #[test]
     fn nginx_precondition_identity_is_stable_for_a_safe_disabled_site() -> Result<(), String> {
@@ -378,13 +441,36 @@ mod tests {
         let content = b"server {}\n";
         fs::write(profile.nginx_available.join("example.com"), content)
             .map_err(|error| error.to_string())?;
-        let (site_id, available_digest, state_digest, protected) =
+        let (site_id, available_digest, state_digest, protected, managed) =
             inspect_nginx_preconditions(&profile, "example.com", true, false)
                 .map_err(str::to_owned)?;
         assert_eq!(site_id, nginx_site_id(NGINX_LAYOUT_ID, "example.com"));
         assert_eq!(available_digest, sha256_digest(content));
         assert_eq!(state_digest, nginx_enabled_state_digest(false));
         assert!(!protected);
+        assert!(!managed);
+        fs::remove_dir_all(root).map_err(|error| error.to_string())
+    }
+
+    #[test]
+    fn nginx_precondition_allows_managed_config_only_for_exact_enabled_link() -> Result<(), String>
+    {
+        let root = test_root("safe-enabled")?;
+        let profile = profile(&root);
+        fs::create_dir_all(&profile.nginx_available).map_err(|error| error.to_string())?;
+        fs::create_dir_all(&profile.nginx_enabled).map_err(|error| error.to_string())?;
+        fs::write(profile.nginx_available.join("example.com"), b"server {}\n")
+            .map_err(|error| error.to_string())?;
+        std::os::unix::fs::symlink(
+            "../sites-available/example.com",
+            profile.nginx_enabled.join("example.com"),
+        )
+        .map_err(|error| error.to_string())?;
+        let (_, _, _, protected, managed) =
+            inspect_nginx_preconditions(&profile, "example.com", true, true)
+                .map_err(str::to_owned)?;
+        assert!(!protected);
+        assert!(managed);
         fs::remove_dir_all(root).map_err(|error| error.to_string())
     }
 
@@ -402,10 +488,11 @@ mod tests {
             content,
         )
         .map_err(|error| error.to_string())?;
-        let (_, _, _, protected) =
+        let (_, _, _, protected, managed) =
             inspect_nginx_preconditions(&profile, "operator-selected-name", true, false)
                 .map_err(str::to_owned)?;
         assert!(protected);
+        assert!(!managed);
         fs::remove_dir_all(root).map_err(|error| error.to_string())
     }
 

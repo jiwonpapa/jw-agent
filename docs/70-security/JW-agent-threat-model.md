@@ -7,7 +7,7 @@ Last reviewed: 2026-07-21
 
 ## Executive summary
 
-최상위 위험은 credential stuffing, 공개 HTTP input으로 agentd를 침해한 뒤 root authd·opsd 경계를 공격하는 연쇄 경로, PAM FFI 결함, P2 path·crash recovery 오류, OpenSSH manual session 탈취, Certbot 외부효과와 package 공급망입니다. P2 Nginx site-state baseline은 전용 Ubuntu 24.04 VM에서 package·PAM·TLS·성공·원복·디스크 부족·원장 훼손 `VM_PASS`를 획득했습니다. 다만 private-LAN test CA와 unsigned local package 증거이므로 공인 배포·운영 안전으로 과장하지 않으며 managed config·terminal·SFTP·Certbot은 각 VM 증거 전까지 구현 완료를 주장하지 않습니다.
+최상위 위험은 credential stuffing, 공개 HTTP input으로 agentd를 침해한 뒤 root authd·opsd 경계를 공격하는 연쇄 경로, PAM FFI 결함, P2 path·crash recovery 오류, OpenSSH manual session 탈취, Certbot 외부효과와 package 공급망입니다. P2 Nginx site-state와 active managed-config profile은 전용 Ubuntu 24.04 VM에서 package·PAM·TLS·성공·정확 원복·외부 변경·비활성 차단·임시 파일 정리·원장 훼손 `VM_PASS`를 획득했습니다. 다만 private-LAN test CA와 unsigned local package 증거이므로 공인 배포·운영 안전으로 과장하지 않으며 terminal·SFTP·Certbot은 각 VM 증거 전까지 구현 완료를 주장하지 않습니다.
 
 ## Scope and assumptions
 
@@ -19,7 +19,7 @@ In scope:
 - Linux PAM local account, Linux group role, server-side session
 - SQLite session/settings, Nginx observation, public ingress packaging basis
 - mobile·tablet·desktop responsive web
-- 구현된 P2 safety kernel·Nginx site state와 managed config·Certbot lifecycle 설계
+- 구현된 P2 safety kernel·Nginx site state·active managed config와 Certbot lifecycle 설계
 - existing OpenSSH 기반 non-root terminal·SFTP 설계
 
 Out of scope:
@@ -140,7 +140,7 @@ flowchart LR
 | authd socket | agentd service UID | agentd → root authd | PAM FFI and credential oracle | `docs/70-security/pam-authentication.md` |
 | opsd socket | agentd service UID | agentd → root opsd | privileged typed operation | `docs/20-architecture/system-context.md` |
 | Nginx site operation (P2 active) | approved plan | opsd → filesystem/systemd | VM success·rollback·disk·lockdown proof | `docs/90-specs/operations/nginx-site-state-set-v1.md` |
-| Managed config (P2) | approved G2 plan | opsd → allowlisted file/service | content/path/race/crash risk | `docs/90-specs/operations/managed-config-file-v1.md` |
+| Managed config (P2B active) | approved G2 plan | opsd → active allowlisted Nginx file/service | VM exact rollback·drift·inactive·temp cleanup proof | `docs/90-specs/operations/managed-config-file-v1.md` |
 | Certbot lifecycle (P2) | approved G1/G2 plan | opsd → Certbot/Nginx/CA | external issuance and secret risk | `docs/90-specs/operations/certbot-certificate-v1.md` |
 | Terminal/SFTP (P2) | approved manual session | agentd → loopback OpenSSH | G1 command/file effects | `docs/90-specs/access/openssh-terminal-sftp-v1.md` |
 | Public access operation (planned) | SSH-authenticated admin | opsd → Nginx/UFW | P1은 수동 opt-in template만 제공 | `docs/90-specs/operations/public-access-profile-v1.md` |
@@ -175,7 +175,7 @@ flowchart LR
 | TM-005 | distributed login attacker | public PAM endpoint | exhaust product login budget or one-shot auth workers | product login DoS | PAM account, authd availability | edge+app rate limits, 8s broker timeout, no `pam_faillock`, socket activation isolation; repeated-failure VM proof confirms Linux password state and SSH key recovery remain usable | distributed-source and sustained activation pressure not load-tested | preserve no-persistent-lockout policy, add bounded activation/load evidence before public release | activation count, PAM timeout, source diversity | high | medium | high |
 | TM-006 | remote/local requester | proxy/Host trust confusion | spoof source, Host or Origin | rate/origin/audit bypass | proxy metadata, session | dedicated public UDS, header clearing/template rewrite, exact boundary tests and Nginx effective-config/public-port VM proof | alternate proxy/CDN topology unsupported and unverified | keep unsupported topology fail-closed; require a new trust contract before CDN support | rejected Host/source/channel mismatch | medium | high | high |
 | TM-007 | local attacker | access to service UID or runtime socket | invoke authd or flood opsd directly | credential oracle or root parser pressure | password boundary, helper availability | socket modes, SO_PEERCRED, bounded opsd connections and wrong-UID Ubuntu VM rejection | socket replacement and restart-race depth remains limited | retain wrong-UID gate; add race/fault matrix only when mutable P2 opsd exists | peer UID denial and request rejection counts | medium | high | high |
-| TM-008 | P2 authenticated attacker | typed write primitive has path/race flaw | exploit symlink/path/TOCTOU | arbitrary root path change | config, host | no user path/argv, openat2/no-follow, root ownership, stable site ID, content-marker protected vhost, VM protected-resource proof | external concurrent-drift race depth remains limited | retain protected-root and outside-link regression; add concurrent drift stress | path-policy denial and unexpected inode/digest | low | high | high |
+| TM-008 | P2 authenticated attacker | typed write primitive has path/race flaw | exploit symlink/path/TOCTOU or expose internal temp as a site | arbitrary root path change or unsafe activation | config, host | no user path/argv, no-follow/root ownership, stable IDs, protected marker, active exact symlink, temp namespace exclusion/startup cleanup, VM drift/inactive proof | microsecond concurrent-drift race depth remains limited | retain protected/outside-link/temp regression; add concurrent stress | path-policy denial and unexpected inode/digest | low | high | high |
 | TM-009 | P2 fault actor | durable operation is killed or disk fills | cause repeated apply or failed recovery | service outage or config loss | ledger, snapshot, config | SQLite WAL/FULL, chained events/checkpoint, snapshot fsync, read-back, rollback, disk-full cancellation and checkpoint-deletion VM lockdown | every-durable-stage SIGKILL matrix remains incomplete | add restart-at-each-stage matrix before broader adapter rollout | recovery-required, disk and continuity alert | medium | high | critical |
 | TM-010 | service output/developer error | secret reaches log/error/cache | persist password/session/PAM text | credential/session compromise | passwords, logs, sessions | `SecretString`, zeroize, digest-only DB, core-dump denial, no browser storage, generic errors and VM journal/DB/argv/package/evidence canary scan | external PAM module copies and crash dump handling outside process boundary cannot be claimed erased | preserve secret scan and keep password out of argv/logging; document FFI ownership limit | redaction gate and secret canary failure | medium | high | high |
 | TM-011 | supply-chain attacker | source/dependency/signing path compromise | malicious package deployment | multi-host root compromise | signing key, artifact, all hosts | pinned lockfiles, no git dependency, no remote Actions, local gates and checksum-pinned Ubuntu package install/upgrade/remove evidence | signer/SBOM/reproducible release lane 없음 | isolated signing key, SBOM, signed manifest, install/repro/revocation procedure before release claim | signature/source/repro mismatch | low | high | high |
