@@ -276,6 +276,56 @@ const terminalCapability = {
   },
 };
 
+const fileCapability = {
+  available: true,
+  reason: null,
+  username: "operator",
+  rootLabel: "~",
+  assurance: {
+    level: "g0_observe_only",
+    rollbackSupport: "not_applicable",
+    operationAvailable: true,
+    scope: ["현재 로그인한 non-root Linux 계정의 홈 디렉터리 읽기"],
+    excludedEffects: ["업로드·생성·편집·삭제·이동·권한 변경", "홈 밖 경로"],
+    applyVerifier: ["PAM 재인증", "OpenSSH REALPATH 기반 홈 경계 검증"],
+    rollbackVerifier: ["읽기 전용이므로 원복 대상 없음"],
+    reason: null,
+  },
+  limits: {
+    idleTimeoutSeconds: 120,
+    maxLifetimeSeconds: 600,
+    maxPathBytes: 1024,
+    maxComponentBytes: 255,
+    maxListEntries: 500,
+    maxTextBytes: 262144,
+    maxDownloadBytes: 8388608,
+    maxSessionsPerUser: 1,
+  },
+};
+
+const fileListing = {
+  path: "",
+  truncated: false,
+  entries: [
+    {
+      name: "Documents",
+      path: "Documents",
+      kind: "directory",
+      sizeBytes: null,
+      modifiedAtUnixSeconds: 1_780_000_000,
+      permissions: 16832,
+    },
+    {
+      name: "notes.txt",
+      path: "notes.txt",
+      kind: "regular",
+      sizeBytes: 18,
+      modifiedAtUnixSeconds: 1_780_000_000,
+      permissions: 33152,
+    },
+  ],
+};
+
 const certificates = {
   schemaVersion: 1,
   observedAt: "2026-07-21T02:10:00Z",
@@ -600,6 +650,9 @@ async function mockApi(
     onCertbotAttachApproval?: (body: unknown) => void;
     onTerminalTicket?: (body: unknown) => void;
     terminalFixture?: Record<string, unknown>;
+    onFileSession?: (body: unknown) => void;
+    onFileList?: (body: unknown) => void;
+    fileFixture?: Record<string, unknown>;
   } = {},
 ): Promise<void> {
   let authenticated = initiallyAuthenticated;
@@ -644,6 +697,47 @@ async function mockApi(
           assurance: terminalCapability.assurance,
           limits: terminalCapability.limits,
         },
+      });
+    }
+    if (path === "/api/v1/files" && request.method() === "GET") {
+      return route.fulfill({ json: operationOptions.fileFixture ?? fileCapability });
+    }
+    if (path === "/api/v1/files/sessions" && request.method() === "POST") {
+      operationOptions.onFileSession?.(request.postDataJSON());
+      return route.fulfill({
+        status: 201,
+        json: {
+          sessionToken: "F".repeat(43),
+          expiresAt: "2026-07-21T02:20:00Z",
+          rootLabel: "~",
+          assurance: fileCapability.assurance,
+          limits: fileCapability.limits,
+        },
+      });
+    }
+    if (path === "/api/v1/files/sessions/close" && request.method() === "POST") {
+      return route.fulfill({ status: 204 });
+    }
+    if (path === "/api/v1/files/list" && request.method() === "POST") {
+      operationOptions.onFileList?.(request.postDataJSON());
+      return route.fulfill({ json: fileListing });
+    }
+    if (path === "/api/v1/files/read" && request.method() === "POST") {
+      return route.fulfill({
+        json: {
+          path: "notes.txt",
+          content: "read-only evidence\n",
+          sizeBytes: 19,
+          digest: `sha256:${"9".repeat(64)}`,
+          lineEnding: "lf",
+        },
+      });
+    }
+    if (path === "/api/v1/files/download" && request.method() === "POST") {
+      return route.fulfill({
+        status: 200,
+        contentType: "application/octet-stream",
+        body: "read-only evidence\n",
       });
     }
     if (path === "/api/v1/certificates") {
@@ -867,6 +961,47 @@ test("terminal ticket keeps password out of URL and browser storage", async ({ p
     ),
   ).toEqual([]);
 });
+
+for (const viewport of [
+  { width: 320, height: 800 },
+  { width: 768, height: 1024 },
+  { width: 1440, height: 900 },
+]) {
+  test(`files keeps G0 boundary visible at ${String(viewport.width)}x${String(viewport.height)}`, async ({ page }) => {
+    let sessionBody: unknown;
+    let listBody: unknown;
+    await page.setViewportSize(viewport);
+    await mockApi(page, true, health, {
+      onFileSession: (body) => { sessionBody = body; },
+      onFileList: (body) => { listBody = body; },
+    });
+    await page.goto("/files");
+    await expect(page.getByRole("heading", { name: "홈 파일" })).toBeVisible();
+    await expect(page.getByText("G0 · 변경 없음").first()).toBeVisible();
+    await expect(page.getByText(/업로드·편집·삭제·이동·권한 변경/).first()).toBeVisible();
+    const open = page.getByRole("button", { name: "재인증 후 열기" });
+    await page.getByLabel("Linux 비밀번호 재확인").fill("fixture-file-password");
+    await expect(open).toBeDisabled();
+    await page.getByLabel(/홈 디렉터리 읽기만 가능하며/).check();
+    await open.click();
+    await expect(page.getByText("notes.txt")).toBeVisible();
+    await page.getByRole("button", { name: "notes.txt 텍스트 보기", exact: true }).click();
+    await expect(page.getByText("read-only evidence")).toBeVisible();
+    expect(sessionBody).toEqual({ password: "fixture-file-password", readOnlyConfirmed: true });
+    expect(listBody).toEqual({ sessionToken: "F".repeat(43), path: "" });
+    expect(page.url()).not.toContain("fixture-file-password");
+    const stored = await page.evaluate(() => JSON.stringify({
+      local: Object.values(localStorage),
+      session: Object.values(sessionStorage),
+    }));
+    expect(stored).not.toContain("fixture-file-password");
+    expect(stored).not.toContain("F".repeat(43));
+    const hasOverflow = await page.evaluate(
+      () => document.documentElement.scrollWidth > document.documentElement.clientWidth,
+    );
+    expect(hasOverflow).toBe(false);
+  });
+}
 
 test("G2 Nginx change discloses rollback scope before exact-plan PAM approval", async ({ page }) => {
   let planRequests = 0;

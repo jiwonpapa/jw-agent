@@ -319,6 +319,355 @@
         }
       }
     },
+    "/api/v1/files": {
+      "get": {
+        "tags": [],
+        "operationId": "file_capability",
+        "responses": {
+          "200": {
+            "description": "Home-scoped read-only OpenSSH SFTP capability",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FileCapabilityView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/files/download": {
+      "post": {
+        "tags": [],
+        "operationId": "download_file",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FilePathRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Bounded binary download",
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Path rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Session rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Download limit exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/files/list": {
+      "post": {
+        "tags": [],
+        "operationId": "list_files",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FilePathRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Bounded home directory listing",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FileListView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Path rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Session rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/files/read": {
+      "post": {
+        "tags": [],
+        "operationId": "read_text_file",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FilePathRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Bounded UTF-8 text file",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FileTextView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Path or text rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Session rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Text limit exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/files/sessions": {
+      "post": {
+        "tags": [],
+        "operationId": "create_file_session",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FileSessionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Authenticated memory-only SFTP session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FileSessionView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid password or confirmation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role, Origin, CSRF, or subject rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "File session unavailable or busy",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/files/sessions/close": {
+      "post": {
+        "tags": [],
+        "operationId": "close_file_session",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FileSessionCloseRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "File session closed"
+          },
+          "401": {
+            "description": "Session rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Origin or CSRF rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/files/stat": {
+      "post": {
+        "tags": [],
+        "operationId": "stat_file",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FilePathRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Home-scoped file metadata",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FileStatView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Path rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Session rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/health": {
       "get": {
         "tags": [],
@@ -2397,6 +2746,309 @@
             "minimum": 0
           },
           "totalBytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "FileCapabilityView": {
+        "type": "object",
+        "required": [
+          "available",
+          "username",
+          "rootLabel",
+          "assurance",
+          "limits"
+        ],
+        "properties": {
+          "assurance": {
+            "$ref": "#/components/schemas/AssuranceView"
+          },
+          "available": {
+            "type": "boolean"
+          },
+          "limits": {
+            "$ref": "#/components/schemas/FileLimitsView"
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "rootLabel": {
+            "type": "string"
+          },
+          "username": {
+            "type": "string"
+          }
+        }
+      },
+      "FileEntryView": {
+        "type": "object",
+        "required": [
+          "name",
+          "path",
+          "kind"
+        ],
+        "properties": {
+          "kind": {
+            "$ref": "#/components/schemas/FileKind"
+          },
+          "modifiedAtUnixSeconds": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "name": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "permissions": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "sizeBytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "FileKind": {
+        "type": "string",
+        "enum": [
+          "directory",
+          "regular",
+          "symbolic_link",
+          "other"
+        ]
+      },
+      "FileLimitsView": {
+        "type": "object",
+        "required": [
+          "idleTimeoutSeconds",
+          "maxLifetimeSeconds",
+          "maxPathBytes",
+          "maxComponentBytes",
+          "maxListEntries",
+          "maxTextBytes",
+          "maxDownloadBytes",
+          "maxSessionsPerUser"
+        ],
+        "properties": {
+          "idleTimeoutSeconds": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "maxComponentBytes": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "maxDownloadBytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "maxLifetimeSeconds": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "maxListEntries": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "maxPathBytes": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "maxSessionsPerUser": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "maxTextBytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "FileListView": {
+        "type": "object",
+        "required": [
+          "path",
+          "entries",
+          "truncated"
+        ],
+        "properties": {
+          "entries": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FileEntryView"
+            }
+          },
+          "path": {
+            "type": "string"
+          },
+          "truncated": {
+            "type": "boolean"
+          }
+        }
+      },
+      "FilePathRequest": {
+        "type": "object",
+        "required": [
+          "sessionToken",
+          "path"
+        ],
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "sessionToken": {
+            "type": "string",
+            "format": "password"
+          }
+        },
+        "additionalProperties": false
+      },
+      "FileSessionCloseRequest": {
+        "type": "object",
+        "required": [
+          "sessionToken"
+        ],
+        "properties": {
+          "sessionToken": {
+            "type": "string",
+            "format": "password"
+          }
+        },
+        "additionalProperties": false
+      },
+      "FileSessionRequest": {
+        "type": "object",
+        "required": [
+          "password",
+          "readOnlyConfirmed"
+        ],
+        "properties": {
+          "password": {
+            "type": "string",
+            "format": "password",
+            "maxLength": 1024
+          },
+          "readOnlyConfirmed": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      },
+      "FileSessionView": {
+        "type": "object",
+        "required": [
+          "sessionToken",
+          "expiresAt",
+          "rootLabel",
+          "assurance",
+          "limits"
+        ],
+        "properties": {
+          "assurance": {
+            "$ref": "#/components/schemas/AssuranceView"
+          },
+          "expiresAt": {
+            "type": "string"
+          },
+          "limits": {
+            "$ref": "#/components/schemas/FileLimitsView"
+          },
+          "rootLabel": {
+            "type": "string"
+          },
+          "sessionToken": {
+            "type": "string",
+            "format": "password"
+          }
+        }
+      },
+      "FileStatView": {
+        "type": "object",
+        "required": [
+          "path",
+          "kind"
+        ],
+        "properties": {
+          "kind": {
+            "$ref": "#/components/schemas/FileKind"
+          },
+          "modifiedAtUnixSeconds": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "path": {
+            "type": "string"
+          },
+          "permissions": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "sizeBytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "FileTextView": {
+        "type": "object",
+        "required": [
+          "path",
+          "content",
+          "sizeBytes",
+          "digest",
+          "lineEnding"
+        ],
+        "properties": {
+          "content": {
+            "type": "string"
+          },
+          "digest": {
+            "type": "string"
+          },
+          "lineEnding": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "sizeBytes": {
             "type": "integer",
             "format": "int64",
             "minimum": 0

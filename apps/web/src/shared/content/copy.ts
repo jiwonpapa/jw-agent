@@ -9,6 +9,7 @@ export const NAV_ITEMS = [
   { href: "/certificates", label: "인증서", key: "certificates" },
   { href: "/integrations", label: "통합 카탈로그", key: "integrations" },
   { href: "/terminal", label: "터미널", key: "terminal" },
+  { href: "/files", label: "파일", key: "files" },
   { href: "/settings/access", label: "접속 및 인증", key: "access" },
 ] as const;
 

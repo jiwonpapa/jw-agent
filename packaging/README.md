@@ -24,7 +24,8 @@ certificate inventory, a planned/PAM-approved renewal dry-run, and guided
 issuance with DNS/listener/webroot preflight and explicit G1 external-effect
 consent. The private-LAN CA-failure path and protected-vhost G2 attachment with
 loopback SNI read-back and exact rollback are VM-proven. Public-CA success
-remains unverified and separately gated.
+remains unverified and separately gated. P2D also includes home-scoped read-only
+OpenSSH SFTP list/stat/text/download; write messages and system paths are absent.
 
 The public proxy socket uses the dedicated `jw-agent-proxy` group and
 `/run/jw-agent-proxy`. Nginx is never added to the privileged `jw-agent` group

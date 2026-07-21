@@ -7,7 +7,7 @@ Last reviewed: 2026-07-22
 
 ## Executive summary
 
-최상위 위험은 credential stuffing, 공개 HTTP input으로 agentd를 침해한 뒤 root authd·opsd 경계를 공격하는 연쇄 경로, PAM FFI 결함, P2 path·crash recovery 오류, OpenSSH manual session 탈취, Certbot 외부효과와 package 공급망입니다. P2 Nginx site-state·active managed-config, Certbot one-shot renewal dry-run·guided issuance CA 실패와 보호 vhost attach의 SNI read-back·강제 실패 원복, non-root OpenSSH terminal은 전용 Ubuntu 24.04 VM에서 package·PAM·TLS·실패·비밀 비노출·원장 훼손 `VM_PASS`를 획득했습니다. 다만 private-LAN `.test` 호스트와 unsigned local package 증거이므로 공인 CA 발급 성공·운영 안전으로 과장하지 않으며 SFTP는 VM 증거 전까지 구현 완료를 주장하지 않습니다.
+최상위 위험은 credential stuffing, 공개 HTTP input으로 agentd를 침해한 뒤 root authd·opsd 경계를 공격하는 연쇄 경로, PAM FFI 결함, P2 path·crash recovery 오류, OpenSSH manual session 탈취, Certbot 외부효과와 package 공급망입니다. P2 Nginx site-state·active managed-config, Certbot one-shot renewal dry-run·guided issuance CA 실패와 보호 vhost attach의 SNI read-back·강제 실패 원복, non-root OpenSSH terminal과 home-scoped read-only SFTP는 전용 Ubuntu 24.04 VM에서 package·PAM·TLS·실패·비밀 비노출·원장 훼손 `VM_PASS`를 획득했습니다. 다만 private-LAN `.test` 호스트와 unsigned local package 증거이므로 공인 CA 발급 성공·SFTP 쓰기·운영 안전으로 과장하지 않습니다.
 
 ## Scope and assumptions
 
@@ -20,7 +20,7 @@ In scope:
 - SQLite session/settings, Nginx observation, public ingress packaging basis
 - mobile·tablet·desktop responsive web
 - 구현된 P2 safety kernel·Nginx site state·active managed config와 Certbot lifecycle 설계
-- existing OpenSSH 기반 non-root terminal 구현과 SFTP 설계
+- existing OpenSSH 기반 non-root terminal과 home-scoped read-only SFTP 구현
 
 Out of scope:
 
@@ -44,7 +44,7 @@ Key assumptions:
 
 - accepted TOTP additional-auth 계약의 구현·key custody·recovery ceremony 검증 깊이
 - Certbot production ACME용 disposable domain·rate budget과 실제 VM 증거
-- OpenSSH credential broker 방식과 SSH/SFTP dependency compatibility evidence
+- OpenSSH credential broker와 SFTP REALPATH의 TOCTOU 잔여 위험
 - CDN·외부 reverse proxy 앞 배포 허용 여부와 실제 client IP 신뢰 모델
 - PAM FFI 독립 검토와 Ubuntu adversarial test 깊이
 
@@ -127,7 +127,7 @@ flowchart LR
 ### Non-capabilities
 
 - Internet attacker cannot directly connect to agentd internal TCP/UDS, authd or opsd if architecture holds.
-- Browser input cannot contain arbitrary path, argv or shell text.
+- Browser file input is a bounded relative home path only; absolute/system path, OpenSSH argv와 opsd path·shell input이 될 수 없습니다.
 - Product cannot permanently constrain an already-root attacker or prove who used root outside the product.
 - Central tenant boundary does not exist in MVP and is not included.
 
@@ -142,7 +142,7 @@ flowchart LR
 | Nginx site operation (P2 active) | approved plan | opsd → filesystem/systemd | VM success·rollback·disk·lockdown proof | `docs/90-specs/operations/nginx-site-state-set-v1.md` |
 | Managed config (P2B active) | approved G2 plan | opsd → active allowlisted Nginx file/service | VM exact rollback·drift·inactive·temp cleanup proof | `docs/90-specs/operations/managed-config-file-v1.md` |
 | Certbot lifecycle (P2) | approved G1/G2 plan | opsd → Certbot/Nginx/CA | external issuance and secret risk | `docs/90-specs/operations/certbot-certificate-v1.md` |
-| Terminal/SFTP (P2) | approved manual session | agentd → loopback OpenSSH | G1 command/file effects | `docs/90-specs/access/openssh-terminal-sftp-v1.md` |
+| Terminal/SFTP (P2) | approved manual session | agentd → loopback OpenSSH | terminal G1; SFTP read G0; SFTP write absent | `docs/90-specs/access/openssh-terminal-sftp-v1.md` |
 | Public access operation (planned) | SSH-authenticated admin | opsd → Nginx/UFW | P1은 수동 opt-in template만 제공 | `docs/90-specs/operations/public-access-profile-v1.md` |
 | SQLite/snapshot files | daemon runtime | process → durable state | crash, disk full, tamper | `docs/20-architecture/state-ownership.md` |
 | Limited logs/SSE | authenticated browser | browser → agentd → journal | data exposure and DoS | `docs/10-product/mvp-scope.md` |
@@ -180,7 +180,7 @@ flowchart LR
 | TM-010 | service output/developer error | secret reaches log/error/cache | persist password/session/PAM text | credential/session compromise | passwords, logs, sessions | `SecretString`, zeroize, digest-only DB, core-dump denial, no browser storage, generic errors and VM journal/DB/argv/package/evidence canary scan | external PAM module copies and crash dump handling outside process boundary cannot be claimed erased | preserve secret scan and keep password out of argv/logging; document FFI ownership limit | redaction gate and secret canary failure | medium | high | high |
 | TM-011 | supply-chain attacker | source/dependency/signing path compromise | malicious package deployment | multi-host root compromise | signing key, artifact, all hosts | pinned lockfiles, no git dependency, no remote Actions, local gates and checksum-pinned Ubuntu package install/upgrade/remove evidence | signer/SBOM/reproducible release lane 없음 | isolated signing key, SBOM, signed manifest, install/repro/revocation procedure before release claim | signature/source/repro mismatch | low | high | high |
 | TM-012 | shared-device/local browser user | operator leaves mobile session active | reuse session or cached screen | unauthorized read and policy change attempt | session, settings | memory-only CSRF, no service worker/storage, short server expiry, logout cookie/cache clear; mock viewport와 real HTTPS expired-session recovery | mobile background 복귀와 shared-device cache의 장시간 운영 증거 없음 | add background state check and shared-device cache scenario before public release | concurrent session and expiry anomaly | medium | medium | medium |
-| TM-013 | stolen authenticated session | terminal/SFTP ticket issuance allowed | open manual session, run command, alter writable file | service/data compromise within user/sudo rights | OpenSSH account, host data | terminal은 non-root, PAM reauth, purpose-bound one-shot ticket, exact Origin, no transcript, fixed OpenSSH argv와 VM replay/revoke/cleanup proof | SFTP 미구현; terminal sudo/root negative와 idle/max/frame fault 깊이 부족 | preserve UID0 denial, implement accepted step-up provider, add sudo/root and timeout/frame VM negatives before release | metadata-only session start/end, close reason, byte count, ticket/policy denial | medium | high | critical |
+| TM-013 | stolen authenticated session | terminal/SFTP session issuance allowed | terminal command 실행 또는 홈 파일 열람; 향후 writable surface 악용 | service/data compromise or home-data disclosure within user/sudo rights | OpenSSH account, host data | non-root, PAM reauth, session/origin binding, fixed OpenSSH argv; SFTP read-only message allowlist, canonical home, limits, path-digest audit와 VM traversal/symlink/session proof | SFTP REALPATH 검사 뒤 race 잔여 위험; SFTP write 미구현; terminal sudo/root와 idle/max/frame fault 깊이 부족 | preserve UID0 denial, keep G1 write separate, add race·sudo/root·timeout/frame negatives before release | metadata-only start/end, close reason, byte count, action/path digest, policy denial | medium | high | critical |
 | TM-014 | operator/remote fault | Certbot production request or retry | consume rate budget; issuance succeeds but attach fails | TLS outage or unmanaged certificate | certificate, rate budget, Nginx | staging-first, typed domain/plugin, G1/G2 split and local rollback contract | public CA disposable domain proof 없음 | production lane budget, idempotency, SAN/chain read-back and attach rollback | CA class, cert fingerprint, attach/recovery state | medium | high | high |
 
 Risk ranking depends most on public exposure, selected additional-auth policy, authd FFI quality and SSH fallback. 검증된 provider가 `risky_operations` 또는 `all_mutations`에 활성화되면 TM-001 likelihood를 다시 평가합니다.
@@ -218,8 +218,8 @@ Critical은 단순 impact가 아니라 공개 prerequisite와 현실적 exploit 
 
 ## Quality check
 
-- P1 public HTTPS template, recovery, REST, authd/PAM, opsd capability, DB, package, xtask와 P2 active operation·terminal surfaces를 포함했습니다.
+- P1 public HTTPS template, recovery, REST, authd/PAM, opsd capability, DB, package, xtask와 P2 active operation·terminal·read-only SFTP surfaces를 포함했습니다.
 - 모든 trust boundary를 하나 이상의 threat와 연결했습니다.
-- 현재 P2 local·browser·Ubuntu VM control, unsigned/test-CA 한계, terminal VM proof와 SFTP 미구현 증거를 분리했습니다.
+- 현재 P2 local·browser·Ubuntu VM control, unsigned/test-CA 한계, terminal·SFTP G0 VM proof와 SFTP write 미구현을 분리했습니다.
 - public Internet attacker, local attacker, shared mobile, supply chain을 구분했습니다.
 - accepted TOTP 계약, unsupported upstream proxy model, P1 existing-certificate 범위와 PAM FFI 잔여 한계를 구분했습니다.

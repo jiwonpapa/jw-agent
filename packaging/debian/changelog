@@ -1,3 +1,12 @@
+jw-agent (0.2.0~p2.9) noble; urgency=medium
+
+  * Add home-scoped read-only OpenSSH SFTP sessions and bounded v3 client.
+  * Reject traversal, home-external symlinks, unsafe names, and oversized reads.
+  * Add responsive G0 file browsing, UTF-8 preview, and bounded downloads.
+  * Store only path digests and transfer metadata in fail-closed audit records.
+
+ -- JW Agent Maintainers <maintainers@example.invalid>  Wed, 22 Jul 2026 03:20:00 +0900
+
 jw-agent (0.2.0~p2.8) noble; urgency=medium
 
   * Add same-origin non-root OpenSSH web terminal with bounded WSS and PTY.

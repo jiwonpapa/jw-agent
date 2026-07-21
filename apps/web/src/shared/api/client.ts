@@ -16,6 +16,13 @@ import type {
   CertbotRenewTestApprovalRequest,
   CertbotRenewTestPlanRequest,
   CertbotRenewTestPlanView,
+  FileCapabilityView,
+  FileListView,
+  FilePathRequest,
+  FileSessionRequest,
+  FileSessionView,
+  FileStatView,
+  FileTextView,
   HealthView,
   HostObservation,
   IntegrationCatalogView,
@@ -438,4 +445,67 @@ export function openTerminalSocket(websocketPath: string, ticket: string): WebSo
     `${protocol}//${window.location.host}${websocketPath}`,
     ["jw-terminal-v1", `ticket.${ticket}`],
   );
+}
+
+export async function getFileCapability(signal?: AbortSignal): Promise<FileCapabilityView> {
+  const { data, error, response } = await api.GET("/api/v1/files", {
+    signal: signal ?? null,
+  });
+  if (data !== undefined) return data;
+  throw new ApiError(error, response);
+}
+
+export async function createFileSession(input: FileSessionRequest): Promise<FileSessionView> {
+  const { data, error, response } = await api.POST("/api/v1/files/sessions", {
+    body: input,
+    headers: mutationHeaders(),
+  });
+  if (data !== undefined) return data;
+  throw new ApiError(error, response);
+}
+
+export async function closeFileSession(sessionToken: string): Promise<void> {
+  const { error, response } = await api.POST("/api/v1/files/sessions/close", {
+    body: { sessionToken },
+    headers: mutationHeaders(),
+  });
+  if (response.ok) return;
+  throw new ApiError(error, response);
+}
+
+export async function listFiles(input: FilePathRequest): Promise<FileListView> {
+  const { data, error, response } = await api.POST("/api/v1/files/list", {
+    body: input,
+    headers: mutationHeaders(),
+  });
+  if (data !== undefined) return data;
+  throw new ApiError(error, response);
+}
+
+export async function statFile(input: FilePathRequest): Promise<FileStatView> {
+  const { data, error, response } = await api.POST("/api/v1/files/stat", {
+    body: input,
+    headers: mutationHeaders(),
+  });
+  if (data !== undefined) return data;
+  throw new ApiError(error, response);
+}
+
+export async function readTextFile(input: FilePathRequest): Promise<FileTextView> {
+  const { data, error, response } = await api.POST("/api/v1/files/read", {
+    body: input,
+    headers: mutationHeaders(),
+  });
+  if (data !== undefined) return data;
+  throw new ApiError(error, response);
+}
+
+export async function downloadFile(input: FilePathRequest): Promise<Blob> {
+  const { data, error, response } = await api.POST("/api/v1/files/download", {
+    body: input,
+    headers: mutationHeaders(),
+    parseAs: "blob",
+  });
+  if (data !== undefined) return data;
+  throw new ApiError(error, response);
 }

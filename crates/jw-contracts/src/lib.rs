@@ -3,6 +3,7 @@
 mod assurance;
 mod auth;
 mod certificate;
+mod files;
 mod framing;
 mod integration;
 mod observation;
@@ -26,6 +27,13 @@ pub use certificate::{
     CertbotIssuePlanView, CertbotIssuePreflightEvidence, CertbotRenewTestApprovalRequest,
     CertbotRenewTestPlanRequest, CertbotRenewTestPlanView, CertificateEnvironment,
     CertificateInventoryView, CertificateSummaryView, canonical_domains, validate_domain,
+};
+pub use files::{
+    FILE_IDLE_TIMEOUT_SECONDS, FILE_MAX_COMPONENT_BYTES, FILE_MAX_DOWNLOAD_BYTES,
+    FILE_MAX_LIFETIME_SECONDS, FILE_MAX_LIST_ENTRIES, FILE_MAX_PATH_BYTES, FILE_MAX_TEXT_BYTES,
+    FILE_SESSION_TOKEN_BYTES, FileCapabilityView, FileEntryView, FileKind, FileLimitsView,
+    FileListView, FilePathRequest, FileSessionCloseRequest, FileSessionRequest, FileSessionView,
+    FileStatView, FileTextView, validate_file_path,
 };
 pub use framing::{
     AUTH_FRAME_MAX_BYTES, FrameError, IPC_PROTOCOL_VERSION, OPS_FRAME_MAX_BYTES, decode_frame,

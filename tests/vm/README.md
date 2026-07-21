@@ -1,6 +1,6 @@
 # Ubuntu 24.04 VM evidence matrix
 
-Status: P2B VM_PASS; P2C lifecycle VM_PASS except public CA success; P2D terminal VM_PASS and SFTP pending  
+Status: P2B VM_PASS; P2C lifecycle VM_PASS except public CA success; P2D terminal and read-only SFTP VM_PASS  
 Authority: Delivery  
 Owner: Verification Maintainer  
 Last reviewed: 2026-07-22
@@ -25,17 +25,17 @@ JW_VM_PUBLIC_ADDRESS=192.168.0.142
 JW_VM_CA_CERT=/path/to/test-ca.crt
 JW_VM_ADMIN_USER=jwvmadmin
 JW_VM_PASSWORD_FILE=/path/to/mode-0600-fixture-password
-JW_VM_REMOTE_PACKAGE=/home/neojins/jw-agent_0.2.0~p2.8_amd64.deb
-JW_VM_EXPECTED_PACKAGE_SHA256=d1b8591a57a66255e4d7260f5c568613497dbe0d3cf29667698f32716509ff64
-JW_VM_EXPECTED_VERSION=0.2.0~p2.8
+JW_VM_REMOTE_PACKAGE=/home/neojins/jw-agent_0.2.0~p2.9_amd64.deb
+JW_VM_EXPECTED_PACKAGE_SHA256=3ceff4b35814a543c7368b2a7210036dfed14a204cf14e76fc9c5e2a935d7e16
+JW_VM_EXPECTED_VERSION=0.2.0~p2.9
 cargo xtask verify p2-vm
 ```
 
 ## Current VM evidence
 
 - domain: `jw-agent-p1`, Ubuntu 24.04.4 LTS, kernel `6.8.0-136-generic`
-- package: `jw-agent 0.2.0~p2.8`, SHA-256 `d1b8591a57a66255e4d7260f5c568613497dbe0d3cf29667698f32716509ff64`, Lintian clean
-- lanes: `p2-local` 20 PASS, `p2-browser` 8 PASS with 27 browser scenarios, `p2-vm` 21 PASS
+- package: `jw-agent 0.2.0~p2.9`, SHA-256 `3ceff4b35814a543c7368b2a7210036dfed14a204cf14e76fc9c5e2a935d7e16`, Lintian clean
+- lanes: `p2-local` 21 PASS, `p2-browser` 8 PASS with 30 browser scenarios, `p2-vm` 22 PASS
 - automated VM scenarios: installed PAM fixture equality, no `pam_faillock`, `jw-authd → libpam.so.0`, `jw-agentd → libsqlite3.so.0`, repeated product-login failures followed by unchanged Linux password state and working OpenSSH key recovery
 - automated P2 faults: success, verified no-op, syntax failure rollback, injected reload failure rollback, 1 MiB snapshot filesystem cancellation before apply, deleted checkpoint lockdown and restoration
 - automated P2B config faults: >16 KiB active save/no-op, exact syntax/reload rollback, external drift preservation, inactive denial, private proposal cleanup, internal temp discovery exclusion and startup cleanup
@@ -45,15 +45,16 @@ cargo xtask verify p2-vm
 - automated P2C issuance failure: exact DNS/listener/webroot preflight, staging plan, two G1 confirmations, PAM approval, real public-CA rejection, unchanged inventory, no false rollback, ephemeral email/proposal cleanup
 - automated P2C attach: exact protected-vhost TLS directive replacement, Nginx syntax/reload/active, timer and loopback SNI fingerprint read-back; forced verifier failure restores exact bytes, owner and mode
 - automated P2D terminal: loopback-only password policy, non-root OpenSSH command I/O, PTY resize, ticket replay and wrong-Origin denial, logout revoke, metadata-only audit, process/FIFO cleanup
+- automated P2D SFTP G0: home list/stat/text/download, traversal·absolute path·external symlink·size denial, cross-session·wrong-Origin·close·logout denial, path-digest audit, process/FIFO cleanup
 - package runtime: opsd private network namespace, exact `CAP_NET_BIND_SERVICE`, ephemeral Nginx test logs, no listening IP socket, root-owned `0600` ledger, bounded UDS
 - real browser: public HTTPS editor, 24 KiB counter, planned-only warning, G2 scope/exclusions and custom-basename protected vhost; internal temp absent and authenticated fresh-session console error 0
 
 This is a private-LAN `.test` host with a dedicated management-edge test CA.
 The Certbot runner boundary, read-only inventory, renewal dry-run, guided issue
 preflight, public-CA failure handling, and protected-vhost local TLS attachment
-rollback and the bounded non-root terminal are VM-proven. It is not evidence of
-public DNS, successful public-CA issuance, signed release distribution, SFTP,
-or production operation.
+rollback, the bounded non-root terminal, and home-scoped read-only SFTP are
+VM-proven. It is not evidence of public DNS, successful public-CA issuance,
+signed release distribution, SFTP writes, or production operation.
 
 ## Required disposable-VM scenarios
 
@@ -66,6 +67,7 @@ or production operation.
 | recovery ingress | loopback-only listener, SSH tunnel access, non-loopback bind refusal, exact Host/Origin |
 | public edge | exact FQDN/TLS, UDS proxy, spoofed forwarding headers cleared, internal ports absent |
 | OpenSSH terminal | loopback-only password policy, fixed client, replay/origin/revoke, bounded PTY and metadata audit |
+| OpenSSH SFTP G0 | fixed read-only subsystem, canonical home, traversal/symlink/size/session negatives and path-digest audit |
 | failure recovery | Nginx/TLS failure leaves SSH recovery available and public profile removable |
 | secret scan | password/session tokens absent from journal, DB, process arguments, package logs and evidence |
 

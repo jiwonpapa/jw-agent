@@ -13,6 +13,7 @@ use zeroize::{Zeroize, Zeroizing};
 
 const MIGRATION_1: &str = include_str!("../migrations/0001_initial.sql");
 const MIGRATION_2: &str = include_str!("../migrations/0002_terminal_audit.sql");
+const MIGRATION_3: &str = include_str!("../migrations/0003_file_audit.sql");
 const TOKEN_BYTES: usize = 32;
 const TOKEN_TEXT_BYTES: usize = 43;
 const PUBLIC_IDLE_MS: i64 = 15 * 60 * 1_000;
@@ -248,6 +249,95 @@ impl SessionStore {
         } else {
             Err(String::from("terminal audit finish was not recorded"))
         }
+    }
+
+    pub fn record_file_session_start(
+        &self,
+        session_id: &str,
+        subject: &Subject,
+        ingress: IngressChannel,
+        now_unix_ms: i64,
+    ) -> Result<(), String> {
+        if session_id.len() != 32 || subject.uid == 0 {
+            return Err(String::from("file session audit identity is invalid"));
+        }
+        let changed = self
+            .connection()?
+            .execute(
+                "INSERT INTO file_sessions(\
+                session_id, actor_uid, actor_username, ingress, remote_host, \
+                started_at_unix_ms, ended_at_unix_ms, close_reason, state\
+             ) VALUES (?1, ?2, ?3, ?4, '127.0.0.1', ?5, NULL, NULL, 'active')",
+                params![
+                    session_id,
+                    subject.uid,
+                    subject.username,
+                    ingress_value(ingress),
+                    now_unix_ms
+                ],
+            )
+            .map_err(|error| error.to_string())?;
+        if changed == 1 {
+            Ok(())
+        } else {
+            Err(String::from("file session audit start was not recorded"))
+        }
+    }
+
+    pub fn record_file_session_finish(
+        &self,
+        session_id: &str,
+        reason: &str,
+        now_unix_ms: i64,
+    ) -> Result<(), String> {
+        if reason.is_empty() || reason.len() > 64 {
+            return Err(String::from("file session audit reason is invalid"));
+        }
+        let changed = self.connection()?.execute(
+            "UPDATE file_sessions SET ended_at_unix_ms = ?1, close_reason = ?2, state = 'closed' \
+             WHERE session_id = ?3 AND state = 'active'",
+            params![now_unix_ms, reason, session_id],
+        ).map_err(|error| error.to_string())?;
+        if changed == 1 {
+            Ok(())
+        } else {
+            Err(String::from("file session audit finish was not recorded"))
+        }
+    }
+
+    pub fn record_file_access(
+        &self,
+        session_id: &str,
+        action: &str,
+        path: &str,
+        byte_count: u64,
+        result: &str,
+        now_unix_ms: i64,
+    ) -> Result<(), String> {
+        if !matches!(action, "list" | "stat" | "read" | "download")
+            || result.is_empty()
+            || result.len() > 64
+        {
+            return Err(String::from("file access audit value is invalid"));
+        }
+        let stored_bytes = i64::try_from(byte_count).map_or(i64::MAX, std::convert::identity);
+        let path_digest = digest_with_domain(b"jw-agent/file-path/v1\0", path.as_bytes());
+        self.connection()?
+            .execute(
+                "INSERT INTO file_access_events(\
+                session_id, action, path_digest, byte_count, result, occurred_at_unix_ms\
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![
+                    session_id,
+                    action,
+                    path_digest.as_slice(),
+                    stored_bytes,
+                    result,
+                    now_unix_ms
+                ],
+            )
+            .map_err(|error| error.to_string())?;
+        Ok(())
     }
 
     pub fn additional_auth_policy(&self) -> Result<AdditionalAuthPolicy, String> {
@@ -499,6 +589,23 @@ fn migrate(path: &Path, now_unix_ms: i64) -> Result<(), String> {
     transaction
         .execute(
             "INSERT OR IGNORE INTO schema_migrations(version, applied_at_unix_ms) VALUES (1, ?1)",
+            [now_unix_ms],
+        )
+        .map_err(|error| error.to_string())?;
+    transaction
+        .execute_batch(MIGRATION_3)
+        .map_err(|error| error.to_string())?;
+    transaction
+        .execute(
+            "INSERT OR IGNORE INTO schema_migrations(version, applied_at_unix_ms) VALUES (3, ?1)",
+            [now_unix_ms],
+        )
+        .map_err(|error| error.to_string())?;
+    transaction
+        .execute(
+            "UPDATE file_sessions \
+             SET ended_at_unix_ms = ?1, close_reason = 'daemon_restart', state = 'closed' \
+             WHERE state = 'active'",
             [now_unix_ms],
         )
         .map_err(|error| error.to_string())?;
@@ -780,6 +887,54 @@ mod tests {
             )
             .map_err(|error| error.to_string())?;
         assert_eq!(columns, 0);
+        drop(reopened);
+        cleanup_test_database(&path)
+    }
+
+    #[test]
+    fn file_audit_hashes_paths_and_restart_closes_active_session() -> Result<(), String> {
+        let path = test_path()?;
+        let store = SessionStore::open(path.clone(), 1_000)?;
+        let subject = Subject {
+            uid: 1_000,
+            username: String::from("operator"),
+            role: Role::Operator,
+        };
+        let session_id = "abcdef0123456789abcdef0123456789";
+        let sensitive_path = "private/customer-secret.txt";
+        store.record_file_session_start(session_id, &subject, IngressChannel::Recovery, 2_000)?;
+        store.record_file_access(session_id, "read", sensitive_path, 42, "ok", 2_001)?;
+        drop(store);
+
+        let database = fs::read(&path).map_err(|error| error.to_string())?;
+        assert!(
+            !database
+                .windows(sensitive_path.len())
+                .any(|window| window == sensitive_path.as_bytes())
+        );
+        let reopened = SessionStore::open(path.clone(), 3_000)?;
+        let record: (String, String) = reopened
+            .connection()?
+            .query_row(
+                "SELECT state, close_reason FROM file_sessions WHERE session_id = ?1",
+                [session_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .map_err(|error| error.to_string())?;
+        assert_eq!(
+            record,
+            (String::from("closed"), String::from("daemon_restart"))
+        );
+        let forbidden_columns: i64 = reopened
+            .connection()?
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('file_access_events') \
+                 WHERE name IN ('path', 'content', 'password', 'token')",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|error| error.to_string())?;
+        assert_eq!(forbidden_columns, 0);
         drop(reopened);
         cleanup_test_database(&path)
     }

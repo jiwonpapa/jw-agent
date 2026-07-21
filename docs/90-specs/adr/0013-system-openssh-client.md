@@ -7,7 +7,7 @@ Last reviewed: 2026-07-22
 
 ## Context
 
-웹 terminal은 custom SSH server 없이 `agentd → loopback OpenSSH` 경계를 지켜야 합니다. Rust SSH client 후보는 별도 crypto/TLS graph와 default feature가 크고 장기 유지·빌드 비용을 늘립니다. Ubuntu 24.04는 이미 보안 업데이트되는 OpenSSH client를 제공합니다.
+웹 terminal과 SFTP는 custom SSH server 없이 `agentd → loopback OpenSSH` 경계를 지켜야 합니다. Rust SSH client 후보는 별도 crypto/TLS graph와 default feature가 크고 장기 유지·빌드 비용을 늘립니다. Ubuntu 24.04는 이미 보안 업데이트되는 OpenSSH client를 제공합니다.
 
 Compatibility spike 기준선은 2026-07-22의 `jw-agentd` clean debug build 11.55초, binary 14,963,144 bytes, Cargo dependency 93 nodes입니다.
 
@@ -21,6 +21,11 @@ Compatibility spike 기준선은 2026-07-22의 `jw-agentd` clean debug build 11.
 - package 설치는 기존 sshd 인증 정책을 자동 변경하지 않습니다. password 인증이 꺼진 서버는 향후 별도 G2 loopback-only 설정 operation 없이는 terminal이 지원되지 않습니다.
 - PTY는 existing exact-pinned `nix`의 `term` feature, process lifecycle은 existing exact-pinned Tokio의 `process` feature, WSS는 existing exact-pinned Axum의 `ws` feature만 확장합니다.
 - 브라우저 terminal은 exact-pinned `@xterm/xterm`과 `@xterm/addon-fit`만 추가합니다.
+- SFTP는 같은 `/usr/bin/ssh`의 fixed `-s 127.0.0.1 sftp` subsystem을 사용하고, agentd가 SFTP v3 read-only message allowlist를 직접 encode/decode합니다.
+- SFTP v3 구현은 `REALPATH`, `STAT`, `OPENDIR`, `READDIR`, `OPEN(read)`, `READ`, `CLOSE`만 포함합니다. write/remove/rename/mkdir/rmdir/setstat/symlink message는 G0 binary에 넣지 않습니다.
+- wire packet, request timeout, entry count, text, download, path component와 전체 path를 고정 상한으로 제한합니다.
+- SFTP canonical home root와 target `REALPATH` prefix를 매 요청 검사하며 TOCTOU 잔여 위험을 공개합니다.
+- 새 Rust crate, crypto, native library, browser dependency는 추가하지 않습니다.
 - `opsd`, authd, certd의 dependency와 privilege는 변경하지 않습니다.
 
 ## Fixed SSH policy
@@ -46,7 +51,7 @@ Compatibility spike 기준선은 2026-07-22의 `jw-agentd` clean debug build 11.
 - `@xterm/xterm 6.0.0`, `@xterm/addon-fit 0.11.0`: exact pin, MIT, runtime dependency 0
 - Rust WSS graph는 existing Axum feature가 소유하며 별도 SSH/crypto/TLS stack은 추가하지 않음
 
-수치 gate는 PASS입니다. Ubuntu 24.04 package VM은 non-root password login, command I/O, 40×100 resize, ticket replay·wrong-origin 차단, logout revoke, metadata-only audit와 process/FIFO cleanup을 통과했습니다. SFTP와 release advisory 판정은 별도입니다.
+터미널 수치 gate는 PASS입니다. Ubuntu 24.04 package VM은 non-root password login, command I/O, 40×100 resize, ticket replay·wrong-origin 차단, logout revoke, metadata-only audit와 process/FIFO cleanup을 통과했습니다. SFTP G0도 같은 dependency graph에서 home list/stat/text/download, traversal·absolute path·external symlink·size·session negative, path-digest audit와 process/FIFO cleanup을 별도 `VM_PASS`로 검증했습니다.
 
 ## Rejected
 
@@ -61,4 +66,5 @@ Compatibility spike 기준선은 2026-07-22의 `jw-agentd` clean debug build 11.
 - fixed argv와 strict host-key negative test
 - password/ticket가 argv, environment, storage, logs에 남지 않음
 - non-root PTY I/O, resize, disconnect, timeout을 Ubuntu 24.04 VM에서 검증
+- non-root home list/stat/text/download와 traversal·symlink·size·session negative를 Ubuntu 24.04 VM에서 별도 검증
 - VM의 password 인증 fixture는 `Match LocalAddress 127.0.0.1`에만 한정하고 public/LAN SSH 정책을 넓히지 않음

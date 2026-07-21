@@ -4,6 +4,7 @@ import {
   Activity,
   BadgeCheck,
   GlobeLock,
+  FolderOpen,
   LogOut,
   Menu,
   PackageSearch,
@@ -29,6 +30,7 @@ const navigationIcons = {
   certificates: BadgeCheck,
   integrations: PackageSearch,
   terminal: SquareTerminal,
+  files: FolderOpen,
   access: ShieldCheck,
 } as const;
 

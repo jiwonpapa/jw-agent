@@ -116,6 +116,118 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/files": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["file_capability"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/files/download": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["download_file"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/files/list": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["list_files"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/files/read": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["read_text_file"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/files/sessions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["create_file_session"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/files/sessions/close": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["close_file_session"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/files/stat": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["stat_file"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/health": {
         parameters: {
             query?: never;
@@ -657,6 +769,87 @@ export interface components {
             availableBytes: number;
             /** Format: int64 */
             totalBytes: number;
+        };
+        FileCapabilityView: {
+            assurance: components["schemas"]["AssuranceView"];
+            available: boolean;
+            limits: components["schemas"]["FileLimitsView"];
+            reason?: string | null;
+            rootLabel: string;
+            username: string;
+        };
+        FileEntryView: {
+            kind: components["schemas"]["FileKind"];
+            /** Format: int32 */
+            modifiedAtUnixSeconds?: number | null;
+            name: string;
+            path: string;
+            /** Format: int32 */
+            permissions?: number | null;
+            /** Format: int64 */
+            sizeBytes?: number | null;
+        };
+        /** @enum {string} */
+        FileKind: "directory" | "regular" | "symbolic_link" | "other";
+        FileLimitsView: {
+            /** Format: int64 */
+            idleTimeoutSeconds: number;
+            maxComponentBytes: number;
+            /** Format: int64 */
+            maxDownloadBytes: number;
+            /** Format: int64 */
+            maxLifetimeSeconds: number;
+            maxListEntries: number;
+            maxPathBytes: number;
+            /** Format: int32 */
+            maxSessionsPerUser: number;
+            /** Format: int64 */
+            maxTextBytes: number;
+        };
+        FileListView: {
+            entries: components["schemas"]["FileEntryView"][];
+            path: string;
+            truncated: boolean;
+        };
+        FilePathRequest: {
+            path: string;
+            /** Format: password */
+            sessionToken: string;
+        };
+        FileSessionCloseRequest: {
+            /** Format: password */
+            sessionToken: string;
+        };
+        FileSessionRequest: {
+            /** Format: password */
+            password: string;
+            readOnlyConfirmed: boolean;
+        };
+        FileSessionView: {
+            assurance: components["schemas"]["AssuranceView"];
+            expiresAt: string;
+            limits: components["schemas"]["FileLimitsView"];
+            rootLabel: string;
+            /** Format: password */
+            sessionToken: string;
+        };
+        FileStatView: {
+            kind: components["schemas"]["FileKind"];
+            /** Format: int32 */
+            modifiedAtUnixSeconds?: number | null;
+            path: string;
+            /** Format: int32 */
+            permissions?: number | null;
+            /** Format: int64 */
+            sizeBytes?: number | null;
+        };
+        FileTextView: {
+            content: string;
+            digest: string;
+            lineEnding: string;
+            path: string;
+            /** Format: int64 */
+            sizeBytes: number;
         };
         /** @enum {string} */
         HealthStatus: "ok" | "degraded";
@@ -1291,6 +1484,321 @@ export interface operations {
             };
             /** @description Resource not found */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    file_capability: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Home-scoped read-only OpenSSH SFTP capability */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FileCapabilityView"];
+                };
+            };
+            /** @description Authentication required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    download_file: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FilePathRequest"];
+            };
+        };
+        responses: {
+            /** @description Bounded binary download */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": string;
+                };
+            };
+            /** @description Path rejected */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Session rejected */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Download limit exceeded */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    list_files: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FilePathRequest"];
+            };
+        };
+        responses: {
+            /** @description Bounded home directory listing */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FileListView"];
+                };
+            };
+            /** @description Path rejected */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Session rejected */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    read_text_file: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FilePathRequest"];
+            };
+        };
+        responses: {
+            /** @description Bounded UTF-8 text file */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FileTextView"];
+                };
+            };
+            /** @description Path or text rejected */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Session rejected */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Text limit exceeded */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    create_file_session: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FileSessionRequest"];
+            };
+        };
+        responses: {
+            /** @description Authenticated memory-only SFTP session */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FileSessionView"];
+                };
+            };
+            /** @description Invalid password or confirmation */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Authentication failed */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Role, Origin, CSRF, or subject rejected */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description File session unavailable or busy */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    close_file_session: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FileSessionCloseRequest"];
+            };
+        };
+        responses: {
+            /** @description File session closed */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Session rejected */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Origin or CSRF rejected */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    stat_file: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FilePathRequest"];
+            };
+        };
+        responses: {
+            /** @description Home-scoped file metadata */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FileStatView"];
+                };
+            };
+            /** @description Path rejected */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Session rejected */
+            401: {
                 headers: {
                     [name: string]: unknown;
                 };

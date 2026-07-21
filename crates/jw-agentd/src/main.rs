@@ -8,8 +8,8 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use jw_agentd::{
-    AgentConfig, ApiDoc, AppState, SessionStore, TerminalBroker, UdsAuthBroker, UdsOpsBroker,
-    build_router,
+    AgentConfig, ApiDoc, AppState, FileBroker, SessionStore, TerminalBroker, UdsAuthBroker,
+    UdsOpsBroker, build_router,
 };
 use jw_contracts::IngressChannel;
 use tokio::net::{TcpListener, UnixListener};
@@ -72,6 +72,7 @@ async fn serve() -> Result<(), String> {
         config.operation_timeout,
     ));
     let terminal = TerminalBroker::default();
+    let files = FileBroker::default();
 
     let recovery_listener = TcpListener::bind(config.recovery_address)
         .await
@@ -84,7 +85,8 @@ async fn serve() -> Result<(), String> {
             auth.clone(),
             ops.clone(),
         )
-        .with_terminal_broker(terminal.clone()),
+        .with_terminal_broker(terminal.clone())
+        .with_file_broker(files.clone()),
     );
 
     if config.public_host.is_some() {
@@ -95,7 +97,8 @@ async fn serve() -> Result<(), String> {
             .map_err(|error| format!("cannot set public proxy socket permissions: {error}"))?;
         let public_app = build_router(
             AppState::new(config, IngressChannel::Public, store, auth, ops)
-                .with_terminal_broker(terminal),
+                .with_terminal_broker(terminal)
+                .with_file_broker(files),
         );
         let recovery = axum::serve(recovery_listener, recovery_app);
         let public = axum::serve(public_listener, public_app);

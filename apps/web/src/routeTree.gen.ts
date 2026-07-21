@@ -13,6 +13,7 @@ import { Route as IndexRouteImport } from './routes/index'
 import { Route as AuthenticatedRouteImport } from './routes/_authenticated'
 import { Route as LoginRouteImport } from './routes/login'
 import { Route as AuthenticatedCertificatesRouteImport } from './routes/_authenticated.certificates'
+import { Route as AuthenticatedFilesRouteImport } from './routes/_authenticated.files'
 import { Route as AuthenticatedIntegrationsRouteImport } from './routes/_authenticated.integrations'
 import { Route as AuthenticatedOverviewRouteImport } from './routes/_authenticated.overview'
 import { Route as AuthenticatedTerminalRouteImport } from './routes/_authenticated.terminal'
@@ -40,6 +41,11 @@ const AuthenticatedCertificatesRoute =
     path: '/certificates',
     getParentRoute: () => AuthenticatedRoute,
   } as any)
+const AuthenticatedFilesRoute = AuthenticatedFilesRouteImport.update({
+  id: '/files',
+  path: '/files',
+  getParentRoute: () => AuthenticatedRoute,
+} as any)
 const AuthenticatedIntegrationsRoute =
   AuthenticatedIntegrationsRouteImport.update({
     id: '/integrations',
@@ -79,6 +85,7 @@ export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/login': typeof LoginRoute
   '/certificates': typeof AuthenticatedCertificatesRoute
+  '/files': typeof AuthenticatedFilesRoute
   '/integrations': typeof AuthenticatedIntegrationsRoute
   '/overview': typeof AuthenticatedOverviewRoute
   '/terminal': typeof AuthenticatedTerminalRoute
@@ -90,6 +97,7 @@ export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/login': typeof LoginRoute
   '/certificates': typeof AuthenticatedCertificatesRoute
+  '/files': typeof AuthenticatedFilesRoute
   '/integrations': typeof AuthenticatedIntegrationsRoute
   '/overview': typeof AuthenticatedOverviewRoute
   '/terminal': typeof AuthenticatedTerminalRoute
@@ -103,6 +111,7 @@ export interface FileRoutesById {
   '/_authenticated': typeof AuthenticatedRouteWithChildren
   '/login': typeof LoginRoute
   '/_authenticated/certificates': typeof AuthenticatedCertificatesRoute
+  '/_authenticated/files': typeof AuthenticatedFilesRoute
   '/_authenticated/integrations': typeof AuthenticatedIntegrationsRoute
   '/_authenticated/overview': typeof AuthenticatedOverviewRoute
   '/_authenticated/terminal': typeof AuthenticatedTerminalRoute
@@ -116,6 +125,7 @@ export interface FileRouteTypes {
     | '/'
     | '/login'
     | '/certificates'
+    | '/files'
     | '/integrations'
     | '/overview'
     | '/terminal'
@@ -127,6 +137,7 @@ export interface FileRouteTypes {
     | '/'
     | '/login'
     | '/certificates'
+    | '/files'
     | '/integrations'
     | '/overview'
     | '/terminal'
@@ -139,6 +150,7 @@ export interface FileRouteTypes {
     | '/_authenticated'
     | '/login'
     | '/_authenticated/certificates'
+    | '/_authenticated/files'
     | '/_authenticated/integrations'
     | '/_authenticated/overview'
     | '/_authenticated/terminal'
@@ -181,6 +193,13 @@ declare module '@tanstack/react-router' {
       path: '/certificates'
       fullPath: '/certificates'
       preLoaderRoute: typeof AuthenticatedCertificatesRouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
+    '/_authenticated/files': {
+      id: '/_authenticated/files'
+      path: '/files'
+      fullPath: '/files'
+      preLoaderRoute: typeof AuthenticatedFilesRouteImport
       parentRoute: typeof AuthenticatedRoute
     }
     '/_authenticated/integrations': {
@@ -230,6 +249,7 @@ declare module '@tanstack/react-router' {
 
 interface AuthenticatedRouteChildren {
   AuthenticatedCertificatesRoute: typeof AuthenticatedCertificatesRoute
+  AuthenticatedFilesRoute: typeof AuthenticatedFilesRoute
   AuthenticatedIntegrationsRoute: typeof AuthenticatedIntegrationsRoute
   AuthenticatedOverviewRoute: typeof AuthenticatedOverviewRoute
   AuthenticatedTerminalRoute: typeof AuthenticatedTerminalRoute
@@ -240,6 +260,7 @@ interface AuthenticatedRouteChildren {
 
 const AuthenticatedRouteChildren: AuthenticatedRouteChildren = {
   AuthenticatedCertificatesRoute: AuthenticatedCertificatesRoute,
+  AuthenticatedFilesRoute: AuthenticatedFilesRoute,
   AuthenticatedIntegrationsRoute: AuthenticatedIntegrationsRoute,
   AuthenticatedOverviewRoute: AuthenticatedOverviewRoute,
   AuthenticatedTerminalRoute: AuthenticatedTerminalRoute,

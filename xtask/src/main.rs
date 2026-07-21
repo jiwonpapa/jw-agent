@@ -121,6 +121,7 @@ const REQUIRED_FOUNDATION_PATHS: &[&str] = &[
     "docs/90-specs/operations/certbot-certificate-v1.md",
     "docs/90-specs/access/openssh-terminal-sftp-v1.md",
     "docs/90-specs/access/openssh-password-broker-v1.md",
+    "docs/90-specs/access/openssh-sftp-readonly-v1.md",
     "docs/90-specs/auth/pam-login-v1.md",
     "docs/90-specs/auth/totp-step-up-v1.md",
     "docs/90-specs/ui/overview-v1.md",
@@ -178,14 +179,20 @@ const P1_REQUIRED_PATHS: &[&str] = &[
 ];
 
 const P2_REQUIRED_PATHS: &[&str] = &[
+    "apps/web/src/features/files/files-screen.tsx",
+    "apps/web/src/routes/_authenticated.files.tsx",
     "apps/web/src/features/terminal/terminal-screen.tsx",
     "apps/web/src/routes/_authenticated.terminal.tsx",
     "crates/jw-certd/src/lib.rs",
     "crates/jw-agentd/migrations/0002_terminal_audit.sql",
+    "crates/jw-agentd/migrations/0003_file_audit.sql",
     "crates/jw-agentd/src/askpass.rs",
+    "crates/jw-agentd/src/file_session.rs",
+    "crates/jw-agentd/src/sftp_protocol.rs",
     "crates/jw-agentd/src/terminal.rs",
     "crates/jw-agentd/src/terminal_session.rs",
     "crates/jw-contracts/src/certificate.rs",
+    "crates/jw-contracts/src/files.rs",
     "crates/jw-contracts/src/operation.rs",
     "crates/jw-contracts/src/terminal.rs",
     "crates/jw-opsd/migrations/0001_initial.sql",
@@ -326,6 +333,17 @@ const GATES: &[Gate] = &[
         evidence: "fixed loopback OpenSSH, strict host key, one-shot askpass, exact xterm pins, bounded WSS, and no opsd shell passed",
         failure_policy: "fail lane on credential persistence, broad SSH dependency, root helper shell path, missing bound, or proxy regression",
         run: gate_p2_terminal_boundary,
+    },
+    Gate {
+        id: "P2-SFTP-BOUNDARY",
+        owner: "Manual Access Maintainer",
+        scope: "home-scoped read-only OpenSSH SFTP protocol, path, session, and audit boundary",
+        inputs: "Accepted SFTP spec, agentd file/SFTP sources, audit migration, package policy, and opsd sources",
+        lanes: P2_LOCAL_LANES,
+        timeout_seconds: 3,
+        evidence: "fixed OpenSSH subsystem, read-only message allowlist, canonical home confinement, memory-only session, hard limits, metadata-only fail-closed audit, and no opsd path passed",
+        failure_policy: "fail lane on write message, user argv, path/body/token persistence, unbounded transfer, root-helper file surface, or SSH dependency drift",
+        run: gate_p2_sftp_boundary,
     },
     Gate {
         id: "RUST-FMT",
@@ -579,6 +597,17 @@ const GATES: &[Gate] = &[
         evidence: "non-root command I/O and resize, ticket replay/wrong-origin denial, logout close, metadata audit, and process cleanup passed",
         failure_policy: "fail lane on root path, weak host key, credential persistence, replay, missing bounds/audit, leaked process, or lost SSH service",
         run: vm::gate_p2_openssh_terminal,
+    },
+    Gate {
+        id: "VM-P2-OPENSSH-SFTP-READONLY",
+        owner: "Manual Access Maintainer",
+        scope: "same-origin REST, PAM-bound OpenSSH SFTP, home confinement, bounded read, revoke, and audit",
+        inputs: "installed P2D package, public TLS API, PAM fixture, loopback sshd, home fixture, strict host key, and agentd audit DB",
+        lanes: P2_VM_LANES,
+        timeout_seconds: 180,
+        evidence: "home list/stat/text/download, traversal/symlink/size denial, cross-session/origin/close/logout denial, metadata audit, and process cleanup passed",
+        failure_policy: "fail lane on home escape, write surface, credential/path/body persistence, missing bound/audit, leaked process, or changed SSH policy",
+        run: vm::gate_p2_openssh_sftp_readonly,
     },
     Gate {
         id: "VM-SECRET-SCAN",
@@ -1097,6 +1126,96 @@ fn gate_p2_terminal_boundary(root: &Path, _timeout: Duration) -> Result<(), Stri
             {
                 failures.push(format!(
                     "root helper gained terminal surface in {}",
+                    display_relative(root, &file)
+                ));
+            }
+        }
+    }
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(failures.join("; "))
+    }
+}
+
+fn gate_p2_sftp_boundary(root: &Path, _timeout: Duration) -> Result<(), String> {
+    let root_manifest = read_text(&root.join("Cargo.toml"))?;
+    let agent_manifest = read_text(&root.join("crates/jw-agentd/Cargo.toml"))?;
+    let package_control = read_text(&root.join("packaging/debian/control"))?;
+    let spec = read_text(&root.join("docs/90-specs/access/openssh-sftp-readonly-v1.md"))?;
+    let session = read_text(&root.join("crates/jw-agentd/src/file_session.rs"))?;
+    let protocol = read_text(&root.join("crates/jw-agentd/src/sftp_protocol.rs"))?;
+    let contract = read_text(&root.join("crates/jw-contracts/src/files.rs"))?;
+    let audit = read_text(&root.join("crates/jw-agentd/migrations/0003_file_audit.sql"))?;
+    let mut failures = Vec::new();
+
+    for (content, needle, label) in [
+        (&spec, "Status: Accepted", "Accepted SFTP spec"),
+        (
+            &package_control,
+            "openssh-client",
+            "OpenSSH package dependency",
+        ),
+        (&session, ".arg(\"-s\")", "fixed SSH subsystem mode"),
+        (&session, ".arg(\"sftp\")", "fixed SFTP subsystem"),
+        (&session, "RequestTTY=no", "PTY denial"),
+        (&session, "StrictHostKeyChecking=yes", "strict host key"),
+        (
+            &session,
+            ".arg(LOOPBACK_HOST)",
+            "fixed loopback destination",
+        ),
+        (&session, "FILE_IDLE_TIMEOUT_SECONDS", "idle session bound"),
+        (&protocol, "SSH_FXP_REALPATH", "server canonical path check"),
+        (&protocol, "FILE_MAX_LIST_ENTRIES", "directory entry bound"),
+        (&protocol, "FILE_MAX_TEXT_BYTES", "text bound"),
+        (&protocol, "FILE_MAX_DOWNLOAD_BYTES", "download bound"),
+        (&contract, "validate_file_path", "relative path validator"),
+        (&audit, "path_digest BLOB", "path digest audit"),
+        (&audit, "file_access_events", "file access audit table"),
+    ] {
+        if !content.contains(needle) {
+            failures.push(format!("missing {label}"));
+        }
+    }
+    for forbidden in [
+        "SSH_FXP_WRITE",
+        "SSH_FXP_REMOVE",
+        "SSH_FXP_RENAME",
+        "SSH_FXP_MKDIR",
+        "SSH_FXP_RMDIR",
+        "SSH_FXP_SETSTAT",
+        "SSH_FXP_FSETSTAT",
+        "SSH_FXP_SYMLINK",
+    ] {
+        if protocol.contains(forbidden) {
+            failures.push(format!(
+                "read-only SFTP client contains forbidden {forbidden}"
+            ));
+        }
+    }
+    if root_manifest.contains("russh") || agent_manifest.contains("russh") {
+        failures.push(String::from(
+            "Rust SSH stack is forbidden for the local MVP",
+        ));
+    }
+    for forbidden in ["path TEXT", "content", "password", "token", "file_body"] {
+        if audit.contains(forbidden) {
+            failures.push(format!(
+                "file audit schema contains forbidden {forbidden} field"
+            ));
+        }
+    }
+    let opsd = root.join("crates/jw-opsd/src");
+    for file in regular_files(&opsd)? {
+        if file.extension() == Some(OsStr::new("rs")) {
+            let content = read_text(&file)?;
+            if content.contains("SftpProtocol")
+                || content.contains("FilePathRequest")
+                || content.contains("SSH_FXP_")
+            {
+                failures.push(format!(
+                    "root helper gained SFTP surface in {}",
                     display_relative(root, &file)
                 ));
             }

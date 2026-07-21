@@ -10,8 +10,8 @@ use axum::body::Body;
 use axum::extract::ws::WebSocketUpgrade;
 use axum::extract::{DefaultBodyLimit, Path, State};
 use axum::http::header::{
-    CACHE_CONTROL, CONTENT_SECURITY_POLICY, CONTENT_TYPE, COOKIE, HOST, ORIGIN, REFERRER_POLICY,
-    SET_COOKIE, STRICT_TRANSPORT_SECURITY, X_CONTENT_TYPE_OPTIONS,
+    CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_SECURITY_POLICY, CONTENT_TYPE, COOKIE, HOST,
+    ORIGIN, REFERRER_POLICY, SET_COOKIE, STRICT_TRANSPORT_SECURITY, X_CONTENT_TYPE_OPTIONS,
 };
 use axum::http::{HeaderMap, HeaderValue, Method, Request, StatusCode};
 use axum::middleware::{Next, from_fn_with_state};
@@ -28,9 +28,11 @@ use jw_contracts::{
     CertbotAttachPlanView, CertbotIssueApprovalRequest, CertbotIssuePlanInput,
     CertbotIssuePlanRequest, CertbotIssuePlanView, CertbotIssuePreflightEvidence,
     CertbotRenewTestApprovalRequest, CertbotRenewTestPlanRequest, CertbotRenewTestPlanView,
-    CertificateInventoryView, CertificateSummaryView, HealthStatus, HealthView,
-    IPC_PROTOCOL_VERSION, IngressChannel, IntegrationCatalogView, LoginRequest,
-    MANAGED_CONFIG_OPERATION, ManagedConfigApprovalRequest, ManagedConfigPlanRequest,
+    CertificateInventoryView, CertificateSummaryView, FILE_MAX_DOWNLOAD_BYTES, FileCapabilityView,
+    FileEntryView, FileKind, FileLimitsView, FileListView, FilePathRequest,
+    FileSessionCloseRequest, FileSessionRequest, FileSessionView, FileStatView, FileTextView,
+    HealthStatus, HealthView, IPC_PROTOCOL_VERSION, IngressChannel, IntegrationCatalogView,
+    LoginRequest, MANAGED_CONFIG_OPERATION, ManagedConfigApprovalRequest, ManagedConfigPlanRequest,
     ManagedConfigPlanView, ManagedConfigResourceView, NGINX_SITE_STATE_OPERATION,
     NginxSiteStatePlanRequest, NginxSiteStatePlanView, NginxSitesView, ObservationStatus,
     OperationAcceptedView, OperationApprovalRequest, OperationReceiptView,
@@ -44,6 +46,7 @@ use tower_http::services::{ServeDir, ServeFile};
 use utoipa::OpenApi;
 use zeroize::Zeroizing;
 
+use crate::file_session::{FileBroker, FileSessionError, FileSessionIssue};
 use crate::integration_catalog::{IntegrationObservationProfile, observe_integrations};
 use crate::observation::{ObservationProfile, observe_host, observe_nginx_with_mutation_gate};
 use crate::ops_client::OpsBrokerError;
@@ -71,6 +74,7 @@ pub struct AppState {
     pub auth: Arc<dyn AuthBroker>,
     pub ops: Arc<dyn OpsBroker>,
     pub terminal: TerminalBroker,
+    pub files: FileBroker,
     auth_limiter: AuthLimiter,
 }
 
@@ -90,6 +94,7 @@ impl AppState {
             auth,
             ops,
             terminal: TerminalBroker::default(),
+            files: FileBroker::default(),
             auth_limiter: AuthLimiter::default(),
         }
     }
@@ -97,6 +102,12 @@ impl AppState {
     #[must_use]
     pub fn with_terminal_broker(mut self, terminal: TerminalBroker) -> Self {
         self.terminal = terminal;
+        self
+    }
+
+    #[must_use]
+    pub fn with_file_broker(mut self, files: FileBroker) -> Self {
+        self.files = files;
         self
     }
 }
@@ -132,6 +143,13 @@ impl AppState {
         operation_receipt,
         terminal_capability,
         issue_terminal_ticket,
+        file_capability,
+        create_file_session,
+        close_file_session,
+        list_files,
+        stat_file,
+        read_text_file,
+        download_file,
     ),
     components(schemas(
         AccessSettingsView,
@@ -197,6 +215,17 @@ impl AppState {
         TerminalLimitsView,
         TerminalTicketRequest,
         TerminalTicketView,
+        FileCapabilityView,
+        FileLimitsView,
+        FileSessionRequest,
+        FileSessionView,
+        FileSessionCloseRequest,
+        FilePathRequest,
+        FileEntryView,
+        FileKind,
+        FileListView,
+        FileStatView,
+        FileTextView,
     )),
     tags((name = "jw-agent", description = "JW Agent local management API"))
 )]
@@ -216,6 +245,13 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/v1/terminal", get(terminal_capability))
         .route("/api/v1/terminal/tickets", post(issue_terminal_ticket))
         .route("/api/v1/terminal/connect", get(connect_terminal))
+        .route("/api/v1/files", get(file_capability))
+        .route("/api/v1/files/sessions", post(create_file_session))
+        .route("/api/v1/files/sessions/close", post(close_file_session))
+        .route("/api/v1/files/list", post(list_files))
+        .route("/api/v1/files/stat", post(stat_file))
+        .route("/api/v1/files/read", post(read_text_file))
+        .route("/api/v1/files/download", post(download_file))
         .route("/api/v1/host", get(host))
         .route("/api/v1/capabilities", get(capabilities))
         .route("/api/v1/services", get(services))
@@ -355,6 +391,7 @@ async fn login(
     if let Some(prior) = prior_token
         && {
             state.terminal.revoke_session(prior.as_str());
+            state.files.revoke_session(prior.as_str());
             state.store.revoke_session(prior.as_str(), now).is_err()
         }
     {
@@ -392,6 +429,7 @@ async fn logout(State(state): State<AppState>, headers: HeaderMap) -> Result<Res
         .revoke_session(token.as_str(), now)
         .map_err(|_| ApiProblem::internal())?;
     state.terminal.revoke_session(token.as_str());
+    state.files.revoke_session(token.as_str());
     let mut response = StatusCode::NO_CONTENT.into_response();
     clear_session_cookie(&state, &mut response)?;
     Ok(response)
@@ -455,6 +493,7 @@ async fn reauthenticate(
         }
     };
     state.terminal.revoke_session(old_token.as_str());
+    state.files.revoke_session(old_token.as_str());
     if state.store.revoke_session(old_token.as_str(), now).is_err() {
         let _cleanup = state.store.revoke_session(issued.token(), now);
         return Err(ApiProblem::internal());
@@ -704,6 +743,313 @@ fn map_terminal_ticket_error(error: TerminalTicketError) -> ApiProblem {
         TerminalTicketError::Expired => ApiProblem::unauthorized("terminal_ticket_expired"),
         TerminalTicketError::Invalid => ApiProblem::unauthorized("terminal_ticket_rejected"),
         TerminalTicketError::Storage => ApiProblem::internal(),
+    }
+}
+
+#[utoipa::path(get, path = "/api/v1/files", responses(
+    (status = 200, description = "Home-scoped read-only OpenSSH SFTP capability", body = FileCapabilityView),
+    (status = 401, description = "Authentication required", body = ProblemDetails)
+))]
+async fn file_capability(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<FileCapabilityView>, ApiProblem> {
+    let (_, session) = current_session(&state, &headers, unix_milliseconds()?)?;
+    let reason = file_gate_reason(&state, &session);
+    Ok(Json(FileCapabilityView {
+        available: reason.is_none(),
+        reason: reason.clone(),
+        username: session.subject.username,
+        root_label: String::from("~"),
+        assurance: file_assurance(reason),
+        limits: FileLimitsView::default(),
+    }))
+}
+
+#[utoipa::path(post, path = "/api/v1/files/sessions", request_body = FileSessionRequest, responses(
+    (status = 201, description = "Authenticated memory-only SFTP session", body = FileSessionView),
+    (status = 400, description = "Invalid password or confirmation", body = ProblemDetails),
+    (status = 401, description = "Authentication failed", body = ProblemDetails),
+    (status = 403, description = "Role, Origin, CSRF, or subject rejected", body = ProblemDetails),
+    (status = 409, description = "File session unavailable or busy", body = ProblemDetails)
+))]
+async fn create_file_session(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(input): Json<FileSessionRequest>,
+) -> Result<(StatusCode, Json<FileSessionView>), ApiProblem> {
+    input.validate().map_err(ApiProblem::bad_request)?;
+    let now = unix_milliseconds()?;
+    let (jw_session_token, session) = current_session(&state, &headers, now)?;
+    require_csrf(&headers, jw_session_token.as_str())?;
+    let origin = require_exact_origin(&state, &headers)?;
+    if session.additional_auth_policy != AdditionalAuthPolicy::Disabled {
+        return Err(ApiProblem::new(
+            StatusCode::PRECONDITION_REQUIRED,
+            "additional_authentication_unavailable",
+        ));
+    }
+    if file_gate_reason(&state, &session).is_some() {
+        return Err(ApiProblem::new(StatusCode::CONFLICT, "files_unavailable"));
+    }
+    let source = request_source(&state, &headers)?;
+    state
+        .auth_limiter
+        .consume(&source, &session.subject.username)?;
+    let ssh_password = jw_contracts::SecretString::new(input.password.expose().to_owned());
+    let request_id = random_identifier()?;
+    let auth_request = AuthRequest {
+        protocol_version: IPC_PROTOCOL_VERSION,
+        request_id: request_id.clone(),
+        deadline_unix_ms: deadline(now, state.config.auth_timeout),
+        username: session.subject.username.clone(),
+        password: input.password,
+        remote_address: Some(source),
+        purpose: AuthPurpose::StepUp {
+            context_digest: String::from("files_read_only"),
+        },
+    };
+    let response = state
+        .auth
+        .authenticate(auth_request)
+        .await
+        .map_err(|_| ApiProblem::unavailable("authentication_unavailable"))?;
+    validate_auth_response(&response, &request_id)?;
+    let authenticated = match response.result {
+        AuthResult::Authenticated { subject, .. } => subject,
+        AuthResult::Failed { class } => return Err(auth_failure(class)),
+    };
+    if authenticated.uid == 0
+        || authenticated.uid != session.subject.uid
+        || authenticated.username != session.subject.username
+        || authenticated.role != session.subject.role
+        || authenticated.role == Role::Viewer
+    {
+        return Err(ApiProblem::forbidden("file_subject_mismatch"));
+    }
+    let issued = state
+        .files
+        .issue(
+            FileSessionIssue {
+                jw_session_token: jw_session_token.as_str(),
+                subject: authenticated,
+                ingress: state.channel,
+                origin,
+                password: ssh_password,
+                now_unix_ms: now,
+            },
+            &state.config,
+            &state.store,
+        )
+        .await
+        .map_err(map_file_session_error)?;
+    let view = FileSessionView {
+        session_token: issued.token,
+        expires_at: format_unix_ms(issued.expires_at_unix_ms)?,
+        root_label: String::from("~"),
+        assurance: file_assurance(None),
+        limits: FileLimitsView::default(),
+    };
+    Ok((StatusCode::CREATED, Json(view)))
+}
+
+#[utoipa::path(post, path = "/api/v1/files/sessions/close", request_body = FileSessionCloseRequest, responses(
+    (status = 204, description = "File session closed"),
+    (status = 401, description = "Session rejected", body = ProblemDetails),
+    (status = 403, description = "Origin or CSRF rejected", body = ProblemDetails)
+))]
+async fn close_file_session(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(input): Json<FileSessionCloseRequest>,
+) -> Result<Response, ApiProblem> {
+    let now = unix_milliseconds()?;
+    let (jw_session_token, _) = current_session(&state, &headers, now)?;
+    require_csrf(&headers, jw_session_token.as_str())?;
+    let origin = require_exact_origin(&state, &headers)?;
+    state
+        .files
+        .close(
+            input.session_token.expose(),
+            jw_session_token.as_str(),
+            state.channel,
+            &origin,
+        )
+        .map_err(map_file_session_error)?;
+    Ok(StatusCode::NO_CONTENT.into_response())
+}
+
+#[utoipa::path(post, path = "/api/v1/files/list", request_body = FilePathRequest, responses(
+    (status = 200, description = "Bounded home directory listing", body = FileListView),
+    (status = 400, description = "Path rejected", body = ProblemDetails),
+    (status = 401, description = "Session rejected", body = ProblemDetails)
+))]
+async fn list_files(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(input): Json<FilePathRequest>,
+) -> Result<Json<FileListView>, ApiProblem> {
+    let lease = acquire_file_lease(&state, &headers, &input)?;
+    lease
+        .list(&input.path)
+        .await
+        .map(Json)
+        .map_err(map_file_session_error)
+}
+
+#[utoipa::path(post, path = "/api/v1/files/stat", request_body = FilePathRequest, responses(
+    (status = 200, description = "Home-scoped file metadata", body = FileStatView),
+    (status = 400, description = "Path rejected", body = ProblemDetails),
+    (status = 401, description = "Session rejected", body = ProblemDetails)
+))]
+async fn stat_file(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(input): Json<FilePathRequest>,
+) -> Result<Json<FileStatView>, ApiProblem> {
+    let lease = acquire_file_lease(&state, &headers, &input)?;
+    lease
+        .stat(&input.path)
+        .await
+        .map(Json)
+        .map_err(map_file_session_error)
+}
+
+#[utoipa::path(post, path = "/api/v1/files/read", request_body = FilePathRequest, responses(
+    (status = 200, description = "Bounded UTF-8 text file", body = FileTextView),
+    (status = 400, description = "Path or text rejected", body = ProblemDetails),
+    (status = 401, description = "Session rejected", body = ProblemDetails),
+    (status = 413, description = "Text limit exceeded", body = ProblemDetails)
+))]
+async fn read_text_file(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(input): Json<FilePathRequest>,
+) -> Result<Json<FileTextView>, ApiProblem> {
+    let lease = acquire_file_lease(&state, &headers, &input)?;
+    lease
+        .read_text(&input.path)
+        .await
+        .map(Json)
+        .map_err(map_file_session_error)
+}
+
+#[utoipa::path(post, path = "/api/v1/files/download", request_body = FilePathRequest, responses(
+    (status = 200, description = "Bounded binary download", body = String, content_type = "application/octet-stream"),
+    (status = 400, description = "Path rejected", body = ProblemDetails),
+    (status = 401, description = "Session rejected", body = ProblemDetails),
+    (status = 413, description = "Download limit exceeded", body = ProblemDetails)
+))]
+async fn download_file(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(input): Json<FilePathRequest>,
+) -> Result<Response, ApiProblem> {
+    let lease = acquire_file_lease(&state, &headers, &input)?;
+    let bytes = lease
+        .download(&input.path)
+        .await
+        .map_err(map_file_session_error)?;
+    if u64::try_from(bytes.len()).map_or(true, |length| length > FILE_MAX_DOWNLOAD_BYTES) {
+        return Err(ApiProblem::new(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "download_too_large",
+        ));
+    }
+    let mut response = Response::new(Body::from(bytes));
+    response.headers_mut().insert(
+        CONTENT_TYPE,
+        HeaderValue::from_static("application/octet-stream"),
+    );
+    response.headers_mut().insert(
+        CONTENT_DISPOSITION,
+        HeaderValue::from_static("attachment; filename=\"jw-agent-download\""),
+    );
+    Ok(response)
+}
+
+fn acquire_file_lease(
+    state: &AppState,
+    headers: &HeaderMap,
+    input: &FilePathRequest,
+) -> Result<crate::FileLease, ApiProblem> {
+    let now = unix_milliseconds()?;
+    let (jw_session_token, session) = current_session(state, headers, now)?;
+    require_csrf(headers, jw_session_token.as_str())?;
+    let origin = require_exact_origin(state, headers)?;
+    if file_gate_reason(state, &session).is_some() {
+        return Err(ApiProblem::new(StatusCode::CONFLICT, "files_unavailable"));
+    }
+    state
+        .files
+        .acquire(
+            input.session_token.expose(),
+            jw_session_token.as_str(),
+            state.channel,
+            &origin,
+        )
+        .map_err(map_file_session_error)
+}
+
+fn file_gate_reason(state: &AppState, session: &SessionView) -> Option<String> {
+    if session.subject.uid == 0 || session.subject.role == Role::Viewer {
+        return Some(String::from("현재 계정은 파일 세션을 열 수 없습니다."));
+    }
+    if session.additional_auth_policy != AdditionalAuthPolicy::Disabled {
+        return Some(String::from(
+            "설정된 추가 인증 provider가 아직 없어 파일 세션이 차단되었습니다.",
+        ));
+    }
+    terminal_runtime_available(&state.config)
+        .err()
+        .map(str::to_owned)
+}
+
+fn file_assurance(reason: Option<String>) -> AssuranceView {
+    AssuranceView {
+        level: AssuranceLevel::G0ObserveOnly,
+        rollback_support: RollbackSupport::NotApplicable,
+        operation_available: reason.is_none(),
+        scope: vec![String::from(
+            "현재 로그인한 non-root Linux 계정의 홈 디렉터리 읽기",
+        )],
+        excluded_effects: vec![
+            String::from("업로드·생성·편집·삭제·이동·권한 변경"),
+            String::from("홈 밖 경로와 system-owned 설정 접근"),
+        ],
+        apply_verifier: vec![
+            String::from("PAM 재인증과 canonical UID/username 일치"),
+            String::from("OpenSSH REALPATH 기반 홈 경계 검증"),
+        ],
+        rollback_verifier: vec![String::from("읽기 전용이므로 원복 대상 없음")],
+        reason,
+    }
+}
+
+fn map_file_session_error(error: FileSessionError) -> ApiProblem {
+    match error {
+        FileSessionError::Busy => ApiProblem::new(StatusCode::CONFLICT, "file_session_busy"),
+        FileSessionError::Expired => ApiProblem::unauthorized("file_session_expired"),
+        FileSessionError::Invalid => ApiProblem::unauthorized("file_session_rejected"),
+        FileSessionError::Storage => ApiProblem::unavailable("file_audit_unavailable"),
+        FileSessionError::Connection(reason) => match reason.as_str() {
+            "openssh_authentication_failed" => ApiProblem::unauthorized(reason),
+            "openssh_authentication_timeout" => {
+                ApiProblem::new(StatusCode::GATEWAY_TIMEOUT, reason)
+            }
+            _ => ApiProblem::unavailable(reason),
+        },
+        FileSessionError::Operation(reason) => match reason.as_str() {
+            "path_invalid" | "not_directory" | "not_regular_file" | "binary_text"
+            | "sftp_unsafe_name" => ApiProblem::bad_request(reason),
+            "path_outside_home" | "permission_denied" => ApiProblem::forbidden(reason),
+            "not_found" => ApiProblem::new(StatusCode::NOT_FOUND, reason),
+            "text_too_large" | "download_too_large" | "sftp_list_limit_exceeded" => {
+                ApiProblem::new(StatusCode::PAYLOAD_TOO_LARGE, reason)
+            }
+            "sftp_timeout" => ApiProblem::new(StatusCode::GATEWAY_TIMEOUT, reason),
+            _ => ApiProblem::new(StatusCode::BAD_GATEWAY, reason),
+        },
     }
 }
 

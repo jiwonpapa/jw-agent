@@ -1243,6 +1243,225 @@ sudo journalctl -u jw-agentd.service --since '10 minutes ago' --no-pager -o cat 
     require_success(&evidence, "OpenSSH terminal audit and cleanup", false)
 }
 
+pub fn gate_p2_openssh_sftp_readonly(_root: &Path, timeout: Duration) -> Result<(), String> {
+    let config = VmConfig::load()?;
+    let password = read_secret(&config.password_file)?;
+    restart_edge_and_agentd_and_wait(&config, timeout)?;
+    let fixture_command = format!(
+        r#"set -eu
+admin_home="$(getent passwd -- {admin} | cut -d: -f6)"
+test -n "$admin_home"
+case "$admin_home" in /*) ;; *) exit 1 ;; esac
+fixture="$admin_home/jw-agent-sftp-fixture"
+sudo rm -rf -- "$fixture"
+sudo -H -u {admin} mkdir -p "$fixture/subdirectory"
+printf 'JW_SFTP_READ_ONLY_VM_OK\nsecond line\n' | sudo -H -u {admin} tee "$fixture/readme.txt" >/dev/null
+printf 'nested\n' | sudo -H -u {admin} tee "$fixture/subdirectory/nested.txt" >/dev/null
+sudo -H -u {admin} python3 -c 'from pathlib import Path; import sys; Path(sys.argv[1]).write_bytes(b"x" * (300 * 1024))' "$fixture/large-text.txt"
+sudo -H -u {admin} python3 -c 'from pathlib import Path; import sys; f=Path(sys.argv[1]).open("wb"); f.truncate(9 * 1024 * 1024); f.close()' "$fixture/large-download.bin"
+sudo -H -u {admin} ln -s /etc "$fixture/outside-link"
+sudo -H -u {admin} chmod 0700 "$fixture" "$fixture/subdirectory"
+sudo -H -u {admin} chmod 0600 "$fixture/readme.txt" "$fixture/subdirectory/nested.txt" "$fixture/large-text.txt" "$fixture/large-download.bin""#,
+        admin = config.admin_user
+    );
+    let prepared = config.ssh(&fixture_command, None, timeout)?;
+    require_success(&prepared, "SFTP home fixture preparation", false)?;
+
+    let result = (|| {
+        let session = P2ApiSession::login(&config, &password, timeout)?;
+        let capability = session.get(&config, "/api/v1/files", timeout)?;
+        expect_http(&capability, 200, "SFTP read-only capability")?;
+        for expected in [
+            "\"available\":true",
+            "\"level\":\"g0_observe_only\"",
+            "\"rollbackSupport\":\"not_applicable\"",
+            "\"rootLabel\":\"~\"",
+            "\"idleTimeoutSeconds\":120",
+            "\"maxLifetimeSeconds\":600",
+            "\"maxListEntries\":500",
+            "\"maxTextBytes\":262144",
+            "\"maxDownloadBytes\":8388608",
+            "\"maxSessionsPerUser\":1",
+        ] {
+            if !capability.body.contains(expected) {
+                return Err(format!("SFTP capability omitted {expected}"));
+            }
+        }
+
+        let token = session.create_file_session(&config, &password, timeout)?;
+        let root = session.file_request(&config, "list", &token, "", timeout)?;
+        expect_http(&root, 200, "SFTP home list")?;
+        if !root.body.contains("\"name\":\"jw-agent-sftp-fixture\"")
+            || root.body.contains("\"path\":\"/")
+        {
+            return Err(String::from(
+                "SFTP root listing missed the fixture or exposed an absolute home path",
+            ));
+        }
+        let listing =
+            session.file_request(&config, "list", &token, "jw-agent-sftp-fixture", timeout)?;
+        expect_http(&listing, 200, "SFTP fixture list")?;
+        for expected in [
+            "\"name\":\"subdirectory\"",
+            "\"name\":\"readme.txt\"",
+            "\"name\":\"outside-link\"",
+            "\"kind\":\"symbolic_link\"",
+        ] {
+            if !listing.body.contains(expected) {
+                return Err(format!("SFTP fixture listing omitted {expected}"));
+            }
+        }
+        let stat = session.file_request(
+            &config,
+            "stat",
+            &token,
+            "jw-agent-sftp-fixture/readme.txt",
+            timeout,
+        )?;
+        expect_http(&stat, 200, "SFTP file stat")?;
+        if !stat.body.contains("\"kind\":\"regular\"")
+            || !stat
+                .body
+                .contains("\"path\":\"jw-agent-sftp-fixture/readme.txt\"")
+        {
+            return Err(String::from("SFTP stat returned an unexpected identity"));
+        }
+        let text = session.file_request(
+            &config,
+            "read",
+            &token,
+            "jw-agent-sftp-fixture/readme.txt",
+            timeout,
+        )?;
+        expect_http(&text, 200, "SFTP bounded text read")?;
+        if !text
+            .body
+            .contains("JW_SFTP_READ_ONLY_VM_OK\\nsecond line\\n")
+            || !text.body.contains("\"lineEnding\":\"lf\"")
+            || !text.body.contains("\"digest\":\"sha256:")
+        {
+            return Err(String::from("SFTP text read omitted content metadata"));
+        }
+        let download = session.file_request(
+            &config,
+            "download",
+            &token,
+            "jw-agent-sftp-fixture/readme.txt",
+            timeout,
+        )?;
+        expect_http(&download, 200, "SFTP bounded download")?;
+        if !download.body.contains("JW_SFTP_READ_ONLY_VM_OK") {
+            return Err(String::from("SFTP download body did not match the fixture"));
+        }
+
+        for (path, expected_status, label) in [
+            ("../etc/passwd", 400, "traversal"),
+            ("/etc/passwd", 400, "absolute path"),
+            (
+                "jw-agent-sftp-fixture/outside-link/passwd",
+                403,
+                "symlink escape",
+            ),
+        ] {
+            let denied = session.file_request(&config, "read", &token, path, timeout)?;
+            expect_http(&denied, expected_status, &format!("SFTP {label} denial"))?;
+        }
+        let large_text = session.file_request(
+            &config,
+            "read",
+            &token,
+            "jw-agent-sftp-fixture/large-text.txt",
+            timeout,
+        )?;
+        expect_http(&large_text, 413, "SFTP text size denial")?;
+        let large_download = session.file_request(
+            &config,
+            "download",
+            &token,
+            "jw-agent-sftp-fixture/large-download.bin",
+            timeout,
+        )?;
+        expect_http(&large_download, 413, "SFTP download size denial")?;
+
+        let wrong_origin = session.file_request_with_origin(
+            &config,
+            "list",
+            &token,
+            "jw-agent-sftp-fixture",
+            "https://wrong-origin.invalid",
+            timeout,
+        )?;
+        expect_http(&wrong_origin, 403, "SFTP wrong Origin denial")?;
+        let after_origin =
+            session.file_request(&config, "list", &token, "jw-agent-sftp-fixture", timeout)?;
+        expect_http(&after_origin, 200, "SFTP session after wrong Origin")?;
+
+        let other = P2ApiSession::login(&config, &password, timeout)?;
+        let cross_session =
+            other.file_request(&config, "list", &token, "jw-agent-sftp-fixture", timeout)?;
+        expect_http(&cross_session, 401, "SFTP cross-session denial")?;
+
+        session.close_file_session(&config, &token, timeout)?;
+        let replay =
+            session.file_request(&config, "list", &token, "jw-agent-sftp-fixture", timeout)?;
+        expect_http(&replay, 401, "closed SFTP session replay denial")?;
+
+        let revoked_token = session.create_file_session(&config, &password, timeout)?;
+        let before_logout = session.file_request(
+            &config,
+            "list",
+            &revoked_token,
+            "jw-agent-sftp-fixture",
+            timeout,
+        )?;
+        expect_http(&before_logout, 200, "SFTP session before logout")?;
+        session.logout(&config, timeout)?;
+
+        let evidence = config.ssh(
+            r#"set -eu
+attempt=0
+while test "$attempt" -lt 50; do
+    if ! pgrep -u jw-agent -f '/usr/bin/ssh' >/dev/null 2>&1 && ! sudo find /run/jw-agent/askpass -mindepth 1 -print -quit | grep -q .; then
+        break
+    fi
+    attempt=$((attempt + 1))
+    sleep 0.1
+done
+! pgrep -u jw-agent -f '/usr/bin/ssh' >/dev/null 2>&1
+! sudo find /run/jw-agent/askpass -mindepth 1 -print -quit | grep -q .
+sudo python3 -c 'import sqlite3; c=sqlite3.connect("/var/lib/jw-agent/agentd/agentd.sqlite3"); rows=c.execute("select state,close_reason from file_sessions order by started_at_unix_ms desc limit 2").fetchall(); assert len(rows)==2; assert all(r[0]=="closed" for r in rows); assert {r[1] for r in rows}=={"user_closed","session_revoked"}; events=c.execute("select action,length(path_digest),byte_count,result from file_access_events where session_id in (select session_id from file_sessions order by started_at_unix_ms desc limit 2)").fetchall(); assert events; assert all(r[1]==32 for r in events); assert {r[0] for r in events}.issuperset({"list","stat","read","download"}); names={r[1] for r in c.execute("pragma table_info(file_access_events)")}; assert not names.intersection({"path","content","password","token","file_body"})'
+! sudo sh -c 'find /var/lib/jw-agent/agentd -maxdepth 1 -type f -name "agentd.sqlite3*" -print0 | xargs -0 -r strings' | grep -Fq 'jw-agent-sftp-fixture'
+! sudo sh -c 'find /var/lib/jw-agent/agentd -maxdepth 1 -type f -name "agentd.sqlite3*" -print0 | xargs -0 -r strings' | grep -Fq 'JW_SFTP_READ_ONLY_VM_OK'
+! sudo journalctl -u jw-agentd.service --since '10 minutes ago' --no-pager -o cat | grep -Fq 'JW_SFTP_READ_ONLY_VM_OK'
+systemctl is-active --quiet ssh.service
+sudo /usr/sbin/sshd -T -C user="$USER",addr=127.0.0.1,laddr=127.0.0.1,host=localhost | grep -Fxq 'passwordauthentication yes'"#,
+            None,
+            timeout,
+        )?;
+        require_success(&evidence, "OpenSSH SFTP read-only audit and cleanup", false)
+    })();
+
+    let cleanup_command = format!(
+        r#"set -eu
+admin_home="$(getent passwd -- {admin} | cut -d: -f6)"
+test -n "$admin_home"
+case "$admin_home" in /*) ;; *) exit 1 ;; esac
+sudo rm -rf -- "$admin_home/jw-agent-sftp-fixture""#,
+        admin = config.admin_user
+    );
+    let cleanup = config.ssh(&cleanup_command, None, timeout);
+    let cleanup =
+        cleanup.and_then(|result| require_success(&result, "SFTP home fixture cleanup", false));
+    match (result, cleanup) {
+        (Ok(()), Ok(())) => Ok(()),
+        (Err(error), Ok(())) => Err(error),
+        (Ok(()), Err(cleanup_error)) => Err(cleanup_error),
+        (Err(error), Err(cleanup_error)) => Err(format!(
+            "{error}; SFTP fixture cleanup also failed: {cleanup_error}"
+        )),
+    }
+}
+
 fn run_terminal_websocket_probe(
     config: &VmConfig,
     cookie: &str,
@@ -1698,6 +1917,129 @@ impl P2ApiSession {
             return Err(String::from("terminal ticket shape is invalid"));
         }
         Ok(ticket)
+    }
+
+    fn create_file_session(
+        &self,
+        config: &VmConfig,
+        password: &str,
+        timeout: Duration,
+    ) -> Result<String, String> {
+        let body = format!(
+            "{{\"password\":{},\"readOnlyConfirmed\":true}}",
+            json_string(password),
+        );
+        let response = public_api_request(
+            config,
+            "POST",
+            "/api/v1/files/sessions",
+            &self.cookie_jar.path,
+            Some(&self.csrf_token),
+            Some(body.as_bytes()),
+            timeout,
+        )?;
+        expect_http(&response, 201, "read-only SFTP session")?;
+        if response.body.contains(password)
+            || !response.body.contains("\"level\":\"g0_observe_only\"")
+            || !response
+                .body
+                .contains("\"rollbackSupport\":\"not_applicable\"")
+            || !response.body.contains("\"rootLabel\":\"~\"")
+        {
+            return Err(String::from(
+                "file session response leaked a credential or omitted its G0 boundary",
+            ));
+        }
+        let token = json_string_field(&response.body, "sessionToken")?;
+        if token.len() != 43
+            || !token
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+        {
+            return Err(String::from("file session token shape is invalid"));
+        }
+        Ok(token)
+    }
+
+    fn file_request(
+        &self,
+        config: &VmConfig,
+        endpoint: &str,
+        file_session_token: &str,
+        path: &str,
+        timeout: Duration,
+    ) -> Result<HttpResponse, String> {
+        self.file_request_with_origin(
+            config,
+            endpoint,
+            file_session_token,
+            path,
+            &format!("https://{}", config.public_host),
+            timeout,
+        )
+    }
+
+    fn file_request_with_origin(
+        &self,
+        config: &VmConfig,
+        endpoint: &str,
+        file_session_token: &str,
+        path: &str,
+        origin: &str,
+        timeout: Duration,
+    ) -> Result<HttpResponse, String> {
+        if !matches!(endpoint, "list" | "stat" | "read" | "download") {
+            return Err(String::from("unsupported file endpoint"));
+        }
+        let body = format!(
+            "{{\"sessionToken\":{},\"path\":{}}}",
+            json_string(file_session_token),
+            json_string(path),
+        );
+        public_api_request_with_origin(
+            config,
+            PublicApiTarget {
+                method: "POST",
+                path: &format!("/api/v1/files/{endpoint}"),
+                origin,
+            },
+            &self.cookie_jar.path,
+            Some(&self.csrf_token),
+            Some(body.as_bytes()),
+            timeout,
+        )
+    }
+
+    fn close_file_session(
+        &self,
+        config: &VmConfig,
+        file_session_token: &str,
+        timeout: Duration,
+    ) -> Result<(), String> {
+        let body = format!("{{\"sessionToken\":{}}}", json_string(file_session_token),);
+        let response = public_api_request(
+            config,
+            "POST",
+            "/api/v1/files/sessions/close",
+            &self.cookie_jar.path,
+            Some(&self.csrf_token),
+            Some(body.as_bytes()),
+            timeout,
+        )?;
+        expect_http(&response, 204, "file session close")
+    }
+
+    fn logout(&self, config: &VmConfig, timeout: Duration) -> Result<(), String> {
+        let response = public_api_request(
+            config,
+            "POST",
+            "/api/v1/auth/logout",
+            &self.cookie_jar.path,
+            Some(&self.csrf_token),
+            Some(&[]),
+            timeout,
+        )?;
+        expect_http(&response, 204, "P2 API logout")
     }
 
     fn public_cookie_header(&self) -> Result<String, String> {
@@ -2660,8 +3002,39 @@ fn public_api_request(
     body: Option<&[u8]>,
     timeout: Duration,
 ) -> Result<HttpResponse, String> {
-    if !path.starts_with("/api/") || !matches!(method, "GET" | "POST") {
+    public_api_request_with_origin(
+        config,
+        PublicApiTarget {
+            method,
+            path,
+            origin: &format!("https://{}", config.public_host),
+        },
+        cookie_jar,
+        csrf_token,
+        body,
+        timeout,
+    )
+}
+
+struct PublicApiTarget<'a> {
+    method: &'a str,
+    path: &'a str,
+    origin: &'a str,
+}
+
+fn public_api_request_with_origin(
+    config: &VmConfig,
+    target: PublicApiTarget<'_>,
+    cookie_jar: &Path,
+    csrf_token: Option<&str>,
+    body: Option<&[u8]>,
+    timeout: Duration,
+) -> Result<HttpResponse, String> {
+    if !target.path.starts_with("/api/") || !matches!(target.method, "GET" | "POST") {
         return Err(String::from("P2 API request rejected an unsupported shape"));
+    }
+    if !target.origin.starts_with("https://") || target.origin.len() > 512 {
+        return Err(String::from("P2 API request rejected an invalid Origin"));
     }
     let csrf_header = match csrf_token {
         Some(token) => Some(TemporarySecretFile::create_with_contents(
@@ -2691,13 +3064,13 @@ fn public_api_request(
         OsString::from("--cookie-jar"),
         cookie_jar.as_os_str().to_owned(),
         OsString::from("--header"),
-        OsString::from(format!("Origin: https://{}", config.public_host)),
+        OsString::from(format!("Origin: {}", target.origin)),
     ];
     if let Some(header) = &csrf_header {
         arguments.push(OsString::from("--header"));
         arguments.push(OsString::from(format!("@{}", header.path.display())));
     }
-    if method == "POST" {
+    if target.method == "POST" {
         arguments.push(OsString::from("--header"));
         arguments.push(OsString::from("Content-Type: application/json"));
         arguments.push(OsString::from("--data-binary"));
@@ -2705,7 +3078,7 @@ fn public_api_request(
     }
     arguments.push(OsString::from(format!(
         "https://{}{}",
-        config.public_host, path
+        config.public_host, target.path
     )));
     let result = run_capture(OsStr::new("curl"), &arguments, body, timeout)?;
     if !result.status.success() || result.stdout_truncated || result.stderr_truncated {

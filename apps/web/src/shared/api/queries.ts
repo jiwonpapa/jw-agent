@@ -3,6 +3,7 @@ import { queryOptions } from "@tanstack/react-query";
 import {
   getAccessSettings,
   getCertificates,
+  getFileCapability,
   getHealth,
   getHost,
   getIntegrations,
@@ -20,6 +21,7 @@ export const queryKeys = {
   integrations: ["integrations"] as const,
   accessSettings: ["settings", "access"] as const,
   terminal: ["terminal", "capability"] as const,
+  files: ["files", "capability"] as const,
 };
 
 export const healthQueryOptions = queryOptions({
@@ -74,6 +76,13 @@ export const accessSettingsQueryOptions = queryOptions({
 export const terminalQueryOptions = queryOptions({
   queryKey: queryKeys.terminal,
   queryFn: ({ signal }) => getTerminalCapability(signal),
+  staleTime: 10_000,
+  retry: 1,
+});
+
+export const fileCapabilityQueryOptions = queryOptions({
+  queryKey: queryKeys.files,
+  queryFn: ({ signal }) => getFileCapability(signal),
   staleTime: 10_000,
   retry: 1,
 });
