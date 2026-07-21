@@ -17,6 +17,7 @@ use serde::Serialize;
 
 use crate::config::OpsPaths;
 use crate::error::OpsError;
+use crate::managed_config::{ManagedConfigResource, discover_protected_config};
 use crate::nginx::{NginxSite, discover_site, read_available_content};
 use crate::runner::{CommandClass, OperationRunner};
 
@@ -50,6 +51,20 @@ pub const CERTBOT_RENEW_RECOVERY_PATH: [&str; 3] = [
     "중단된 dry-run은 새 계획과 재인증으로 다시 실행합니다.",
 ];
 
+pub const CERTBOT_ATTACH_IMPACT: [&str; 4] = [
+    "보호된 JW Agent Nginx vhost의 ssl_certificate 두 지시문만 표준 Certbot lineage로 교체합니다.",
+    "nginx -t 통과 뒤 nginx.service를 reload하며 연결이 잠시 재수립될 수 있습니다.",
+    "SNI TLS 응답 지문·Nginx active·certbot.timer·renewal 설정을 모두 다시 확인합니다.",
+    "교체·문법·reload·TLS 검증 실패 시 Nginx 파일 원본 bytes·owner·mode를 자동 복원합니다.",
+];
+
+pub const CERTBOT_ATTACH_RECOVERY_PATH: [&str; 4] = [
+    "SSH로 서버에 접속합니다.",
+    "JW Agent receipt의 operation ID와 rollback 결과를 확인합니다.",
+    "보호된 관리 vhost의 ssl_certificate 지시문과 snapshot을 비교합니다.",
+    "nginx -t와 로컬 SNI TLS 지문을 확인한 뒤 nginx.service를 reload합니다.",
+];
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CertbotRenewPlanPayload {
@@ -77,6 +92,161 @@ pub struct CertbotIssuePlanPayload {
     pub local_port_443_reachable: bool,
     pub staging_evidence_valid: bool,
     pub staging_evidence_key: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CertbotAttachPlanPayload {
+    pub primary_domain: String,
+    pub site_id: String,
+    pub site_digest: String,
+    pub metadata_digest: String,
+    pub inventory_digest: String,
+    pub certificate_fingerprint: String,
+    pub sans: Vec<String>,
+    pub not_after: String,
+    pub current_certificate_path: String,
+    pub target_certificate_path: String,
+    pub proposed_content_digest: String,
+    pub timer_enabled: bool,
+    pub timer_active: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TlsAttachmentResource {
+    pub config: ManagedConfigResource,
+    pub proposed_content: String,
+    pub proposed_content_digest: String,
+    pub current_certificate_path: String,
+    pub target_certificate_path: String,
+}
+
+pub fn prepare_tls_attachment(
+    paths: &OpsPaths,
+    primary_domain: &str,
+    site_id: &str,
+    expected_site_digest: &str,
+) -> Result<TlsAttachmentResource, OpsError> {
+    validate_domain(primary_domain).map_err(OpsError::Rejected)?;
+    let config = discover_protected_config(paths, site_id)?;
+    if config.content_digest != expected_site_digest {
+        return Err(OpsError::Rejected("stale_site"));
+    }
+    if !server_names_cover(config.content.as_bytes(), &[primary_domain.to_owned()]) {
+        return Err(OpsError::Rejected("invalid_domain"));
+    }
+    let fullchain = paths
+        .letsencrypt_live
+        .join(primary_domain)
+        .join("fullchain.pem");
+    let private_key = paths
+        .letsencrypt_live
+        .join(primary_domain)
+        .join("privkey.pem");
+    let fullchain_text = fullchain
+        .to_str()
+        .ok_or(OpsError::Rejected("certificate_path_policy"))?;
+    let private_key_text = private_key
+        .to_str()
+        .ok_or(OpsError::Rejected("certificate_path_policy"))?;
+    if fullchain_text
+        .bytes()
+        .any(|byte| byte.is_ascii_whitespace())
+        || private_key_text
+            .bytes()
+            .any(|byte| byte.is_ascii_whitespace())
+    {
+        return Err(OpsError::Rejected("certificate_path_policy"));
+    }
+    let (proposed_content, current_certificate_path) =
+        replace_tls_directives(&config.content, fullchain_text, private_key_text)?;
+    Ok(TlsAttachmentResource {
+        proposed_content_digest: sha256_digest(proposed_content.as_bytes()),
+        target_certificate_path: format!("…/live/{primary_domain}/fullchain.pem"),
+        current_certificate_path,
+        config,
+        proposed_content,
+    })
+}
+
+fn replace_tls_directives(
+    content: &str,
+    fullchain: &str,
+    private_key: &str,
+) -> Result<(String, String), OpsError> {
+    let mut certificate_count = 0_u8;
+    let mut private_key_count = 0_u8;
+    let mut current_certificate_path: Option<String> = None;
+    let mut output = String::with_capacity(content.len().saturating_add(128));
+    for line in content.split_inclusive('\n') {
+        let has_newline = line.ends_with('\n');
+        let bare = match line.strip_suffix('\n') {
+            Some(value) => value,
+            None => line,
+        };
+        let trimmed = bare.trim();
+        let indentation_len = bare.len().saturating_sub(bare.trim_start().len());
+        let indentation = &bare[..indentation_len];
+        if let Some(value) = directive_value(trimmed, "ssl_certificate") {
+            certificate_count = certificate_count.saturating_add(1);
+            current_certificate_path = Some(mask_path(value));
+            output.push_str(indentation);
+            output.push_str("ssl_certificate ");
+            output.push_str(fullchain);
+            output.push(';');
+        } else if directive_value(trimmed, "ssl_certificate_key").is_some() {
+            private_key_count = private_key_count.saturating_add(1);
+            output.push_str(indentation);
+            output.push_str("ssl_certificate_key ");
+            output.push_str(private_key);
+            output.push(';');
+        } else {
+            output.push_str(bare);
+        }
+        if has_newline {
+            output.push('\n');
+        }
+    }
+    if certificate_count != 1 || private_key_count != 1 {
+        return Err(OpsError::Rejected("attach_unsupported"));
+    }
+    Ok((
+        output,
+        current_certificate_path.ok_or(OpsError::Rejected("attach_unsupported"))?,
+    ))
+}
+
+fn directive_value<'a>(line: &'a str, directive: &str) -> Option<&'a str> {
+    let rest = line
+        .strip_prefix(directive)?
+        .strip_prefix(char::is_whitespace)?;
+    let value = rest.trim().strip_suffix(';')?.trim();
+    if value.is_empty() || value.bytes().any(|byte| byte.is_ascii_whitespace()) {
+        None
+    } else {
+        Some(value)
+    }
+}
+
+fn mask_path(value: &str) -> String {
+    let components: Vec<_> = Path::new(value)
+        .components()
+        .filter_map(|component| component.as_os_str().to_str())
+        .collect();
+    if components.len() >= 3 {
+        format!(
+            "…/{}",
+            components[components.len().saturating_sub(3)..].join("/")
+        )
+    } else {
+        Path::new(value)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .map_or_else(
+                || String::from("…/certificate.pem"),
+                |name| format!("…/{name}"),
+            )
+    }
 }
 
 pub fn validate_issue_preconditions(
@@ -208,6 +378,7 @@ pub fn certificate_inventory(
         problems,
         issue_operation_type: None,
         renew_test_operation_type: None,
+        attach_operation_type: None,
         assurance: inventory_assurance(),
     })
 }
@@ -326,7 +497,11 @@ fn validate_lineage_target(
 }
 
 fn inspect_x509(path: &Path) -> Result<String, OpsError> {
-    let mut command = Command::new("/usr/bin/openssl");
+    #[cfg(target_os = "macos")]
+    let executable = "/opt/homebrew/bin/openssl";
+    #[cfg(not(target_os = "macos"))]
+    let executable = "/usr/bin/openssl";
+    let mut command = Command::new(executable);
     command
         .args(["x509", "-in"])
         .arg(path)
@@ -335,8 +510,8 @@ fn inspect_x509(path: &Path) -> Result<String, OpsError> {
             "-fingerprint",
             "-sha256",
             "-enddate",
-            "-dateopt",
-            "iso_8601",
+            "-checkend",
+            "0",
             "-ext",
             "subjectAltName",
         ])
@@ -547,6 +722,33 @@ pub fn issue_assurance() -> AssuranceView {
         rollback_verifier: Vec::new(),
         reason: Some(String::from(
             "외부 CA 효과는 되돌릴 수 없어 발급 결과 검증만 보장합니다.",
+        )),
+    }
+}
+
+#[must_use]
+pub fn attach_assurance() -> AssuranceView {
+    AssuranceView {
+        level: AssuranceLevel::G2ReversibleConfig,
+        rollback_support: RollbackSupport::AutomaticBounded,
+        operation_available: true,
+        scope: vec![String::from(
+            "보호된 관리 vhost의 인증서·개인키 지시문 두 개와 Nginx reload만 변경합니다.",
+        )],
+        excluded_effects: vec![String::from(
+            "인증서 발급·폐기·DNS·firewall·다른 Nginx 파일은 변경하거나 원복하지 않습니다.",
+        )],
+        apply_verifier: vec![
+            String::from("nginx -t, reload, active 상태를 확인합니다."),
+            String::from("127.0.0.1:443 SNI 응답의 인증서 SHA-256 지문을 확인합니다."),
+            String::from("Certbot lineage·renewal config·timer 상태를 다시 읽습니다."),
+        ],
+        rollback_verifier: vec![
+            String::from("snapshot의 원본 bytes·owner·mode를 복원합니다."),
+            String::from("복원 뒤 nginx -t, reload, active 상태를 다시 확인합니다."),
+        ],
+        reason: Some(String::from(
+            "로컬 Nginx 설정 범위만 자동 원복하며 이미 발생한 CA 외부 효과는 포함하지 않습니다.",
         )),
     }
 }

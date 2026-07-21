@@ -17,6 +17,7 @@ use jw_contracts::{
 use sha2::{Digest, Sha256};
 
 const CERTBOT_EXECUTABLE: &str = "/usr/bin/certbot";
+const OPENSSL_EXECUTABLE: &str = "/usr/bin/openssl";
 const WEBROOT: &str = "/var/lib/jw-agent/acme-webroot";
 const CONFIG_DIR: &str = "/etc/letsencrypt";
 const WORK_DIR: &str = "/var/lib/letsencrypt";
@@ -24,6 +25,8 @@ const LOGS_DIR: &str = "/var/log/letsencrypt";
 const ISSUE_TIMEOUT: Duration = Duration::from_secs(6 * 60);
 const RENEW_TIMEOUT: Duration = Duration::from_secs(12 * 60);
 const OUTPUT_CAP_BYTES: usize = 64 * 1_024;
+const TLS_OUTPUT_CAP_BYTES: usize = 256 * 1_024;
+const TLS_TIMEOUT: Duration = Duration::from_secs(8);
 
 pub fn execute_request(
     request: &CertbotCommandRequest,
@@ -62,10 +65,13 @@ fn execute_command(
 }
 
 struct InvocationSpec {
+    executable: &'static str,
     class: CertbotCommandClass,
     arguments: Vec<OsString>,
     private_config: Option<String>,
     timeout: Duration,
+    output_cap_bytes: usize,
+    expected_fingerprint: Option<String>,
 }
 
 fn invocation_spec(command: &CertbotCommand, config_path: &Path) -> Result<InvocationSpec, String> {
@@ -114,13 +120,17 @@ fn invocation_spec(command: &CertbotCommand, config_path: &Path) -> Result<Invoc
                 arguments.push(OsString::from(domain));
             }
             Ok(InvocationSpec {
+                executable: CERTBOT_EXECUTABLE,
                 class,
                 arguments,
                 private_config: Some(format!("email = {account_email}\n")),
                 timeout: ISSUE_TIMEOUT,
+                output_cap_bytes: OUTPUT_CAP_BYTES,
+                expected_fingerprint: None,
             })
         }
         CertbotCommand::RenewDryRun => Ok(InvocationSpec {
+            executable: CERTBOT_EXECUTABLE,
             class: CertbotCommandClass::RenewDryRun,
             arguments: vec![
                 OsString::from("renew"),
@@ -135,6 +145,28 @@ fn invocation_spec(command: &CertbotCommand, config_path: &Path) -> Result<Invoc
             ],
             private_config: None,
             timeout: RENEW_TIMEOUT,
+            output_cap_bytes: OUTPUT_CAP_BYTES,
+            expected_fingerprint: None,
+        }),
+        CertbotCommand::VerifyLocalTls {
+            server_name,
+            expected_fingerprint,
+        } => Ok(InvocationSpec {
+            executable: OPENSSL_EXECUTABLE,
+            class: CertbotCommandClass::VerifyLocalTls,
+            arguments: vec![
+                OsString::from("s_client"),
+                OsString::from("-connect"),
+                OsString::from("127.0.0.1:443"),
+                OsString::from("-servername"),
+                OsString::from(server_name),
+                OsString::from("-showcerts"),
+                OsString::from("-no_ign_eof"),
+            ],
+            private_config: None,
+            timeout: TLS_TIMEOUT,
+            output_cap_bytes: TLS_OUTPUT_CAP_BYTES,
+            expected_fingerprint: Some(expected_fingerprint.clone()),
         }),
     }
 }
@@ -173,7 +205,7 @@ impl Drop for PrivateConfig {
 }
 
 fn run_bounded(specification: &InvocationSpec) -> Result<CertbotCommandEvidence, String> {
-    let mut command = Command::new(CERTBOT_EXECUTABLE);
+    let mut command = Command::new(specification.executable);
     command
         .args(&specification.arguments)
         .env_clear()
@@ -196,15 +228,23 @@ fn run_bounded(specification: &InvocationSpec) -> Result<CertbotCommandEvidence,
         .stderr
         .take()
         .ok_or_else(|| String::from("certbot stderr unavailable"))?;
-    let stdout_reader = spawn_reader(stdout);
-    let stderr_reader = spawn_reader(stderr);
+    let stdout_reader = spawn_reader(stdout, specification.output_cap_bytes);
+    let stderr_reader = spawn_reader(stderr, specification.output_cap_bytes);
     let (status, timed_out) = wait_bounded(&mut child, specification.timeout)?;
     close_descendants_if_readers_stuck(child.id(), &stdout_reader, &stderr_reader);
     let stdout = join_reader(stdout_reader)?;
     let stderr = join_reader(stderr_reader)?;
+    let command_succeeded = status.is_some_and(|value| value.success()) && !timed_out;
+    let success = match specification.expected_fingerprint.as_deref() {
+        Some(expected) if command_succeeded && !stdout.truncated => {
+            peer_fingerprint(&stdout.captured).is_ok_and(|observed| observed == expected)
+        }
+        Some(_) => false,
+        None => command_succeeded,
+    };
     Ok(CertbotCommandEvidence {
         command_class: specification.class,
-        success: status.is_some_and(|value| value.success()) && !timed_out,
+        success,
         exit_code: status.and_then(|value| value.code()),
         timed_out,
         stdout_digest: stdout.digest,
@@ -217,17 +257,19 @@ fn run_bounded(specification: &InvocationSpec) -> Result<CertbotCommandEvidence,
 struct StreamEvidence {
     digest: String,
     truncated: bool,
+    captured: Vec<u8>,
 }
 
-fn spawn_reader<R>(reader: R) -> JoinHandle<Result<StreamEvidence, String>>
+fn spawn_reader<R>(reader: R, cap: usize) -> JoinHandle<Result<StreamEvidence, String>>
 where
     R: Read + Send + 'static,
 {
-    std::thread::spawn(move || read_bounded(reader))
+    std::thread::spawn(move || read_bounded(reader, cap))
 }
 
-fn read_bounded<R: Read>(mut reader: R) -> Result<StreamEvidence, String> {
+fn read_bounded<R: Read>(mut reader: R, cap: usize) -> Result<StreamEvidence, String> {
     let mut hasher = Sha256::new();
+    let mut captured = Vec::with_capacity(cap.min(8 * 1_024));
     let mut buffer = [0_u8; 8 * 1_024];
     let mut total = 0_usize;
     loop {
@@ -239,11 +281,82 @@ fn read_bounded<R: Read>(mut reader: R) -> Result<StreamEvidence, String> {
         }
         hasher.update(&buffer[..count]);
         total = total.saturating_add(count);
+        if captured.len() < cap {
+            let remaining = cap.saturating_sub(captured.len());
+            captured.extend_from_slice(&buffer[..remaining.min(count)]);
+        }
     }
     Ok(StreamEvidence {
         digest: format_sha256(&hasher.finalize()),
-        truncated: total > OUTPUT_CAP_BYTES,
+        truncated: total > cap,
+        captured,
     })
+}
+
+fn peer_fingerprint(output: &[u8]) -> Result<String, String> {
+    const BEGIN: &[u8] = b"-----BEGIN CERTIFICATE-----";
+    const END: &[u8] = b"-----END CERTIFICATE-----";
+    let begin =
+        find_bytes(output, BEGIN).ok_or_else(|| String::from("peer certificate missing"))?;
+    let after_begin = begin.saturating_add(BEGIN.len());
+    let relative_end = find_bytes(
+        output
+            .get(after_begin..)
+            .ok_or_else(|| String::from("peer certificate invalid"))?,
+        END,
+    )
+    .ok_or_else(|| String::from("peer certificate incomplete"))?;
+    let end = after_begin
+        .saturating_add(relative_end)
+        .saturating_add(END.len());
+    let pem = output
+        .get(begin..end)
+        .ok_or_else(|| String::from("peer certificate invalid"))?;
+    let der = x509_der(pem)?;
+    Ok(format_sha256(&Sha256::digest(&der)))
+}
+
+fn find_bytes(value: &[u8], needle: &[u8]) -> Option<usize> {
+    value
+        .windows(needle.len())
+        .position(|window| window == needle)
+}
+
+fn x509_der(pem: &[u8]) -> Result<Vec<u8>, String> {
+    let mut command = Command::new(OPENSSL_EXECUTABLE);
+    command
+        .args(["x509", "-outform", "DER"])
+        .env_clear()
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
+    let mut child = command
+        .spawn()
+        .map_err(|error| format!("openssl x509 spawn failed: {error}"))?;
+    let mut stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| String::from("openssl x509 stdin unavailable"))?;
+    stdin
+        .write_all(pem)
+        .map_err(|error| format!("openssl x509 input failed: {error}"))?;
+    drop(stdin);
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| String::from("openssl x509 stdout unavailable"))?;
+    let reader = spawn_reader(stdout, TLS_OUTPUT_CAP_BYTES);
+    let (status, timed_out) = wait_bounded(&mut child, TLS_TIMEOUT)?;
+    let output = join_reader(reader)?;
+    if timed_out || !status.is_some_and(|value| value.success()) || output.truncated {
+        return Err(String::from("openssl x509 failed"));
+    }
+    Ok(output.captured)
 }
 
 fn format_sha256(bytes: &[u8]) -> String {
@@ -386,6 +499,38 @@ mod tests {
         assert_eq!(
             specification.private_config.as_deref(),
             Some("email = private-owner@example.com\n")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn tls_probe_is_fixed_to_loopback_and_validated_sni() -> Result<(), String> {
+        let command = CertbotCommand::VerifyLocalTls {
+            server_name: String::from("example.com"),
+            expected_fingerprint: String::from(
+                "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            ),
+        };
+        let specification =
+            invocation_spec(&command, Path::new("/run/jw-agent-certd/request-test.ini"))?;
+        assert_eq!(specification.executable, super::OPENSSL_EXECUTABLE);
+        assert!(
+            specification
+                .arguments
+                .iter()
+                .any(|value| value == OsStr::new("127.0.0.1:443"))
+        );
+        assert!(
+            specification
+                .arguments
+                .iter()
+                .any(|value| value == OsStr::new("example.com"))
+        );
+        assert!(
+            !specification
+                .arguments
+                .iter()
+                .any(|value| value == OsStr::new("0.0.0.0:443"))
         );
         Ok(())
     }

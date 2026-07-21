@@ -184,6 +184,39 @@ pub fn discover_managed_config(
     Err(OpsError::Rejected("resource_missing"))
 }
 
+pub fn discover_protected_config(
+    paths: &OpsPaths,
+    requested_site_id: &str,
+) -> Result<ManagedConfigResource, OpsError> {
+    let site = discover_site(paths, requested_site_id)?;
+    if !site.protected || site.state != NginxSiteState::Enabled {
+        return Err(OpsError::Rejected("protected_resource_required"));
+    }
+    let (bytes, metadata, protected) = read_available_content(paths, &site.basename)?;
+    validate_available_metadata(&metadata, paths.enforce_root_ownership)?;
+    validate_managed_metadata(&metadata, paths.enforce_root_ownership)?;
+    if !protected || bytes.len() > MANAGED_CONFIG_MAX_BYTES {
+        return Err(OpsError::Rejected("protected_resource_required"));
+    }
+    if !managed_config_bytes_supported(&bytes) {
+        return Err(OpsError::Rejected("invalid_encoding"));
+    }
+    let content = String::from_utf8(bytes).map_err(|_| OpsError::Rejected("invalid_encoding"))?;
+    let mode = metadata_mode(&metadata);
+    let uid = metadata_uid(&metadata);
+    let gid = metadata_gid(&metadata);
+    Ok(ManagedConfigResource {
+        resource_id: site.site_id,
+        basename: site.basename,
+        content_digest: sha256_digest(content.as_bytes()),
+        metadata_digest: managed_metadata_digest(mode, uid, gid),
+        content,
+        mode,
+        uid,
+        gid,
+    })
+}
+
 pub fn write_proposal(
     paths: &OpsPaths,
     policy: &OpsPolicy,
@@ -325,6 +358,57 @@ pub fn restore_managed_config(
     validate_managed_metadata(&metadata, paths.enforce_root_ownership)?;
     atomic_replace(paths, basename, content, mode, uid, gid)?;
     discover_managed_config(paths, resource_id)
+}
+
+pub fn replace_protected_config(
+    paths: &OpsPaths,
+    expected: &ManagedConfigResource,
+    content: &str,
+) -> Result<ManagedConfigResource, OpsError> {
+    let current = discover_protected_config(paths, &expected.resource_id)?;
+    if current.basename != expected.basename
+        || current.content_digest != expected.content_digest
+        || current.metadata_digest != expected.metadata_digest
+    {
+        return Err(OpsError::Rejected("stale_resource"));
+    }
+    if content.len() > MANAGED_CONFIG_MAX_BYTES
+        || !managed_config_bytes_supported(content.as_bytes())
+        || !jw_contracts::nginx_management_config(content.as_bytes())
+    {
+        return Err(OpsError::Rejected("protected_config_invalid"));
+    }
+    atomic_replace(
+        paths,
+        &expected.basename,
+        content,
+        expected.mode,
+        expected.uid,
+        expected.gid,
+    )?;
+    discover_protected_config(paths, &expected.resource_id)
+}
+
+pub fn restore_protected_config(
+    paths: &OpsPaths,
+    site_id: &str,
+    basename: &str,
+    content: &str,
+    mode: u32,
+    uid: u32,
+    gid: u32,
+) -> Result<ManagedConfigResource, OpsError> {
+    let current = discover_protected_config(paths, site_id)?;
+    if current.basename != basename || !jw_contracts::nginx_management_config(content.as_bytes()) {
+        return Err(OpsError::Rejected("resource_identity_mismatch"));
+    }
+    atomic_replace(paths, basename, content, mode, uid, gid)?;
+    let restored = discover_protected_config(paths, site_id)?;
+    if restored.mode == mode && restored.uid == uid && restored.gid == gid {
+        Ok(restored)
+    } else {
+        Err(OpsError::Rejected("metadata_read_back_failed"))
+    }
 }
 
 fn atomic_replace(

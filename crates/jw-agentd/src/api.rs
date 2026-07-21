@@ -21,12 +21,14 @@ use axum::{Json, Router};
 use futures_core::Stream;
 use jw_contracts::{
     AccessSettingsView, AdditionalAuthPolicy, AdditionalAuthProviderStatus, AssuranceLevel,
-    AssuranceView, AuthFailureClass, AuthPurpose, AuthRequest, AuthResult, CERTBOT_ISSUE_OPERATION,
-    CERTBOT_RENEW_TEST_OPERATION, CapabilityStatus, CapabilityView, CertbotIssueApprovalRequest,
-    CertbotIssuePlanInput, CertbotIssuePlanRequest, CertbotIssuePlanView,
-    CertbotIssuePreflightEvidence, CertbotRenewTestApprovalRequest, CertbotRenewTestPlanRequest,
-    CertbotRenewTestPlanView, CertificateInventoryView, CertificateSummaryView, HealthStatus,
-    HealthView, IPC_PROTOCOL_VERSION, IngressChannel, IntegrationCatalogView, LoginRequest,
+    AssuranceView, AuthFailureClass, AuthPurpose, AuthRequest, AuthResult,
+    CERTBOT_ATTACH_OPERATION, CERTBOT_ISSUE_OPERATION, CERTBOT_RENEW_TEST_OPERATION,
+    CapabilityStatus, CapabilityView, CertbotAttachApprovalRequest, CertbotAttachPlanRequest,
+    CertbotAttachPlanView, CertbotIssueApprovalRequest, CertbotIssuePlanInput,
+    CertbotIssuePlanRequest, CertbotIssuePlanView, CertbotIssuePreflightEvidence,
+    CertbotRenewTestApprovalRequest, CertbotRenewTestPlanRequest, CertbotRenewTestPlanView,
+    CertificateInventoryView, CertificateSummaryView, HealthStatus, HealthView,
+    IPC_PROTOCOL_VERSION, IngressChannel, IntegrationCatalogView, LoginRequest,
     MANAGED_CONFIG_OPERATION, ManagedConfigApprovalRequest, ManagedConfigPlanRequest,
     ManagedConfigPlanView, ManagedConfigResourceView, NGINX_SITE_STATE_OPERATION,
     NginxSiteStatePlanRequest, NginxSiteStatePlanView, NginxSitesView, ObservationStatus,
@@ -102,6 +104,8 @@ impl AppState {
         approve_certbot_issue,
         plan_certbot_renew_test,
         approve_certbot_renew_test,
+        plan_certbot_attach,
+        approve_certbot_attach,
         integrations,
         access_settings,
         update_additional_auth,
@@ -135,6 +139,9 @@ impl AppState {
         CertbotRenewTestPlanRequest,
         CertbotRenewTestPlanView,
         CertbotRenewTestApprovalRequest,
+        CertbotAttachPlanRequest,
+        CertbotAttachPlanView,
+        CertbotAttachApprovalRequest,
         jw_contracts::NginxSiteObservation,
         jw_contracts::NginxSiteState,
         NginxSiteStatePlanRequest,
@@ -206,6 +213,14 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             "/api/v1/operations/certbot/renew-test/approvals",
             post(approve_certbot_renew_test),
+        )
+        .route(
+            "/api/v1/operations/certbot/attach/plans",
+            post(plan_certbot_attach),
+        )
+        .route(
+            "/api/v1/operations/certbot/attach/approvals",
+            post(approve_certbot_attach),
         )
         .route(
             "/api/v1/operations/nginx/site-state/plans",
@@ -532,9 +547,16 @@ async fn certificates(
     {
         inventory.renew_test_operation_type = None;
         inventory.issue_operation_type = None;
+        inventory.attach_operation_type = None;
         inventory.assurance.reason = Some(reason);
     } else if let Some(reason) = certbot_issue_gate_reason(&state).await {
         inventory.issue_operation_type = None;
+        inventory.assurance.reason = Some(reason);
+    }
+    if inventory.attach_operation_type.is_some()
+        && let Some(reason) = certbot_attach_gate_reason(&state).await
+    {
+        inventory.attach_operation_type = None;
         inventory.assurance.reason = Some(reason);
     }
     Ok(Json(inventory))
@@ -561,6 +583,31 @@ async fn certbot_issue_gate_reason(state: &AppState) -> Option<String> {
         )),
         Err(_) => Some(String::from(
             "권한 분리 서비스 상태를 확인할 수 없어 신규 발급이 차단되었습니다.",
+        )),
+    }
+}
+
+async fn certbot_attach_gate_reason(state: &AppState) -> Option<String> {
+    if state.config.public_host.is_none() {
+        return Some(String::from(
+            "인증서 연결에는 JW_AGENT_PUBLIC_HOST 설정이 필요합니다.",
+        ));
+    }
+    match state.ops.capabilities().await {
+        Ok(capability)
+            if !capability.read_only
+                && capability
+                    .supported_operations
+                    .iter()
+                    .any(|operation| operation == CERTBOT_ATTACH_OPERATION) =>
+        {
+            None
+        }
+        Ok(_) => Some(String::from(
+            "이 빌드에서는 Certbot Nginx 연결 fault gate가 아직 닫히지 않았습니다.",
+        )),
+        Err(_) => Some(String::from(
+            "권한 분리 서비스 상태를 확인할 수 없어 인증서 연결이 차단되었습니다.",
         )),
     }
 }
@@ -659,6 +706,110 @@ async fn approve_certbot_issue(
         .await
         .map_err(map_ops_error)?;
     if receipt.operation_type != CERTBOT_ISSUE_OPERATION {
+        return Err(ApiProblem::internal());
+    }
+    let operation_id = receipt.operation_id.clone();
+    let accepted = OperationAcceptedView {
+        schema_version: receipt.schema_version,
+        operation_type: receipt.operation_type,
+        operation_id: operation_id.clone(),
+        plan_id: receipt.plan_id,
+        plan_hash: receipt.plan_hash,
+        actor: receipt.actor,
+        current_stage: receipt.terminal_state,
+        event_stream: format!("/api/v1/operations/{operation_id}/events"),
+    };
+    let ops = Arc::clone(&state.ops);
+    let _execution_task = tokio::spawn(async move {
+        let _execution_result = ops.execute_operation(actor, operation_id).await;
+    });
+    Ok((StatusCode::ACCEPTED, Json(accepted)))
+}
+
+#[utoipa::path(post, path = "/api/v1/operations/certbot/attach/plans", request_body = CertbotAttachPlanRequest, responses(
+    (status = 200, description = "Immutable Certbot Nginx TLS attach plan", body = CertbotAttachPlanView),
+    (status = 400, description = "Invalid typed request", body = ProblemDetails),
+    (status = 401, description = "Authentication required", body = ProblemDetails),
+    (status = 403, description = "Role or CSRF rejected", body = ProblemDetails),
+    (status = 409, description = "Stale site, certificate, timer, or unsupported config", body = ProblemDetails),
+    (status = 423, description = "Forensic lockdown", body = ProblemDetails)
+))]
+async fn plan_certbot_attach(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(input): Json<CertbotAttachPlanRequest>,
+) -> Result<Json<CertbotAttachPlanView>, ApiProblem> {
+    input.validate().map_err(ApiProblem::bad_request)?;
+    let now = unix_milliseconds()?;
+    let (token, session) = current_session(&state, &headers, now)?;
+    require_csrf(&headers, token.as_str())?;
+    if certbot_attach_gate_reason(&state).await.is_some() {
+        return Err(ApiProblem::new(StatusCode::CONFLICT, "attach_unavailable"));
+    }
+    if state.config.public_host.as_deref() != Some(input.primary_domain.as_str()) {
+        return Err(ApiProblem::new(StatusCode::CONFLICT, "invalid_domain"));
+    }
+    state
+        .ops
+        .plan_certbot_attach(session.subject, input)
+        .await
+        .map(Json)
+        .map_err(map_ops_error)
+}
+
+#[utoipa::path(post, path = "/api/v1/operations/certbot/attach/approvals", request_body = CertbotAttachApprovalRequest, responses(
+    (status = 202, description = "Certbot Nginx TLS attach accepted", body = OperationAcceptedView),
+    (status = 400, description = "Invalid approval shape", body = ProblemDetails),
+    (status = 401, description = "Authentication required", body = ProblemDetails),
+    (status = 403, description = "Claim, role, or CSRF rejected", body = ProblemDetails),
+    (status = 409, description = "Expired, stale, busy, or conflicting operation", body = ProblemDetails),
+    (status = 423, description = "Forensic lockdown", body = ProblemDetails),
+    (status = 428, description = "Additional authentication is configured but unavailable", body = ProblemDetails)
+))]
+async fn approve_certbot_attach(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(input): Json<CertbotAttachApprovalRequest>,
+) -> Result<(StatusCode, Json<OperationAcceptedView>), ApiProblem> {
+    input.validate_shape().map_err(ApiProblem::bad_request)?;
+    let now = unix_milliseconds()?;
+    let (token, session) = current_session(&state, &headers, now)?;
+    require_csrf(&headers, token.as_str())?;
+    if session.additional_auth_policy != AdditionalAuthPolicy::Disabled {
+        return Err(ApiProblem::new(
+            StatusCode::PRECONDITION_REQUIRED,
+            "additional_authentication_unavailable",
+        ));
+    }
+    if input.additional_auth_claim.is_some() {
+        return Err(ApiProblem::bad_request(
+            "additional_authentication_claim_unexpected",
+        ));
+    }
+    state
+        .store
+        .consume_operation_claim(
+            token.as_str(),
+            &session.subject,
+            &input.plan_hash,
+            &input.reauth_token,
+            now,
+        )
+        .map_err(map_operation_claim_error)?;
+    let actor = session.subject;
+    let receipt = state
+        .ops
+        .approve_certbot_attach(
+            actor.clone(),
+            input.plan_id,
+            input.plan_hash,
+            input.idempotency_key,
+            input.config_replace_confirmed,
+            input.service_reload_confirmed,
+        )
+        .await
+        .map_err(map_ops_error)?;
+    if receipt.operation_type != CERTBOT_ATTACH_OPERATION {
         return Err(ApiProblem::internal());
     }
     let operation_id = receipt.operation_id.clone();
@@ -1970,6 +2121,26 @@ mod tests {
             _plan_hash: String,
             _idempotency_key: String,
             _external_effect_confirmed: bool,
+        ) -> OpsFuture<'a, jw_contracts::OperationReceiptView> {
+            Box::pin(async move { Err(OpsBrokerError::Unavailable) })
+        }
+
+        fn plan_certbot_attach<'a>(
+            &'a self,
+            _actor: Subject,
+            _plan: jw_contracts::CertbotAttachPlanRequest,
+        ) -> OpsFuture<'a, jw_contracts::CertbotAttachPlanView> {
+            Box::pin(async move { Err(OpsBrokerError::Unavailable) })
+        }
+
+        fn approve_certbot_attach<'a>(
+            &'a self,
+            _actor: Subject,
+            _plan_id: String,
+            _plan_hash: String,
+            _idempotency_key: String,
+            _config_replace_confirmed: bool,
+            _service_reload_confirmed: bool,
         ) -> OpsFuture<'a, jw_contracts::OperationReceiptView> {
             Box::pin(async move { Err(OpsBrokerError::Unavailable) })
         }

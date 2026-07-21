@@ -15,10 +15,12 @@ import { useEffect, useRef, useState, type SyntheticEvent } from "react";
 
 import {
   ApiError,
+  approveCertbotAttach,
   approveCertbotIssue,
   approveCertbotRenewTest,
   getOperationReceipt,
   planCertbotIssue,
+  planCertbotAttach,
   planCertbotRenewTest,
   reauthenticateForOperation,
   watchOperationEvents,
@@ -33,6 +35,7 @@ import type {
   CertificateEnvironment,
   CertificateInventoryView,
   CertificateSummaryView,
+  CertbotAttachPlanView,
   CertbotIssuePlanView,
   CertbotRenewTestPlanView,
   OperationAcceptedView,
@@ -56,7 +59,8 @@ export function CertificatesScreen() {
   const queryClient = useQueryClient();
   const [renewPlan, setRenewPlan] = useState<CertbotRenewTestPlanView | null>(null);
   const [issuePlan, setIssuePlan] = useState<CertbotIssuePlanView | null>(null);
-  const [operationKind, setOperationKind] = useState<"issue" | "renew" | null>(null);
+  const [attachPlan, setAttachPlan] = useState<CertbotAttachPlanView | null>(null);
+  const [operationKind, setOperationKind] = useState<"issue" | "renew" | "attach" | null>(null);
   const [accepted, setAccepted] = useState<OperationAcceptedView | null>(null);
   const [receipt, setReceipt] = useState<OperationReceiptView | null>(null);
   const [sheetOpen, setSheetOpen] = useState(false);
@@ -90,7 +94,9 @@ export function CertificatesScreen() {
                 error,
                 operationKind === "issue"
                   ? "발급 영수증을 불러오지 못했습니다."
-                  : "갱신 검증 영수증을 불러오지 못했습니다.",
+                  : operationKind === "attach"
+                    ? "TLS 연결 영수증을 불러오지 못했습니다."
+                    : "갱신 검증 영수증을 불러오지 못했습니다.",
               ),
             );
           }
@@ -117,6 +123,7 @@ export function CertificatesScreen() {
     setReceipt(null);
     setAccepted(null);
     setIssuePlan(null);
+    setAttachPlan(null);
     setOperationKind("renew");
     try {
       const idempotencyKey = `web_${crypto.randomUUID()}`;
@@ -194,6 +201,7 @@ export function CertificatesScreen() {
     setReceipt(null);
     setAccepted(null);
     setRenewPlan(null);
+    setAttachPlan(null);
     setOperationKind("issue");
     try {
       const idempotencyKey = `web_${crypto.randomUUID()}`;
@@ -249,6 +257,86 @@ export function CertificatesScreen() {
     }
   }
 
+  async function createAttachPlan(certificate: CertificateSummaryView): Promise<void> {
+    const data = inventory.data;
+    const publicHost = accessSettings.data?.publicHost;
+    const site = nginxSites.data?.sites.find(
+      (candidate) =>
+        candidate.protected &&
+        candidate.enabled &&
+        candidate.siteId !== undefined &&
+        candidate.availableDigest !== undefined,
+    );
+    if (
+      requestInFlight.current ||
+      data?.attachOperationType !== "certbot.certificate.attach/v1" ||
+      publicHost === undefined ||
+      publicHost === null ||
+      certificate.primaryDomain !== publicHost ||
+      site?.siteId === undefined ||
+      site.siteId === null ||
+      site.availableDigest === undefined ||
+      site.availableDigest === null
+    ) return;
+    requestInFlight.current = true;
+    setPlanning(true);
+    setErrorMessage(null);
+    setReceipt(null);
+    setAccepted(null);
+    setIssuePlan(null);
+    setRenewPlan(null);
+    setOperationKind("attach");
+    try {
+      const idempotencyKey = `web_${crypto.randomUUID()}`;
+      const nextPlan = await planCertbotAttach({
+        schemaVersion: data.schemaVersion,
+        operationType: data.attachOperationType,
+        primaryDomain: certificate.primaryDomain,
+        siteId: site.siteId,
+        expectedSiteDigest: site.availableDigest,
+        expectedInventoryDigest: data.inventoryDigest,
+        expectedCertificateFingerprint: certificate.fingerprintSha256,
+        idempotencyKey,
+      });
+      approvalKey.current = idempotencyKey;
+      setAttachPlan(nextPlan);
+      setSheetOpen(true);
+    } catch (error) {
+      setErrorMessage(operationErrorCopy(error, "TLS 연결 계획을 만들지 못했습니다."));
+      setSheetOpen(true);
+      await queryClient.invalidateQueries({ queryKey: queryKeys.certificates });
+    } finally {
+      requestInFlight.current = false;
+      setPlanning(false);
+    }
+  }
+
+  async function approveAttachPlan(password: string): Promise<void> {
+    if (requestInFlight.current || attachPlan === null || approvalKey.current === null) return;
+    requestInFlight.current = true;
+    setExecuting(true);
+    setErrorMessage(null);
+    try {
+      const reauth = await reauthenticateForOperation({ password, planHash: attachPlan.planHash });
+      queryClient.setQueryData(queryKeys.session, reauth.session);
+      const operation = await approveCertbotAttach({
+        schemaVersion: attachPlan.schemaVersion,
+        planId: attachPlan.planId,
+        planHash: attachPlan.planHash,
+        idempotencyKey: approvalKey.current,
+        reauthToken: reauth.reauthToken,
+        configReplaceConfirmed: true,
+        serviceReloadConfirmed: true,
+      });
+      setAccepted(operation);
+    } catch (error) {
+      setErrorMessage(operationErrorCopy(error, "TLS 연결 승인을 완료하지 못했습니다."));
+    } finally {
+      requestInFlight.current = false;
+      setExecuting(false);
+    }
+  }
+
   const publicHost = accessSettings.data?.publicHost ?? null;
   const issueSiteReady = nginxSites.data?.sites.some(
     (site) =>
@@ -267,8 +355,10 @@ export function CertificatesScreen() {
         title="TLS 인증서"
         description="Certbot 인증서의 공개 메타데이터와 자동 갱신 timer를 확인합니다. 개인키와 ACME 계정 비밀은 화면으로 가져오지 않습니다."
         action={
-          inventory.data?.issueOperationType === "certbot.certificate.issue/v1" ||
-          inventory.data?.renewTestOperationType === "certbot.certificate.renew_test/v1" ? (
+          inventory.data?.attachOperationType === "certbot.certificate.attach/v1" ? (
+            <StatusMark label="G2 연결 가능" tone="success" />
+          ) : inventory.data?.issueOperationType === "certbot.certificate.issue/v1" ||
+            inventory.data?.renewTestOperationType === "certbot.certificate.renew_test/v1" ? (
             <StatusMark label="G1 검증 가능" tone="info" />
           ) : (
             <StatusMark label="조회 전용" tone="info" />
@@ -296,14 +386,25 @@ export function CertificatesScreen() {
           issueSiteReady={issueSiteReady}
           onCreateIssuePlan={(input) => void createIssuePlan(input)}
           onCreateRenewPlan={() => void createRenewPlan(inventory.data)}
+          onCreateAttachPlan={(certificate) => void createAttachPlan(certificate)}
         />
       )}
 
       <Sheet
         open={sheetOpen}
         onOpenChange={setSheetOpen}
-        title={operationKind === "issue" ? "Certbot 인증서 발급" : "Certbot 갱신 사전 검증"}
-        description="외부 CA 효과와 실행 증거를 확인한 뒤 승인합니다."
+        title={
+          operationKind === "issue"
+            ? "Certbot 인증서 발급"
+            : operationKind === "attach"
+              ? "Nginx TLS 인증서 연결"
+              : "Certbot 갱신 사전 검증"
+        }
+        description={
+          operationKind === "attach"
+            ? "교체 범위·자동 원복·SNI 검증을 확인한 뒤 승인합니다."
+            : "외부 CA 효과와 실행 증거를 확인한 뒤 승인합니다."
+        }
         side="right"
       >
         {operationKind === "issue" ? (
@@ -314,6 +415,15 @@ export function CertificatesScreen() {
             executing={executing}
             errorMessage={errorMessage}
             onApprove={approveIssuePlan}
+          />
+        ) : operationKind === "attach" ? (
+          <AttachInspector
+            plan={attachPlan}
+            accepted={accepted}
+            receipt={receipt}
+            executing={executing}
+            errorMessage={errorMessage}
+            onApprove={approveAttachPlan}
           />
         ) : (
           <RenewTestInspector
@@ -337,6 +447,7 @@ function CertificateInventory({
   issueSiteReady,
   onCreateIssuePlan,
   onCreateRenewPlan,
+  onCreateAttachPlan,
 }: {
   data: CertificateInventoryView;
   planning: boolean;
@@ -348,6 +459,7 @@ function CertificateInventory({
     environment: CertificateEnvironment;
   }) => void;
   onCreateRenewPlan: () => void;
+  onCreateAttachPlan: (certificate: CertificateSummaryView) => void;
 }) {
   return (
     <>
@@ -441,7 +553,20 @@ function CertificateInventory({
         ) : (
           <div className="mt-6 grid gap-4 xl:grid-cols-2">
             {data.certificates.map((certificate) => (
-              <CertificateCard key={certificate.primaryDomain} certificate={certificate} />
+              <CertificateCard
+                key={certificate.primaryDomain}
+                certificate={certificate}
+                attachAvailable={
+                  data.attachOperationType === "certbot.certificate.attach/v1" &&
+                  publicHost === certificate.primaryDomain &&
+                  issueSiteReady &&
+                  certificate.privateKeyPresent &&
+                  certificate.renewalConfigPresent &&
+                  certificate.webrootManaged
+                }
+                planning={planning}
+                onCreateAttachPlan={onCreateAttachPlan}
+              />
             ))}
           </div>
         )}
@@ -608,7 +733,17 @@ function RuntimeValue({
   );
 }
 
-function CertificateCard({ certificate }: { certificate: CertificateSummaryView }) {
+function CertificateCard({
+  certificate,
+  attachAvailable,
+  planning,
+  onCreateAttachPlan,
+}: {
+  certificate: CertificateSummaryView;
+  attachAvailable: boolean;
+  planning: boolean;
+  onCreateAttachPlan: (certificate: CertificateSummaryView) => void;
+}) {
   return (
     <article className="rounded-panel border border-border bg-surface p-5">
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -639,7 +774,227 @@ function CertificateCard({ certificate }: { certificate: CertificateSummaryView 
           <dd className="mt-1 break-all font-mono text-xs text-text">{certificate.fingerprintSha256}</dd>
         </div>
       </dl>
+      {attachAvailable ? (
+        <div className="mt-5 border-t border-border pt-4">
+          <p className="text-sm leading-6 text-muted">
+            이 lineage를 관리 주소에 연결할 수 있습니다. 먼저 변경 계획과 G2 자동 원복 범위를
+            확인합니다.
+          </p>
+          <Button
+            className="mt-3 w-full sm:w-auto"
+            disabled={planning}
+            onClick={() => onCreateAttachPlan(certificate)}
+          >
+            {planning ? (
+              <LoaderCircle aria-hidden="true" className="size-4 animate-spin" />
+            ) : (
+              <BadgeCheck aria-hidden="true" className="size-4" />
+            )}
+            {planning ? "현재 설정 확인 중" : "Nginx 연결 계획 만들기"}
+          </Button>
+        </div>
+      ) : null}
     </article>
+  );
+}
+
+function AttachInspector({
+  plan,
+  accepted,
+  receipt,
+  executing,
+  errorMessage,
+  onApprove,
+}: {
+  plan: CertbotAttachPlanView | null;
+  accepted: OperationAcceptedView | null;
+  receipt: OperationReceiptView | null;
+  executing: boolean;
+  errorMessage: string | null;
+  onApprove: (password: string) => Promise<void>;
+}) {
+  const [password, setPassword] = useState("");
+  const [replaceConfirmed, setReplaceConfirmed] = useState(false);
+  const [reloadConfirmed, setReloadConfirmed] = useState(false);
+
+  async function submit(event: SyntheticEvent<HTMLFormElement>): Promise<void> {
+    event.preventDefault();
+    if (!replaceConfirmed || !reloadConfirmed) return;
+    const submittedPassword = password;
+    setPassword("");
+    await onApprove(submittedPassword);
+  }
+
+  if (receipt !== null) return <AttachResult receipt={receipt} />;
+  if (accepted !== null) {
+    return (
+      <div aria-live="polite" className="flex items-start gap-3">
+        <LoaderCircle aria-hidden="true" className="size-6 shrink-0 animate-spin text-warning" />
+        <div>
+          <h3 className="text-base font-semibold text-text">{STAGE_LABELS[accepted.currentStage]}</h3>
+          <p className="mt-1 text-sm leading-6 text-muted">
+            Nginx 설정 교체·검증·reload·SNI 확인을 진행합니다. 실패하면 snapshot으로 자동
+            원복합니다.
+          </p>
+        </div>
+      </div>
+    );
+  }
+  if (plan === null) {
+    return errorMessage ? (
+      <SurfaceState kind="error" title="TLS 연결 계획을 만들지 못했습니다" description={errorMessage} />
+    ) : (
+      <SurfaceState kind="empty" title="TLS 연결 계획이 없습니다" description="현재 lineage와 Nginx 상태를 다시 조회하세요." />
+    );
+  }
+
+  return (
+    <div>
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-muted">
+            certbot lineage → protected nginx
+          </p>
+          <h3 className="mt-2 text-base font-semibold text-text">{plan.primaryDomain} TLS 연결 계획</h3>
+        </div>
+        <AssuranceMark assurance={plan.assurance} />
+      </div>
+
+      <dl className="mt-5 grid grid-cols-2 gap-3 border-y border-border py-4 text-sm">
+        <div className="col-span-2">
+          <dt className="text-xs text-muted">설정 교체</dt>
+          <dd className="mt-1 break-words font-medium text-text">
+            {plan.currentCertificatePath} → {plan.targetCertificatePath}
+          </dd>
+        </div>
+        <div>
+          <dt className="text-xs text-muted">계획 만료</dt>
+          <dd className="mt-1 font-medium text-text">{formatDateTime(plan.expiresAt)}</dd>
+        </div>
+        <div>
+          <dt className="text-xs text-muted">갱신 timer</dt>
+          <dd className="mt-1 font-medium text-text">
+            {plan.timerEnabled && plan.timerActive ? "활성·대기" : "검증 실패"}
+          </dd>
+        </div>
+        <div className="col-span-2">
+          <dt className="text-xs text-muted">SAN</dt>
+          <dd className="mt-1 break-words font-medium text-text">{plan.sans.join(", ")}</dd>
+        </div>
+        <div className="col-span-2">
+          <dt className="text-xs text-muted">대상 인증서 SHA-256</dt>
+          <dd className="mt-1 break-all font-mono text-xs text-text">{plan.certificateFingerprint}</dd>
+        </div>
+      </dl>
+
+      <section className="mt-5 border-y border-success/35 py-4">
+        <div className="flex items-start gap-3">
+          <BadgeCheck aria-hidden="true" className="mt-0.5 size-5 shrink-0 text-success" />
+          <div>
+            <h4 className="text-sm font-semibold text-text">G2 · 제한된 설정 자동 원복</h4>
+            <p className="mt-1 text-sm leading-6 text-muted">
+              이 계획은 보호된 vhost의 인증서 지시문 두 개만 바꿉니다. 문법·reload·SNI 지문
+              확인 중 하나라도 실패하면 파일 원본 bytes·owner·mode를 복원합니다.
+            </p>
+          </div>
+        </div>
+      </section>
+      <section className="mt-5">
+        <h4 className="text-xs font-semibold text-muted">실행 영향</h4>
+        <BulletList values={plan.impact} />
+      </section>
+      <div className="mt-5"><AssuranceDetails assurance={plan.assurance} /></div>
+      <section className="mt-5 border-y border-border py-4">
+        <h4 className="text-xs font-semibold text-muted">원복 실패 시 복구 경로</h4>
+        <BulletList values={plan.recoveryPath} />
+      </section>
+
+      {errorMessage ? <p role="alert" className="mt-5 text-sm font-medium text-danger">{errorMessage}</p> : null}
+      <form className="mt-6" onSubmit={(event) => void submit(event)}>
+        <label className="flex items-start gap-3 text-sm leading-6 text-text">
+          <input
+            type="checkbox"
+            className="mt-1 size-4 accent-accent"
+            checked={replaceConfirmed}
+            onChange={(event) => setReplaceConfirmed(event.currentTarget.checked)}
+          />
+          보호된 Nginx vhost의 인증서 지시문 두 개가 교체됨을 확인했습니다.
+        </label>
+        <label className="mt-3 flex items-start gap-3 text-sm leading-6 text-text">
+          <input
+            type="checkbox"
+            className="mt-1 size-4 accent-accent"
+            checked={reloadConfirmed}
+            onChange={(event) => setReloadConfirmed(event.currentTarget.checked)}
+          />
+          nginx.service reload와 기존 연결 재수립 가능성을 확인했습니다.
+        </label>
+        <label htmlFor="certbot-attach-password" className="mt-5 block text-sm font-medium text-text">
+          Linux 계정 비밀번호로 exact plan 승인
+        </label>
+        <Input
+          id="certbot-attach-password"
+          type="password"
+          autoComplete="current-password"
+          maxLength={1024}
+          required
+          disabled={executing}
+          value={password}
+          onChange={(event) => setPassword(event.currentTarget.value)}
+        />
+        <Button
+          className="mt-4 w-full"
+          type="submit"
+          disabled={executing || password.length === 0 || !replaceConfirmed || !reloadConfirmed}
+        >
+          {executing ? <LoaderCircle aria-hidden="true" className="size-4 animate-spin" /> : <KeyRound aria-hidden="true" className="size-4" />}
+          {executing ? "승인·실행 요청 중" : "재인증 후 TLS 연결"}
+        </Button>
+      </form>
+    </div>
+  );
+}
+
+function AttachResult({ receipt }: { receipt: OperationReceiptView }) {
+  const succeeded = receipt.terminalState === "SUCCEEDED";
+  const rolledBack = receipt.terminalState === "ROLLED_BACK";
+  return (
+    <div aria-live="polite">
+      <div className="flex items-start gap-3">
+        {succeeded ? (
+          <CheckCircle2 aria-hidden="true" className="size-6 shrink-0 text-success" />
+        ) : rolledBack ? (
+          <RotateCcw aria-hidden="true" className="size-6 shrink-0 text-warning" />
+        ) : (
+          <XCircle aria-hidden="true" className="size-6 shrink-0 text-danger" />
+        )}
+        <div>
+          <h3 className="text-base font-semibold text-text">
+            {succeeded ? "TLS 연결 검증 완료" : STAGE_LABELS[receipt.terminalState]}
+          </h3>
+          <p className="mt-1 text-sm leading-6 text-muted">
+            {succeeded
+              ? "Nginx 설정·reload·SNI 인증서 지문·Certbot 갱신 상태를 모두 확인했습니다."
+              : rolledBack
+                ? "적용 검증에 실패해 Nginx 설정 원본을 복원하고 reload 상태까지 확인했습니다."
+                : "자동 원복 완료를 증명하지 못했습니다. 아래 복구 경로를 즉시 확인하세요."}
+          </p>
+        </div>
+      </div>
+      <ol className="mt-6 border-y border-border py-2">
+        {receipt.stages.map((stage) => (
+          <li key={stage.sequence} className="flex gap-3 py-3 text-sm">
+            <CircleDot aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-muted" />
+            <div className="min-w-0">
+              <p className="font-medium text-text">{STAGE_LABELS[stage.stage]}</p>
+              <p className="mt-1 break-words text-xs text-muted">{formatDateTime(stage.recordedAt)} · {stage.resultCode}</p>
+            </div>
+          </li>
+        ))}
+      </ol>
+      {receipt.recoveryPath.length > 0 ? <section className="mt-5"><BulletList values={receipt.recoveryPath} /></section> : null}
+      <div className="mt-5"><AssuranceDetails assurance={receipt.assurance} /></div>
+    </div>
   );
 }
 
@@ -1116,6 +1471,12 @@ function operationErrorCopy(error: unknown, fallback: string): string {
     preflight_stale: "DNS·포트 사전검증이 만료되었습니다. 새 계획을 만드세요.",
     issuance_failed: "Certbot 발급이 실패했습니다. 원문 대신 감사 digest만 기록됐습니다.",
     certificate_invalid: "발급 결과의 SAN·lineage·timer 검증을 통과하지 못했습니다.",
+    attach_unsupported: "보호된 관리 vhost의 TLS 지시문 구조를 안전하게 한정할 수 없습니다.",
+    attach_unavailable: "Nginx TLS 연결 사전조건 또는 fault gate가 준비되지 않았습니다.",
+    protected_config_invalid: "보호된 관리 vhost의 구조가 변경되어 작업을 차단했습니다.",
+    tls_read_back_failed: "SNI 인증서 지문 또는 Nginx·timer read-back이 실패해 자동 원복했습니다.",
+    config_replace_confirmation: "Nginx 인증서 지시문 교체 확인이 필요합니다.",
+    service_reload_confirmation: "Nginx reload 영향 확인이 필요합니다.",
     issuance_unavailable: "신규 발급 사전조건 또는 fault gate가 준비되지 않았습니다.",
     resource_busy: "다른 Certbot 작업이 실행 중입니다. 완료 후 다시 시도하세요.",
     plan_expired: "계획이 만료되었습니다. 현재 상태로 새 계획을 만드세요.",

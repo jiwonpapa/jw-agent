@@ -1,3 +1,13 @@
+jw-agent (0.2.0~p2.7) noble; urgency=medium
+
+  * Add G2 Certbot lineage attachment for the protected Nginx vhost.
+  * Replace only the two TLS directives after exact-plan PAM approval.
+  * Verify syntax, reload, service state, timer, and loopback SNI fingerprint.
+  * Restore exact configuration bytes, owner, and mode on any failed read-back.
+  * Prevent concurrent receipt reads from clearing a newer ledger checkpoint.
+
+ -- JW Agent Maintainers <maintainers@example.invalid>  Wed, 22 Jul 2026 01:05:00 +0900
+
 jw-agent (0.2.0~p2.6) noble; urgency=medium
 
   * Add guided Certbot staging and production issuance plans.

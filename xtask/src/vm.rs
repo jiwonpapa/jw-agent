@@ -782,6 +782,159 @@ sudo find /var/lib/jw-agent/opsd/snapshots -type f -name certificate-inventory.j
     }
 }
 
+pub fn gate_p2_certbot_attach_operation(_root: &Path, timeout: Duration) -> Result<(), String> {
+    let config = VmConfig::load()?;
+    let password = read_secret(&config.password_file)?;
+    cleanup_certbot_attach_fixture(&config, timeout)?;
+    let result = (|| {
+        prepare_certbot_attach_fixture(&config, timeout)?;
+        wait_for_public_agent(&config, timeout)?;
+        thread::sleep(Duration::from_secs(7));
+        let mut session = P2ApiSession::login(&config, &password, timeout)?;
+        let success = session.operate_certbot_attach(&config, &password, timeout)?;
+        require_terminal(&success.receipt, "SUCCEEDED", "Certbot Nginx TLS attach")?;
+        for expected in [
+            "\"level\":\"g2_reversible_config\"",
+            "\"rollbackSupport\":\"automatic_bounded\"",
+            "\"resultCode\":\"tls_directives_replaced\"",
+            "\"resultCode\":\"nginx_config_valid\"",
+            "\"resultCode\":\"nginx_reloaded\"",
+            "\"resultCode\":\"tls_attachment_verified\"",
+        ] {
+            if !success.receipt.contains(expected) {
+                return Err(format!("Certbot attach receipt omitted {expected}"));
+            }
+        }
+        if json_string_field(&success.receipt, "beforeDigest")? != success.site_digest {
+            return Err(String::from(
+                "Certbot attach receipt did not bind its before digest to the protected config",
+            ));
+        }
+        let runtime = config.ssh(
+            &format!(
+                "sudo grep -Fxq '    ssl_certificate /etc/letsencrypt/live/{}/fullchain.pem;' /etc/nginx/sites-available/jw-agent-p1\nsudo grep -Fxq '    ssl_certificate_key /etc/letsencrypt/live/{}/privkey.pem;' /etc/nginx/sites-available/jw-agent-p1\nsudo systemctl is-active --quiet nginx.service\nprintf '' | openssl s_client -connect 127.0.0.1:443 -servername {} 2>/dev/null | openssl x509 -outform DER | sha256sum",
+                config.public_host, config.public_host, config.public_host,
+            ),
+            None,
+            timeout,
+        )?;
+        require_success(&runtime, "Certbot attach TLS runtime", false)?;
+        let runtime_fingerprint = text(&runtime.stdout)?
+            .split_whitespace()
+            .next()
+            .ok_or_else(|| String::from("TLS runtime fingerprint missing"))?;
+        if format!("sha256:{runtime_fingerprint}") != success.certificate_fingerprint {
+            return Err(String::from(
+                "loopback SNI certificate fingerprint did not match the planned lineage",
+            ));
+        }
+
+        restore_certbot_attach_baseline(&config, timeout)?;
+        install_certbot_attach_tls_fault(&config, timeout)?;
+        let rolled_back = session.operate_certbot_attach(&config, &password, timeout)?;
+        require_terminal(
+            &rolled_back.receipt,
+            "ROLLED_BACK",
+            "Certbot attach TLS verifier rollback",
+        )?;
+        for expected in [
+            "\"resultCode\":\"tls_read_back_failed\"",
+            "\"resultCode\":\"rollback_verified\"",
+            "\"rollbackResult\":\"verified\"",
+        ] {
+            if !rolled_back.receipt.contains(expected) {
+                return Err(format!(
+                    "Certbot attach rollback receipt omitted {expected}"
+                ));
+            }
+        }
+        let restored = config.ssh(
+            "sudo cmp -s /etc/nginx/sites-available/jw-agent-p1 /var/tmp/jw-agent-vm-certbot-attach.nginx\nsudo nginx -t\nsudo systemctl is-active --quiet nginx.service\nsudo find /var/lib/jw-agent/opsd/snapshots -type f -name managed-config.json -user root -perm 0600 -print -quit | grep -q .\n! sudo sh -c 'find /var/lib/jw-agent/opsd -maxdepth 1 -type f -name \"opsd.sqlite3*\" -print0 | xargs -0 -r strings' | grep -Fq 'BEGIN CERTIFICATE'\n! sudo journalctl -u jw-opsd.service -u jw-agentd.service -u 'jw-certd@*.service' --no-pager -o cat | grep -Fq 'BEGIN CERTIFICATE'\n! pgrep -x jw-certd >/dev/null",
+            None,
+            timeout,
+        )?;
+        require_success(&restored, "Certbot attach exact rollback evidence", false)
+    })();
+    let cleanup = cleanup_certbot_attach_fixture(&config, timeout);
+    match (result, cleanup) {
+        (Ok(()), Ok(())) => Ok(()),
+        (Err(error), Ok(())) => Err(error),
+        (Ok(()), Err(cleanup_error)) => Err(cleanup_error),
+        (Err(error), Err(cleanup_error)) => Err(format!(
+            "{error}; Certbot attach fixture cleanup also failed: {cleanup_error}"
+        )),
+    }
+}
+
+fn prepare_certbot_attach_fixture(config: &VmConfig, timeout: Duration) -> Result<(), String> {
+    let script = r#"sudo sh -eu -c '
+test ! -e /var/tmp/jw-agent-vm-certbot-attach.active
+cp -a /etc/nginx/sites-available/jw-agent-p1 /var/tmp/jw-agent-vm-certbot-attach.nginx
+touch /var/tmp/jw-agent-vm-certbot-attach.active
+mkdir -p /etc/letsencrypt/live/__HOST__ /etc/letsencrypt/archive/__HOST__ /etc/letsencrypt/renewal
+install -o root -g root -m 0644 /etc/jw-agent/tls/server.crt /etc/letsencrypt/archive/__HOST__/cert1.pem
+install -o root -g root -m 0644 /etc/jw-agent/tls/server.crt /etc/letsencrypt/archive/__HOST__/chain1.pem
+install -o root -g root -m 0644 /etc/jw-agent/tls/server.crt /etc/letsencrypt/archive/__HOST__/fullchain1.pem
+install -o root -g root -m 0600 /etc/jw-agent/tls/server.key /etc/letsencrypt/archive/__HOST__/privkey1.pem
+ln -s ../../archive/__HOST__/cert1.pem /etc/letsencrypt/live/__HOST__/cert.pem
+ln -s ../../archive/__HOST__/chain1.pem /etc/letsencrypt/live/__HOST__/chain.pem
+ln -s ../../archive/__HOST__/fullchain1.pem /etc/letsencrypt/live/__HOST__/fullchain.pem
+ln -s ../../archive/__HOST__/privkey1.pem /etc/letsencrypt/live/__HOST__/privkey.pem
+printf "%s\n" "version = 2.9.0" "archive_dir = /etc/letsencrypt/archive/__HOST__" "cert = /etc/letsencrypt/live/__HOST__/cert.pem" "privkey = /etc/letsencrypt/live/__HOST__/privkey.pem" "chain = /etc/letsencrypt/live/__HOST__/chain.pem" "fullchain = /etc/letsencrypt/live/__HOST__/fullchain.pem" "[renewalparams]" "authenticator = webroot" "webroot_path = /var/lib/jw-agent/acme-webroot" > /etc/letsencrypt/renewal/__HOST__.conf
+chmod 0600 /etc/letsencrypt/renewal/__HOST__.conf
+systemctl enable --now certbot.timer
+nginx -t
+systemctl reload nginx.service
+systemctl restart jw-certd.socket jw-opsd.service jw-agentd.service
+'"#
+        .replace("__HOST__", &config.public_host);
+    let prepared = config.ssh(&script, None, timeout)?;
+    require_success(&prepared, "Certbot attach fixture preparation", false)
+}
+
+fn restore_certbot_attach_baseline(config: &VmConfig, timeout: Duration) -> Result<(), String> {
+    let restored = config.ssh(
+        "sudo cp -a /var/tmp/jw-agent-vm-certbot-attach.nginx /etc/nginx/sites-available/jw-agent-p1\nsudo nginx -t\nsudo systemctl reload nginx.service",
+        None,
+        timeout,
+    )?;
+    require_success(&restored, "Certbot attach baseline restoration", false)
+}
+
+fn install_certbot_attach_tls_fault(config: &VmConfig, timeout: Duration) -> Result<(), String> {
+    let installed = config.ssh(
+        r#"sudo sh -eu -c '
+mkdir -p /etc/systemd/system/jw-certd@.service.d
+printf "%s\n" "[Service]" "InaccessiblePaths=/usr/bin/openssl" > /etc/systemd/system/jw-certd@.service.d/attach-fault.conf
+systemctl daemon-reload
+'"#,
+        None,
+        timeout,
+    )?;
+    require_success(&installed, "Certbot attach TLS fault installation", false)
+}
+
+fn cleanup_certbot_attach_fixture(config: &VmConfig, timeout: Duration) -> Result<(), String> {
+    let script = r#"sudo sh -eu -c '
+if test -e /var/tmp/jw-agent-vm-certbot-attach.active; then
+    cp -a /var/tmp/jw-agent-vm-certbot-attach.nginx /etc/nginx/sites-available/jw-agent-p1
+fi
+rm -f /var/tmp/jw-agent-vm-certbot-attach.nginx /var/tmp/jw-agent-vm-certbot-attach.active
+rm -rf /etc/letsencrypt/live/__HOST__ /etc/letsencrypt/archive/__HOST__
+rm -f /etc/letsencrypt/renewal/__HOST__.conf
+rm -f /etc/systemd/system/jw-certd@.service.d/attach-fault.conf
+rmdir /etc/systemd/system/jw-certd@.service.d 2>/dev/null || true
+systemctl daemon-reload
+systemctl enable --now certbot.timer
+nginx -t
+systemctl reload nginx.service
+systemctl restart jw-certd.socket jw-opsd.service jw-agentd.service
+'"#
+    .replace("__HOST__", &config.public_host);
+    let cleaned = config.ssh(&script, None, timeout)?;
+    require_success(&cleaned, "Certbot attach fixture cleanup", false)
+}
+
 fn prepare_certbot_issue_fixture(config: &VmConfig, timeout: Duration) -> Result<(), String> {
     let script = r#"sudo sh -eu -c '
 test ! -e /var/tmp/jw-agent-vm-certbot-issue.active
@@ -1616,6 +1769,140 @@ impl P2ApiSession {
         }
     }
 
+    fn operate_certbot_attach(
+        &mut self,
+        config: &VmConfig,
+        password: &str,
+        timeout: Duration,
+    ) -> Result<CertbotAttachOutcome, String> {
+        let inventory = self.get(config, "/api/v1/certificates", timeout)?;
+        expect_http(&inventory, 200, "Certbot attach inventory")?;
+        let operation_type = json_string_field(&inventory.body, "attachOperationType")?;
+        if operation_type != "certbot.certificate.attach/v1" {
+            return Err(String::from(
+                "certificate inventory did not advertise typed Nginx TLS attach",
+            ));
+        }
+        let schema_version = u16::try_from(json_unsigned_field(&inventory.body, "schemaVersion")?)
+            .map_err(|_| String::from("certificate schema version overflow"))?;
+        let inventory_digest = json_string_field(&inventory.body, "inventoryDigest")?;
+        let certificate_fingerprint = json_string_field(&inventory.body, "fingerprintSha256")?;
+        let sites = self.get(config, "/api/v1/services/nginx/sites", timeout)?;
+        expect_http(&sites, 200, "Certbot attach Nginx observation")?;
+        let site = json_issue_site_fields(&sites.body, "jw-agent-p1")?;
+        let idempotency_key = operation_idempotency_key()?;
+        let plan_body = format!(
+            "{{\"schemaVersion\":{},\"operationType\":{},\"primaryDomain\":{},\"siteId\":{},\"expectedSiteDigest\":{},\"expectedInventoryDigest\":{},\"expectedCertificateFingerprint\":{},\"idempotencyKey\":{}}}",
+            schema_version,
+            json_string(&operation_type),
+            json_string(&config.public_host),
+            json_string(&site.site_id),
+            json_string(&site.available_digest),
+            json_string(&inventory_digest),
+            json_string(&certificate_fingerprint),
+            json_string(&idempotency_key),
+        );
+        let plan = public_api_request(
+            config,
+            "POST",
+            "/api/v1/operations/certbot/attach/plans",
+            &self.cookie_jar.path,
+            Some(&self.csrf_token),
+            Some(plan_body.as_bytes()),
+            timeout,
+        )?;
+        expect_http(&plan, 200, "Certbot attach plan")?;
+        for expected in [
+            "\"level\":\"g2_reversible_config\"",
+            "\"rollbackSupport\":\"automatic_bounded\"",
+            "\"currentCertificatePath\":\"…/jw-agent/tls/server.crt\"",
+            "\"targetCertificatePath\":\"…/live/",
+            "\"timerEnabled\":true",
+            "\"timerActive\":true",
+        ] {
+            if !plan.body.contains(expected) {
+                return Err(format!("Certbot attach plan omitted {expected}"));
+            }
+        }
+        let plan_id = json_string_field(&plan.body, "planId")?;
+        let plan_hash = json_string_field(&plan.body, "planHash")?;
+        let reauth_body = format!(
+            "{{\"password\":{},\"purpose\":{{\"kind\":\"operation\",\"planHash\":{}}}}}",
+            json_string(password),
+            json_string(&plan_hash),
+        );
+        thread::sleep(Duration::from_secs(7));
+        let reauth = public_api_request(
+            config,
+            "POST",
+            "/api/v1/auth/reauth",
+            &self.cookie_jar.path,
+            Some(&self.csrf_token),
+            Some(reauth_body.as_bytes()),
+            timeout,
+        )?;
+        expect_http(
+            &reauth,
+            200,
+            "Certbot attach exact-plan PAM reauthentication",
+        )?;
+        self.csrf_token = json_string_field(&reauth.body, "csrfToken")?;
+        let reauth_token = json_string_field(&reauth.body, "reauthToken")?;
+        let approval_body = format!(
+            "{{\"schemaVersion\":{},\"planId\":{},\"planHash\":{},\"idempotencyKey\":{},\"reauthToken\":{},\"configReplaceConfirmed\":true,\"serviceReloadConfirmed\":true}}",
+            schema_version,
+            json_string(&plan_id),
+            json_string(&plan_hash),
+            json_string(&idempotency_key),
+            json_string(&reauth_token),
+        );
+        let accepted = public_api_request(
+            config,
+            "POST",
+            "/api/v1/operations/certbot/attach/approvals",
+            &self.cookie_jar.path,
+            Some(&self.csrf_token),
+            Some(approval_body.as_bytes()),
+            timeout,
+        )?;
+        expect_http(&accepted, 202, "Certbot attach approval")?;
+        let operation_id = json_string_field(&accepted.body, "operationId")?;
+        let event_stream = json_string_field(&accepted.body, "eventStream")?;
+        if event_stream != format!("/api/v1/operations/{operation_id}/events") {
+            return Err(String::from(
+                "Certbot attach returned a non-canonical event stream",
+            ));
+        }
+        let operation_path = format!("/api/v1/operations/{operation_id}");
+        let started = Instant::now();
+        loop {
+            let current = self.get(config, &operation_path, timeout)?;
+            expect_http(&current, 200, "Certbot attach receipt")?;
+            let stage = json_string_field(&current.body, "terminalState")?;
+            if matches!(
+                stage.as_str(),
+                "SUCCEEDED"
+                    | "ROLLED_BACK"
+                    | "RECOVERY_REQUIRED"
+                    | "REJECTED"
+                    | "EXPIRED"
+                    | "CANCELLED_BEFORE_APPLY"
+            ) {
+                return Ok(CertbotAttachOutcome {
+                    receipt: current.body,
+                    site_digest: site.available_digest,
+                    certificate_fingerprint,
+                });
+            }
+            if started.elapsed() >= timeout {
+                return Err(String::from(
+                    "Certbot attach did not reach a terminal receipt before timeout",
+                ));
+            }
+            thread::sleep(Duration::from_millis(250));
+        }
+    }
+
     fn operate_certbot_renew_test(
         &mut self,
         config: &VmConfig,
@@ -1785,6 +2072,12 @@ struct ManagedConfigPlanFields {
 struct CertbotIssueSiteFields {
     site_id: String,
     available_digest: String,
+}
+
+struct CertbotAttachOutcome {
+    receipt: String,
+    site_digest: String,
+    certificate_fingerprint: String,
 }
 
 fn json_site_object<'a>(body: &'a str, site_name: &str) -> Result<&'a str, String> {

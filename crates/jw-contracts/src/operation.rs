@@ -496,6 +496,18 @@ pub enum OpsRequestBody {
         actor: Subject,
         plan: crate::CertbotRenewTestPlanRequest,
     },
+    PlanCertbotAttach {
+        actor: Subject,
+        plan: crate::CertbotAttachPlanRequest,
+    },
+    ApproveCertbotAttach {
+        actor: Subject,
+        plan_id: String,
+        plan_hash: String,
+        idempotency_key: String,
+        config_replace_confirmed: bool,
+        service_reload_confirmed: bool,
+    },
     ApproveCertbotRenewTest {
         actor: Subject,
         plan_id: String,
@@ -569,11 +581,25 @@ impl OpsRequest {
                 return Err("local_attach_deferred_confirmation");
             }
         }
+        if let OpsRequestBody::ApproveCertbotAttach {
+            config_replace_confirmed,
+            service_reload_confirmed,
+            ..
+        } = &self.body
+        {
+            if !config_replace_confirmed {
+                return Err("config_replace_confirmation");
+            }
+            if !service_reload_confirmed {
+                return Err("service_reload_confirmation");
+            }
+        }
         match &self.body {
             OpsRequestBody::Capabilities => Ok(()),
             OpsRequestBody::CertificateInventory { .. } => Ok(()),
             OpsRequestBody::PlanCertbotIssue { plan, .. } => plan.validate(now_unix_ms),
             OpsRequestBody::PlanCertbotRenewTest { plan, .. } => plan.validate(),
+            OpsRequestBody::PlanCertbotAttach { plan, .. } => plan.validate(),
             OpsRequestBody::ReadManagedConfig { resource_id, .. } => {
                 validate_identifier(resource_id, "ngc_", "resource_id")
             }
@@ -598,6 +624,12 @@ impl OpsRequest {
                 ..
             }
             | OpsRequestBody::ApproveCertbotIssue {
+                plan_id,
+                plan_hash,
+                idempotency_key,
+                ..
+            }
+            | OpsRequestBody::ApproveCertbotAttach {
                 plan_id,
                 plan_hash,
                 idempotency_key,
@@ -640,6 +672,7 @@ pub enum OpsResponseBody {
     CertificateInventory(crate::CertificateInventoryView),
     CertbotIssuePlan(crate::CertbotIssuePlanView),
     CertbotRenewTestPlan(crate::CertbotRenewTestPlanView),
+    CertbotAttachPlan(crate::CertbotAttachPlanView),
     ManagedConfigResource(ManagedConfigResourceView),
     NginxSiteStatePlan(NginxSiteStatePlanView),
     ManagedConfigPlan(ManagedConfigPlanView),

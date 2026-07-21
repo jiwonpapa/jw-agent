@@ -10,7 +10,7 @@ Last reviewed: 2026-07-21
 - [OPS-NGINX-SITE-STATE-V1](operations/nginx-site-state-set-v1.md) — Accepted, P2 active implementation
 - [OPS-PUBLIC-ACCESS-PROFILE-V1](operations/public-access-profile-v1.md) — Accepted
 - [OPS-MANAGED-CONFIG-FILE-V1](operations/managed-config-file-v1.md) — Accepted, Nginx active-resource implementation `VM_PASS`
-- [OPS-CERTBOT-CERTIFICATE-V1](operations/certbot-certificate-v1.md) — Accepted, runner/inventory/renew-test and private-LAN issuance failure `VM_PASS`; public-CA success/attach pending
+- [OPS-CERTBOT-CERTIFICATE-V1](operations/certbot-certificate-v1.md) — Accepted, runner/inventory/renew-test, private-LAN issuance failure and protected-vhost attach rollback `VM_PASS`; public-CA success pending
 
 ## Access specs
 
@@ -42,6 +42,7 @@ Last reviewed: 2026-07-21
 - [ADR-0009 P2 safety kernel decisions](adr/0009-p2-safety-kernel-decisions.md) — Accepted
 - [ADR-0010 Local maintenance surfaces and P2 entry](adr/0010-local-maintenance-surfaces.md) — Accepted
 - [ADR-0011 One-shot Certbot network runner](adr/0011-certbot-network-runner.md) — Accepted
+- [ADR-0012 One-shot loopback TLS verifier](adr/0012-loopback-tls-verifier.md) — Accepted
 
 ## Spec template requirements
 

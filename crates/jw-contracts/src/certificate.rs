@@ -12,6 +12,7 @@ use crate::{
 pub const CERT_FRAME_MAX_BYTES: usize = 16 * 1_024;
 pub const CERTBOT_ISSUE_OPERATION: &str = "certbot.certificate.issue/v1";
 pub const CERTBOT_RENEW_TEST_OPERATION: &str = "certbot.certificate.renew_test/v1";
+pub const CERTBOT_ATTACH_OPERATION: &str = "certbot.certificate.attach/v1";
 pub const CERTBOT_MAX_DOMAINS: usize = 5;
 
 #[derive(Clone, Deserialize, Eq, PartialEq, Serialize, ToSchema)]
@@ -269,6 +270,106 @@ pub struct CertbotRenewTestApprovalRequest {
     pub external_effect_confirmed: bool,
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CertbotAttachPlanRequest {
+    pub schema_version: u16,
+    pub operation_type: String,
+    pub primary_domain: String,
+    pub site_id: String,
+    pub expected_site_digest: String,
+    pub expected_inventory_digest: String,
+    pub expected_certificate_fingerprint: String,
+    pub idempotency_key: String,
+}
+
+impl CertbotAttachPlanRequest {
+    pub fn validate(&self) -> Result<(), &'static str> {
+        if self.schema_version != OPERATION_SCHEMA_VERSION {
+            return Err("schema_version");
+        }
+        if self.operation_type != CERTBOT_ATTACH_OPERATION {
+            return Err("operation_type");
+        }
+        validate_domain(&self.primary_domain)?;
+        validate_token(&self.site_id, 12, 64, "site_id")?;
+        if !self.site_id.starts_with("ngs_") {
+            return Err("site_id");
+        }
+        validate_digest(&self.expected_site_digest)?;
+        validate_digest(&self.expected_inventory_digest)?;
+        validate_digest(&self.expected_certificate_fingerprint)?;
+        validate_token(
+            &self.idempotency_key,
+            IDEMPOTENCY_KEY_MIN_BYTES,
+            IDEMPOTENCY_KEY_MAX_BYTES,
+            "idempotency_key",
+        )
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CertbotAttachPlanView {
+    pub schema_version: u16,
+    pub operation_type: String,
+    pub plan_id: String,
+    pub plan_hash: String,
+    pub created_at: String,
+    pub expires_at: String,
+    pub actor: Subject,
+    pub primary_domain: String,
+    pub site_id: String,
+    pub site_digest: String,
+    pub inventory_digest: String,
+    pub certificate_fingerprint: String,
+    pub sans: Vec<String>,
+    pub not_after: String,
+    pub current_certificate_path: String,
+    pub target_certificate_path: String,
+    pub timer_enabled: bool,
+    pub timer_active: bool,
+    pub impact: Vec<String>,
+    pub recovery_path: Vec<String>,
+    pub assurance: AssuranceView,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CertbotAttachApprovalRequest {
+    pub schema_version: u16,
+    pub plan_id: String,
+    pub plan_hash: String,
+    pub idempotency_key: String,
+    #[schema(format = Password)]
+    pub reauth_token: String,
+    #[schema(format = Password)]
+    pub additional_auth_claim: Option<String>,
+    pub config_replace_confirmed: bool,
+    pub service_reload_confirmed: bool,
+}
+
+impl CertbotAttachApprovalRequest {
+    pub fn validate_shape(&self) -> Result<(), &'static str> {
+        OperationApprovalRequest {
+            schema_version: self.schema_version,
+            plan_id: self.plan_id.clone(),
+            plan_hash: self.plan_hash.clone(),
+            idempotency_key: self.idempotency_key.clone(),
+            reauth_token: self.reauth_token.clone(),
+            additional_auth_claim: self.additional_auth_claim.clone(),
+        }
+        .validate_shape()?;
+        if !self.config_replace_confirmed {
+            return Err("config_replace_confirmation");
+        }
+        if !self.service_reload_confirmed {
+            return Err("service_reload_confirmation");
+        }
+        Ok(())
+    }
+}
+
 impl CertbotRenewTestApprovalRequest {
     pub fn validate_shape(&self) -> Result<(), &'static str> {
         OperationApprovalRequest {
@@ -333,6 +434,10 @@ pub enum CertbotCommand {
         tos_agreed: bool,
     },
     RenewDryRun,
+    VerifyLocalTls {
+        server_name: String,
+        expected_fingerprint: String,
+    },
 }
 
 impl CertbotCommand {
@@ -366,6 +471,13 @@ impl CertbotCommand {
                 validate_email(account_email)
             }
             Self::RenewDryRun => Ok(()),
+            Self::VerifyLocalTls {
+                server_name,
+                expected_fingerprint,
+            } => {
+                validate_domain(server_name)?;
+                validate_digest(expected_fingerprint)
+            }
         }
     }
 }
@@ -376,6 +488,7 @@ pub enum CertbotCommandClass {
     IssueStaging,
     IssueProduction,
     RenewDryRun,
+    VerifyLocalTls,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -437,6 +550,7 @@ pub struct CertificateInventoryView {
     pub problems: Vec<String>,
     pub issue_operation_type: Option<String>,
     pub renew_test_operation_type: Option<String>,
+    pub attach_operation_type: Option<String>,
     pub assurance: AssuranceView,
 }
 
@@ -564,7 +678,8 @@ fn validate_ip_set(addresses: &[String]) -> Result<(), &'static str> {
 #[cfg(test)]
 mod tests {
     use super::{
-        CertbotCommand, CertbotCommandRequest, CertbotIssueApprovalRequest, CertbotIssuePlanInput,
+        CertbotAttachApprovalRequest, CertbotAttachPlanRequest, CertbotCommand,
+        CertbotCommandRequest, CertbotIssueApprovalRequest, CertbotIssuePlanInput,
         CertbotIssuePlanRequest, CertbotIssuePreflightEvidence, CertbotRenewTestApprovalRequest,
         CertificateEnvironment, canonical_domains, validate_domain,
     };
@@ -689,5 +804,41 @@ mod tests {
         );
         request.local_attach_deferred_confirmed = true;
         assert!(request.validate_shape().is_ok());
+    }
+
+    #[test]
+    fn attach_plan_and_approval_are_exact_and_two_step() {
+        let plan = CertbotAttachPlanRequest {
+            schema_version: 1,
+            operation_type: String::from(super::CERTBOT_ATTACH_OPERATION),
+            primary_domain: String::from("example.com"),
+            site_id: String::from("ngs_0123456789abcdef"),
+            expected_site_digest: crate::sha256_digest(b"site"),
+            expected_inventory_digest: crate::sha256_digest(b"inventory"),
+            expected_certificate_fingerprint: crate::sha256_digest(b"certificate"),
+            idempotency_key: String::from("attach-key-012345"),
+        };
+        assert!(plan.validate().is_ok());
+        let mut approval = CertbotAttachApprovalRequest {
+            schema_version: 1,
+            plan_id: String::from("plan_0123456789abcdef"),
+            plan_hash: crate::sha256_digest(b"plan"),
+            idempotency_key: String::from("attach-key-012345"),
+            reauth_token: String::from("reauth-token-0123456789"),
+            additional_auth_claim: None,
+            config_replace_confirmed: false,
+            service_reload_confirmed: false,
+        };
+        assert_eq!(
+            approval.validate_shape(),
+            Err("config_replace_confirmation")
+        );
+        approval.config_replace_confirmed = true;
+        assert_eq!(
+            approval.validate_shape(),
+            Err("service_reload_confirmation")
+        );
+        approval.service_reload_confirmed = true;
+        assert!(approval.validate_shape().is_ok());
     }
 }

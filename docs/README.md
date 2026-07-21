@@ -35,6 +35,7 @@ Last reviewed: 2026-07-21
 - [중앙관제 후속 경계](20-architecture/central-future.md)
 - [Local maintenance surfaces ADR](90-specs/adr/0010-local-maintenance-surfaces.md)
 - [Certbot one-shot network runner ADR](90-specs/adr/0011-certbot-network-runner.md)
+- [Loopback TLS verifier ADR](90-specs/adr/0012-loopback-tls-verifier.md)
 
 ## 30 Domain
 

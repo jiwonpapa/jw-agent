@@ -17,8 +17,9 @@ pub use auth::{
     Subject,
 };
 pub use certificate::{
-    CERT_FRAME_MAX_BYTES, CERTBOT_ISSUE_OPERATION, CERTBOT_MAX_DOMAINS,
-    CERTBOT_RENEW_TEST_OPERATION, CertbotCommand, CertbotCommandClass, CertbotCommandEvidence,
+    CERT_FRAME_MAX_BYTES, CERTBOT_ATTACH_OPERATION, CERTBOT_ISSUE_OPERATION, CERTBOT_MAX_DOMAINS,
+    CERTBOT_RENEW_TEST_OPERATION, CertbotAttachApprovalRequest, CertbotAttachPlanRequest,
+    CertbotAttachPlanView, CertbotCommand, CertbotCommandClass, CertbotCommandEvidence,
     CertbotCommandRequest, CertbotCommandResponse, CertbotCommandResult,
     CertbotIssueApprovalRequest, CertbotIssuePlanInput, CertbotIssuePlanRequest,
     CertbotIssuePlanView, CertbotIssuePreflightEvidence, CertbotRenewTestApprovalRequest,

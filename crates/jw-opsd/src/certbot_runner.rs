@@ -97,6 +97,7 @@ fn validate_evidence(
             }
         },
         CertbotCommand::RenewDryRun => CertbotCommandClass::RenewDryRun,
+        CertbotCommand::VerifyLocalTls { .. } => CertbotCommandClass::VerifyLocalTls,
     };
     if evidence.command_class != expected
         || validate_digest(&evidence.stdout_digest).is_err()

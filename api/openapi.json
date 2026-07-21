@@ -403,6 +403,172 @@
         }
       }
     },
+    "/api/v1/operations/certbot/attach/approvals": {
+      "post": {
+        "tags": [],
+        "operationId": "approve_certbot_attach",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CertbotAttachApprovalRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Certbot Nginx TLS attach accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperationAcceptedView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid approval shape",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Claim, role, or CSRF rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Expired, stale, busy, or conflicting operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "Forensic lockdown",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "428": {
+            "description": "Additional authentication is configured but unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/operations/certbot/attach/plans": {
+      "post": {
+        "tags": [],
+        "operationId": "plan_certbot_attach",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CertbotAttachPlanRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Immutable Certbot Nginx TLS attach plan",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CertbotAttachPlanView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid typed request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role or CSRF rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Stale site, certificate, timer, or unsupported config",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "Forensic lockdown",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/operations/certbot/issue/approvals": {
       "post": {
         "tags": [],
@@ -1455,6 +1621,196 @@
           }
         }
       },
+      "CertbotAttachApprovalRequest": {
+        "type": "object",
+        "required": [
+          "schemaVersion",
+          "planId",
+          "planHash",
+          "idempotencyKey",
+          "reauthToken",
+          "configReplaceConfirmed",
+          "serviceReloadConfirmed"
+        ],
+        "properties": {
+          "additionalAuthClaim": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "password"
+          },
+          "configReplaceConfirmed": {
+            "type": "boolean"
+          },
+          "idempotencyKey": {
+            "type": "string"
+          },
+          "planHash": {
+            "type": "string"
+          },
+          "planId": {
+            "type": "string"
+          },
+          "reauthToken": {
+            "type": "string",
+            "format": "password"
+          },
+          "schemaVersion": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "serviceReloadConfirmed": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      },
+      "CertbotAttachPlanRequest": {
+        "type": "object",
+        "required": [
+          "schemaVersion",
+          "operationType",
+          "primaryDomain",
+          "siteId",
+          "expectedSiteDigest",
+          "expectedInventoryDigest",
+          "expectedCertificateFingerprint",
+          "idempotencyKey"
+        ],
+        "properties": {
+          "expectedCertificateFingerprint": {
+            "type": "string"
+          },
+          "expectedInventoryDigest": {
+            "type": "string"
+          },
+          "expectedSiteDigest": {
+            "type": "string"
+          },
+          "idempotencyKey": {
+            "type": "string"
+          },
+          "operationType": {
+            "type": "string"
+          },
+          "primaryDomain": {
+            "type": "string"
+          },
+          "schemaVersion": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "siteId": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "CertbotAttachPlanView": {
+        "type": "object",
+        "required": [
+          "schemaVersion",
+          "operationType",
+          "planId",
+          "planHash",
+          "createdAt",
+          "expiresAt",
+          "actor",
+          "primaryDomain",
+          "siteId",
+          "siteDigest",
+          "inventoryDigest",
+          "certificateFingerprint",
+          "sans",
+          "notAfter",
+          "currentCertificatePath",
+          "targetCertificatePath",
+          "timerEnabled",
+          "timerActive",
+          "impact",
+          "recoveryPath",
+          "assurance"
+        ],
+        "properties": {
+          "actor": {
+            "$ref": "#/components/schemas/Subject"
+          },
+          "assurance": {
+            "$ref": "#/components/schemas/AssuranceView"
+          },
+          "certificateFingerprint": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string"
+          },
+          "currentCertificatePath": {
+            "type": "string"
+          },
+          "expiresAt": {
+            "type": "string"
+          },
+          "impact": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "inventoryDigest": {
+            "type": "string"
+          },
+          "notAfter": {
+            "type": "string"
+          },
+          "operationType": {
+            "type": "string"
+          },
+          "planHash": {
+            "type": "string"
+          },
+          "planId": {
+            "type": "string"
+          },
+          "primaryDomain": {
+            "type": "string"
+          },
+          "recoveryPath": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "sans": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "schemaVersion": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "siteDigest": {
+            "type": "string"
+          },
+          "siteId": {
+            "type": "string"
+          },
+          "targetCertificatePath": {
+            "type": "string"
+          },
+          "timerActive": {
+            "type": "boolean"
+          },
+          "timerEnabled": {
+            "type": "boolean"
+          }
+        }
+      },
       "CertbotIssueApprovalRequest": {
         "type": "object",
         "required": [
@@ -1827,6 +2183,12 @@
         "properties": {
           "assurance": {
             "$ref": "#/components/schemas/AssuranceView"
+          },
+          "attachOperationType": {
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "certbotInstalled": {
             "type": "boolean"

@@ -7,6 +7,9 @@ import type {
   AccessSettingsView,
   AdditionalAuthPolicy,
   CertificateInventoryView,
+  CertbotAttachApprovalRequest,
+  CertbotAttachPlanRequest,
+  CertbotAttachPlanView,
   CertbotIssueApprovalRequest,
   CertbotIssuePlanRequest,
   CertbotIssuePlanView,
@@ -179,6 +182,34 @@ export async function approveCertbotRenewTest(
 ): Promise<OperationAcceptedView> {
   const { data, error, response } = await api.POST(
     "/api/v1/operations/certbot/renew-test/approvals",
+    {
+      body: input,
+      headers: mutationHeaders(),
+    },
+  );
+  if (data !== undefined) return data;
+  throw new ApiError(error, response);
+}
+
+export async function planCertbotAttach(
+  input: CertbotAttachPlanRequest,
+): Promise<CertbotAttachPlanView> {
+  const { data, error, response } = await api.POST(
+    "/api/v1/operations/certbot/attach/plans",
+    {
+      body: input,
+      headers: mutationHeaders(),
+    },
+  );
+  if (data !== undefined) return data;
+  throw new ApiError(error, response);
+}
+
+export async function approveCertbotAttach(
+  input: CertbotAttachApprovalRequest,
+): Promise<OperationAcceptedView> {
+  const { data, error, response } = await api.POST(
+    "/api/v1/operations/certbot/attach/approvals",
     {
       body: input,
       headers: mutationHeaders(),

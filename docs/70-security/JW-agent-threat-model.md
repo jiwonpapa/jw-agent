@@ -7,7 +7,7 @@ Last reviewed: 2026-07-21
 
 ## Executive summary
 
-최상위 위험은 credential stuffing, 공개 HTTP input으로 agentd를 침해한 뒤 root authd·opsd 경계를 공격하는 연쇄 경로, PAM FFI 결함, P2 path·crash recovery 오류, OpenSSH manual session 탈취, Certbot 외부효과와 package 공급망입니다. P2 Nginx site-state·active managed-config, Certbot one-shot renewal dry-run과 guided issuance의 CA 실패 경로는 전용 Ubuntu 24.04 VM에서 package·PAM·TLS·실패·비밀 비노출·원장 훼손 `VM_PASS`를 획득했습니다. 다만 private-LAN `.test` 호스트와 unsigned local package 증거이므로 공인 CA 발급 성공·운영 안전으로 과장하지 않으며 terminal·SFTP·Certbot attach는 각 VM 증거 전까지 구현 완료를 주장하지 않습니다.
+최상위 위험은 credential stuffing, 공개 HTTP input으로 agentd를 침해한 뒤 root authd·opsd 경계를 공격하는 연쇄 경로, PAM FFI 결함, P2 path·crash recovery 오류, OpenSSH manual session 탈취, Certbot 외부효과와 package 공급망입니다. P2 Nginx site-state·active managed-config, Certbot one-shot renewal dry-run·guided issuance CA 실패와 보호 vhost attach의 SNI read-back·강제 실패 원복은 전용 Ubuntu 24.04 VM에서 package·PAM·TLS·실패·비밀 비노출·원장 훼손 `VM_PASS`를 획득했습니다. 다만 private-LAN `.test` 호스트와 unsigned local package 증거이므로 공인 CA 발급 성공·운영 안전으로 과장하지 않으며 terminal·SFTP는 각 VM 증거 전까지 구현 완료를 주장하지 않습니다.
 
 ## Scope and assumptions
 

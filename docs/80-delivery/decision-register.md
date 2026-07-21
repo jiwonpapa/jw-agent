@@ -59,11 +59,12 @@ P2 구현 진입은 2026-07-21 사용자 목표추진 지시와 [ADR-0010](../90
 - opsd는 private network namespace와 `CAP_NET_BIND_SERVICE`만 사용하며 외부 network API나 listening socket을 갖지 않습니다.
 - 제품 관리 vhost는 legacy basename뿐 아니라 versioned content marker와 제품 include로 판정합니다. 보호 resource는 operation type/schema를 노출하지 않고 opsd plan도 재검증합니다.
 - mutation 승인은 `202 Accepted`이며 durable ledger가 실행 상태를 소유합니다. 브라우저 SSE는 durable sequence를 event ID로 사용하고 canonical receipt를 다시 조회합니다.
-- `p2-local` 19개, `p2-browser` 8개, Playwright 22개, `p2-vm` 19개 gate가 PASS했습니다.
-- VM package는 `jw-agent_0.2.0~p2.6_amd64.deb`, SHA-256 `a906624b81c91217bd234718893d9c1052103e80e87587f631bb4d357ea639b8`입니다.
+- `p2-local` 19개, `p2-browser` 8개, Playwright 23개, `p2-vm` 20개 gate가 PASS했습니다.
+- VM package는 `jw-agent_0.2.0~p2.7_amd64.deb`, SHA-256 `87ac41e0ac34c4e1d0a4af66dc5af8de904b5eda4bbfc19c3608a6affe0edfa6`입니다.
 - managed Nginx config는 활성 exact symlink, root:root, UTF-8 24 KiB content·64 KiB request envelope, reload profile만 `VM_PASS + G2`입니다.
-- 현재 `SUPPORTED + VM_PASS + G2` write 표면은 `nginx.site_state.set/v1`과 active Nginx profile의 `service.config_file.set/v1`이며, `certbot.certificate.renew_test/v1`은 `SUPPORTED + VM_PASS + G1`입니다. `certbot.certificate.issue/v1`은 실패 안전성까지 `VM_PASS`이나 공인 CA 성공은 `UNVERIFIED`입니다. P2D는 gate 전까지 지원 완료로 표시하지 않습니다.
-- `jw-certd` one-shot network privilege boundary, sanitized inventory, PAM 승인 renewal dry-run, DNS·listener·webroot preflight와 실패 영수증은 `VM_PASS`입니다. 인증서 Nginx attach API는 아직 노출하지 않습니다.
+- 현재 `SUPPORTED + VM_PASS + G2` write 표면은 `nginx.site_state.set/v1`, active Nginx profile의 `service.config_file.set/v1`, 보호 vhost의 `certbot.certificate.attach/v1`입니다. `certbot.certificate.renew_test/v1`은 `SUPPORTED + VM_PASS + G1`이며, `certbot.certificate.issue/v1`은 실패 안전성까지 `VM_PASS`이나 공인 CA 성공은 `UNVERIFIED`입니다. P2D는 gate 전까지 지원 완료로 표시하지 않습니다.
+- `jw-certd` one-shot network privilege boundary, sanitized inventory, PAM 승인 renewal dry-run, DNS·listener·webroot preflight, 실패 영수증과 고정 loopback SNI probe는 `VM_PASS`입니다.
+- `jw-certd`의 추가 명령은 `127.0.0.1:443` 고정 SNI fingerprint probe뿐이며 `opsd` network 차단은 유지합니다. attach 정상 경로와 probe 강제 실패의 exact rollback은 `VM_PASS + G2`입니다.
 
 ## P3 전에 선택
 

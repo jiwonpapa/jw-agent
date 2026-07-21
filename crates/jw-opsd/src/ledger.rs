@@ -5,17 +5,18 @@ use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::Path;
 
 use jw_contracts::{
-    AssuranceView, CERTBOT_ISSUE_OPERATION, CERTBOT_RENEW_TEST_OPERATION, CertbotIssuePlanView,
-    CertbotRenewTestPlanView, CertificateEnvironment, MANAGED_CONFIG_OPERATION,
-    ManagedConfigPlanView, NGINX_SITE_STATE_OPERATION, NginxSiteState, NginxSiteStatePlanView,
-    OPERATION_SCHEMA_VERSION, OperationReceiptView, OperationStage, OperationStageEvidenceView,
-    Role, Subject,
+    AssuranceView, CERTBOT_ATTACH_OPERATION, CERTBOT_ISSUE_OPERATION, CERTBOT_RENEW_TEST_OPERATION,
+    CertbotAttachPlanView, CertbotIssuePlanView, CertbotRenewTestPlanView, CertificateEnvironment,
+    MANAGED_CONFIG_OPERATION, ManagedConfigPlanView, NGINX_SITE_STATE_OPERATION, NginxSiteState,
+    NginxSiteStatePlanView, OPERATION_SCHEMA_VERSION, OperationReceiptView, OperationStage,
+    OperationStageEvidenceView, Role, Subject,
 };
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use serde::{Deserialize, Serialize};
 
 use crate::certificate::{
-    CERTBOT_ISSUE_IMPACT, CERTBOT_ISSUE_RECOVERY_PATH, CERTBOT_RENEW_RECOVERY_PATH,
+    CERTBOT_ATTACH_IMPACT, CERTBOT_ATTACH_RECOVERY_PATH, CERTBOT_ISSUE_IMPACT,
+    CERTBOT_ISSUE_RECOVERY_PATH, CERTBOT_RENEW_RECOVERY_PATH, CertbotAttachPlanPayload,
     CertbotIssuePlanPayload, CertbotRenewPlanPayload,
 };
 use crate::config::OpsPaths;
@@ -52,12 +53,15 @@ pub struct StoredPlan {
     pub managed_config: Option<ManagedConfigPlanPayload>,
     pub certbot_renew: Option<CertbotRenewPlanPayload>,
     pub certbot_issue: Option<CertbotIssuePlanPayload>,
+    pub certbot_attach: Option<CertbotAttachPlanPayload>,
 }
 
 impl StoredPlan {
     #[must_use]
     pub fn before_digest(&self) -> &str {
-        if self.operation_type == MANAGED_CONFIG_OPERATION {
+        if self.operation_type == MANAGED_CONFIG_OPERATION
+            || self.operation_type == CERTBOT_ATTACH_OPERATION
+        {
             &self.available_digest
         } else {
             &self.enabled_state_digest
@@ -173,14 +177,17 @@ impl Ledger {
             .map_err(|error| OpsError::Storage(error.to_string()))?;
         let certificate_issue_payload = serde_json::to_string(&plan.certbot_issue)
             .map_err(|error| OpsError::Storage(error.to_string()))?;
+        let certificate_attach_payload = serde_json::to_string(&plan.certbot_attach)
+            .map_err(|error| OpsError::Storage(error.to_string()))?;
         transaction.execute(
             "INSERT INTO plans (
                 plan_id, operation_type, plan_hash, actor_uid, actor_username, actor_role,
                 site_id, display_name, current_state, target_state, available_digest,
                 enabled_state_digest, created_at_ms, expires_at_ms, idempotency_key,
                 request_digest, resource_key, assurance_json, payload_json,
-                certificate_payload_json, certificate_issue_payload_json
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21)",
+                certificate_payload_json, certificate_issue_payload_json,
+                certificate_attach_payload_json
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22)",
             params![
                 plan.plan_id,
                 plan.operation_type,
@@ -203,6 +210,7 @@ impl Ledger {
                 payload,
                 certificate_payload,
                 certificate_issue_payload,
+                certificate_attach_payload,
             ],
         )?;
         transaction.execute(
@@ -646,6 +654,48 @@ impl Ledger {
         })
     }
 
+    pub fn certbot_attach_plan_view(
+        &self,
+        plan: &StoredPlan,
+    ) -> Result<CertbotAttachPlanView, OpsError> {
+        if plan.operation_type != CERTBOT_ATTACH_OPERATION {
+            return Err(OpsError::Rejected("operation_type"));
+        }
+        let payload = plan
+            .certbot_attach
+            .as_ref()
+            .ok_or(OpsError::ForensicLockdown)?;
+        Ok(CertbotAttachPlanView {
+            schema_version: OPERATION_SCHEMA_VERSION,
+            operation_type: plan.operation_type.clone(),
+            plan_id: plan.plan_id.clone(),
+            plan_hash: plan.plan_hash.clone(),
+            created_at: format_time(plan.created_at_ms)?,
+            expires_at: format_time(plan.expires_at_ms)?,
+            actor: plan.actor.clone(),
+            primary_domain: payload.primary_domain.clone(),
+            site_id: payload.site_id.clone(),
+            site_digest: payload.site_digest.clone(),
+            inventory_digest: payload.inventory_digest.clone(),
+            certificate_fingerprint: payload.certificate_fingerprint.clone(),
+            sans: payload.sans.clone(),
+            not_after: payload.not_after.clone(),
+            current_certificate_path: payload.current_certificate_path.clone(),
+            target_certificate_path: payload.target_certificate_path.clone(),
+            timer_enabled: payload.timer_enabled,
+            timer_active: payload.timer_active,
+            impact: CERTBOT_ATTACH_IMPACT
+                .iter()
+                .map(ToString::to_string)
+                .collect(),
+            recovery_path: CERTBOT_ATTACH_RECOVERY_PATH
+                .iter()
+                .map(ToString::to_string)
+                .collect(),
+            assurance: plan.assurance.clone(),
+        })
+    }
+
     pub fn has_recent_staging_evidence(
         &self,
         evidence_key: &str,
@@ -824,12 +874,20 @@ impl Ledger {
                 event_digest,
             },
         )?;
-        self.connection.execute(
-            "DELETE FROM metadata WHERE key = ?1",
-            [CHECKPOINT_PENDING_KEY],
-        )?;
+        clear_completed_checkpoint(&self.connection, required_sequence)?;
         Ok(())
     }
+}
+
+fn clear_completed_checkpoint(
+    connection: &Connection,
+    completed_sequence: i64,
+) -> Result<(), OpsError> {
+    connection.execute(
+        "DELETE FROM metadata WHERE key = ?1 AND CAST(value AS INTEGER) = ?2",
+        params![CHECKPOINT_PENDING_KEY, completed_sequence],
+    )?;
+    Ok(())
 }
 
 fn append_event(transaction: &Transaction<'_>, event: &EventInput<'_>) -> Result<i64, OpsError> {
@@ -905,7 +963,8 @@ fn load_plan_from(connection: &Connection, plan_id: &str) -> Result<StoredPlan, 
                     display_name, current_state, target_state, available_digest,
                     enabled_state_digest, created_at_ms, expires_at_ms, idempotency_key,
                     request_digest, resource_key, assurance_json, payload_json,
-                    certificate_payload_json, certificate_issue_payload_json
+                    certificate_payload_json, certificate_issue_payload_json,
+                    certificate_attach_payload_json
              FROM plans WHERE plan_id = ?1",
             [plan_id],
             |row| {
@@ -931,6 +990,7 @@ fn load_plan_from(connection: &Connection, plan_id: &str) -> Result<StoredPlan, 
                     row.get::<_, String>(18)?,
                     row.get::<_, String>(19)?,
                     row.get::<_, String>(20)?,
+                    row.get::<_, String>(21)?,
                 ))
             },
         )
@@ -954,6 +1014,8 @@ fn load_plan_from(connection: &Connection, plan_id: &str) -> Result<StoredPlan, 
                 serde_json::from_str(&row.19).map_err(|_| OpsError::ForensicLockdown)?;
             let certbot_issue: Option<CertbotIssuePlanPayload> =
                 serde_json::from_str(&row.20).map_err(|_| OpsError::ForensicLockdown)?;
+            let certbot_attach: Option<CertbotAttachPlanPayload> =
+                serde_json::from_str(&row.21).map_err(|_| OpsError::ForensicLockdown)?;
             Ok(StoredPlan {
                 operation_type: row.0,
                 plan_id: row.1,
@@ -978,6 +1040,7 @@ fn load_plan_from(connection: &Connection, plan_id: &str) -> Result<StoredPlan, 
                 managed_config,
                 certbot_renew,
                 certbot_issue,
+                certbot_attach,
             })
         })
 }
@@ -994,6 +1057,8 @@ fn migrate(connection: &Connection) -> Result<(), OpsError> {
             connection.pragma_update(None, "user_version", 3)?;
             connection.execute_batch(include_str!("../migrations/0004_certbot_issue.sql"))?;
             connection.pragma_update(None, "user_version", 4)?;
+            connection.execute_batch(include_str!("../migrations/0005_certbot_attach.sql"))?;
+            connection.pragma_update(None, "user_version", 5)?;
         }
         1 => {
             connection.execute_batch(include_str!("../migrations/0002_managed_config.sql"))?;
@@ -1002,18 +1067,28 @@ fn migrate(connection: &Connection) -> Result<(), OpsError> {
             connection.pragma_update(None, "user_version", 3)?;
             connection.execute_batch(include_str!("../migrations/0004_certbot_issue.sql"))?;
             connection.pragma_update(None, "user_version", 4)?;
+            connection.execute_batch(include_str!("../migrations/0005_certbot_attach.sql"))?;
+            connection.pragma_update(None, "user_version", 5)?;
         }
         2 => {
             connection.execute_batch(include_str!("../migrations/0003_certbot_renew.sql"))?;
             connection.pragma_update(None, "user_version", 3)?;
             connection.execute_batch(include_str!("../migrations/0004_certbot_issue.sql"))?;
             connection.pragma_update(None, "user_version", 4)?;
+            connection.execute_batch(include_str!("../migrations/0005_certbot_attach.sql"))?;
+            connection.pragma_update(None, "user_version", 5)?;
         }
         3 => {
             connection.execute_batch(include_str!("../migrations/0004_certbot_issue.sql"))?;
             connection.pragma_update(None, "user_version", 4)?;
+            connection.execute_batch(include_str!("../migrations/0005_certbot_attach.sql"))?;
+            connection.pragma_update(None, "user_version", 5)?;
         }
-        4 => {}
+        4 => {
+            connection.execute_batch(include_str!("../migrations/0005_certbot_attach.sql"))?;
+            connection.pragma_update(None, "user_version", 5)?;
+        }
+        5 => {}
         _ => return Err(OpsError::ForensicLockdown),
     }
     Ok(())
@@ -1026,6 +1101,8 @@ fn recovery_path_for(operation_type: &str) -> Vec<String> {
         &CERTBOT_ISSUE_RECOVERY_PATH
     } else if operation_type == jw_contracts::CERTBOT_RENEW_TEST_OPERATION {
         &CERTBOT_RENEW_RECOVERY_PATH
+    } else if operation_type == CERTBOT_ATTACH_OPERATION {
+        &CERTBOT_ATTACH_RECOVERY_PATH
     } else {
         &NGINX_RECOVERY_PATH
     };
@@ -1234,9 +1311,46 @@ mod tests {
         Role, RollbackSupport, Subject, sha256_digest,
     };
 
+    #[test]
+    fn older_checkpoint_completion_cannot_clear_newer_pending_sequence() -> Result<(), String> {
+        let connection = Connection::open_in_memory().map_err(|error| error.to_string())?;
+        connection
+            .execute_batch(
+                "CREATE TABLE metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);\n\
+                 INSERT INTO metadata (key, value) VALUES ('checkpoint_required_sequence', '42');",
+            )
+            .map_err(|error| error.to_string())?;
+        clear_completed_checkpoint(&connection, 41).map_err(|error| error.to_string())?;
+        let pending: String = connection
+            .query_row(
+                "SELECT value FROM metadata WHERE key = ?1",
+                [CHECKPOINT_PENDING_KEY],
+                |row| row.get(0),
+            )
+            .map_err(|error| error.to_string())?;
+        if pending != "42" {
+            return Err(String::from(
+                "older checkpoint completion cleared the newer pending sequence",
+            ));
+        }
+        clear_completed_checkpoint(&connection, 42).map_err(|error| error.to_string())?;
+        let remaining: i64 = connection
+            .query_row("SELECT COUNT(*) FROM metadata", [], |row| row.get(0))
+            .map_err(|error| error.to_string())?;
+        if remaining != 0 {
+            return Err(String::from(
+                "matching checkpoint completion did not clear its pending sequence",
+            ));
+        }
+        Ok(())
+    }
+
     use crate::config::OpsPaths;
 
-    use super::{Ledger, StoredPlan, Transition};
+    use super::{
+        CHECKPOINT_PENDING_KEY, Connection, Ledger, StoredPlan, Transition,
+        clear_completed_checkpoint,
+    };
 
     #[test]
     fn idempotency_reuses_same_plan_and_rejects_different_meaning() -> Result<(), String> {
@@ -1373,6 +1487,7 @@ mod tests {
             managed_config: None,
             certbot_renew: None,
             certbot_issue: None,
+            certbot_attach: None,
         }
     }
 

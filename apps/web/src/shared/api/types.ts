@@ -18,6 +18,10 @@ export type CertbotRenewTestPlanRequest =
 export type CertbotRenewTestPlanView = components["schemas"]["CertbotRenewTestPlanView"];
 export type CertbotRenewTestApprovalRequest =
   components["schemas"]["CertbotRenewTestApprovalRequest"];
+export type CertbotAttachPlanRequest = components["schemas"]["CertbotAttachPlanRequest"];
+export type CertbotAttachPlanView = components["schemas"]["CertbotAttachPlanView"];
+export type CertbotAttachApprovalRequest =
+  components["schemas"]["CertbotAttachApprovalRequest"];
 export type NginxSiteState = components["schemas"]["NginxSiteState"];
 export type NginxSiteStatePlanRequest =
   components["schemas"]["NginxSiteStatePlanRequest"];

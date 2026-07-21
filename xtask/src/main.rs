@@ -132,6 +132,7 @@ const REQUIRED_FOUNDATION_PATHS: &[&str] = &[
     "docs/90-specs/adr/0009-p2-safety-kernel-decisions.md",
     "docs/90-specs/adr/0010-local-maintenance-surfaces.md",
     "docs/90-specs/adr/0011-certbot-network-runner.md",
+    "docs/90-specs/adr/0012-loopback-tls-verifier.md",
     "tests/spec-fixtures/nginx-site-state-set-v1.json",
 ];
 
@@ -180,6 +181,7 @@ const P2_REQUIRED_PATHS: &[&str] = &[
     "crates/jw-contracts/src/operation.rs",
     "crates/jw-opsd/migrations/0001_initial.sql",
     "crates/jw-opsd/migrations/0002_managed_config.sql",
+    "crates/jw-opsd/migrations/0005_certbot_attach.sql",
     "crates/jw-opsd/src/config.rs",
     "crates/jw-opsd/src/certificate.rs",
     "crates/jw-opsd/src/digest.rs",
@@ -535,6 +537,17 @@ const GATES: &[Gate] = &[
         evidence: "DNS/listener/webroot preflight passed; unreachable public CA was rejected without false rollback or inventory mutation",
         failure_policy: "fail lane on bypassed preflight/reauth, false success/rollback, inventory drift, raw email persistence, or retained proposal/worker",
         run: vm::gate_p2_certbot_issue_failure,
+    },
+    Gate {
+        id: "VM-P2-CERTBOT-ATTACH-ROLLBACK",
+        owner: "Certificate Lifecycle Maintainer",
+        scope: "G2 protected Nginx certificate attach, local SNI verification, and exact rollback",
+        inputs: "installed P2 attach package, public API, PAM fixture, disposable lineage, protected Nginx vhost",
+        lanes: P2_VM_LANES,
+        timeout_seconds: 360,
+        evidence: "successful SNI fingerprint read-back and forced verifier failure exact rollback passed",
+        failure_policy: "fail lane on unplanned attach, wrong SNI certificate, inexact rollback, unavailable Nginx, or raw certificate persistence",
+        run: vm::gate_p2_certbot_attach_operation,
     },
     Gate {
         id: "VM-SECRET-SCAN",

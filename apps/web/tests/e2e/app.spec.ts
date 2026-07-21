@@ -272,6 +272,7 @@ const certificates = {
     },
   ],
   problems: [],
+  attachOperationType: null,
   issueOperationType: null,
   renewTestOperationType: null,
   assurance: {
@@ -305,6 +306,11 @@ const actionableIssueCertificates = {
   ...certificates,
   issueOperationType: "certbot.certificate.issue/v1",
   renewTestOperationType: "certbot.certificate.renew_test/v1",
+};
+
+const actionableAttachCertificates = {
+  ...actionableIssueCertificates,
+  attachOperationType: "certbot.certificate.attach/v1",
 };
 
 const issueNginx = {
@@ -376,6 +382,65 @@ const certbotIssueAccepted = {
   operationType: "certbot.certificate.issue/v1",
   planId: certbotIssuePlan.planId,
   planHash: certbotIssuePlan.planHash,
+};
+
+const certbotAttachPlan = {
+  schemaVersion: 1,
+  operationType: "certbot.certificate.attach/v1",
+  planId: "plan_certbot_attach_fixture",
+  planHash: `sha256:${"d".repeat(64)}`,
+  createdAt: "2026-07-21T02:11:00Z",
+  expiresAt: "2026-07-21T02:16:00Z",
+  actor: session.subject,
+  primaryDomain: "care.example.com",
+  siteId: "ngs_managementFixture123456",
+  siteDigest: `sha256:${"b".repeat(64)}`,
+  inventoryDigest: certificates.inventoryDigest,
+  certificateFingerprint: `sha256:${"a".repeat(64)}`,
+  sans: ["care.example.com", "www.care.example.com"],
+  notAfter: "2026-10-20 12:00:00Z",
+  currentCertificatePath: "…/jw-agent/tls/server.crt",
+  targetCertificatePath: "…/live/care.example.com/fullchain.pem",
+  timerEnabled: true,
+  timerActive: true,
+  impact: [
+    "보호된 Nginx vhost의 ssl_certificate 지시문 두 개만 교체합니다.",
+    "문법 검사 후 reload하고 loopback SNI 인증서 지문을 확인합니다.",
+  ],
+  recoveryPath: ["SSH에서 보호된 Nginx 설정 snapshot을 확인합니다."],
+  assurance: {
+    ...reversibleAssurance,
+    scope: ["보호된 Nginx vhost 인증서 지시문 두 개와 검증된 reload"],
+    excludedEffects: ["제품 밖 root 사용자의 동시 변경", "기존 TLS 연결"],
+    applyVerifier: ["nginx -t", "reload 후 active", "loopback SNI SHA-256", "Certbot timer"],
+    rollbackVerifier: ["원본 bytes·owner·mode 복원", "nginx -t와 reload 후 active"],
+  },
+};
+
+const certbotAttachReceipt: OperationReceiptView = {
+  ...operationReceipt,
+  operationType: "certbot.certificate.attach/v1",
+  planId: certbotAttachPlan.planId,
+  planHash: certbotAttachPlan.planHash,
+  beforeDigest: certbotAttachPlan.siteDigest,
+  afterDigest: `sha256:${"e".repeat(64)}`,
+  assurance: certbotAttachPlan.assurance,
+  stages: [
+    { sequence: 1, stage: "APPROVED", recordedAt: "2026-07-21T02:12:00Z", resultCode: "approved", evidenceDigest: certbotAttachPlan.planHash },
+    { sequence: 2, stage: "SNAPSHOTTED", recordedAt: "2026-07-21T02:12:01Z", resultCode: "snapshot_durable", evidenceDigest: certbotAttachPlan.siteDigest },
+    { sequence: 3, stage: "APPLYING", recordedAt: "2026-07-21T02:12:02Z", resultCode: "tls_directives_replaced", evidenceDigest: certbotAttachPlan.siteDigest },
+    { sequence: 4, stage: "VALIDATING", recordedAt: "2026-07-21T02:12:03Z", resultCode: "nginx_syntax_valid", evidenceDigest: certbotAttachPlan.siteDigest },
+    { sequence: 5, stage: "RELOADING", recordedAt: "2026-07-21T02:12:04Z", resultCode: "nginx_reloaded", evidenceDigest: certbotAttachPlan.siteDigest },
+    { sequence: 6, stage: "VERIFYING", recordedAt: "2026-07-21T02:12:05Z", resultCode: "nginx_reloaded", evidenceDigest: certbotAttachPlan.siteDigest },
+    { sequence: 7, stage: "SUCCEEDED", recordedAt: "2026-07-21T02:12:06Z", resultCode: "tls_attachment_verified", evidenceDigest: `sha256:${"e".repeat(64)}` },
+  ],
+};
+
+const certbotAttachAccepted = {
+  ...operationAccepted,
+  operationType: "certbot.certificate.attach/v1",
+  planId: certbotAttachPlan.planId,
+  planHash: certbotAttachPlan.planHash,
 };
 
 const certbotRenewPlan = {
@@ -507,6 +572,8 @@ async function mockApi(
     onCertbotApproval?: (body: unknown) => void;
     onCertbotIssuePlan?: (body: unknown) => void;
     onCertbotIssueApproval?: (body: unknown) => void;
+    onCertbotAttachPlan?: (body: unknown) => void;
+    onCertbotAttachApproval?: (body: unknown) => void;
   } = {},
 ): Promise<void> {
   let authenticated = initiallyAuthenticated;
@@ -581,6 +648,15 @@ async function mockApi(
       operationOptions.onCertbotIssueApproval?.(request.postDataJSON());
       activeReceipt = certbotIssueReceipt;
       return route.fulfill({ status: 202, json: certbotIssueAccepted });
+    }
+    if (path === "/api/v1/operations/certbot/attach/plans" && request.method() === "POST") {
+      operationOptions.onCertbotAttachPlan?.(request.postDataJSON());
+      return route.fulfill({ json: certbotAttachPlan });
+    }
+    if (path === "/api/v1/operations/certbot/attach/approvals" && request.method() === "POST") {
+      operationOptions.onCertbotAttachApproval?.(request.postDataJSON());
+      activeReceipt = certbotAttachReceipt;
+      return route.fulfill({ status: 202, json: certbotAttachAccepted });
     }
     if (path === "/api/v1/operations/op_fixture/events") {
       operationOptions.onEvents?.();
@@ -888,6 +964,61 @@ test("G1 Certbot renewal test requires plan, external-effect intent, and PAM app
   expect(approvalBody.externalEffectConfirmed).toBe(true);
   expect(JSON.stringify(approvalBodies)).not.toContain("fixture-password");
   expect(await page.locator("body").innerText()).not.toContain("PRIVATE KEY");
+  const hasOverflow = await page.evaluate(
+    () => document.documentElement.scrollWidth > document.documentElement.clientWidth,
+  );
+  expect(hasOverflow).toBe(false);
+  const accessibility = await new AxeBuilder({ page }).analyze();
+  expect(
+    accessibility.violations.filter((violation) =>
+      ["critical", "serious"].includes(violation.impact ?? ""),
+    ),
+  ).toEqual([]);
+});
+
+test("G2 Certbot attach requires two intents and verifies responsive rollback disclosure", async ({ page }) => {
+  const planBodies: unknown[] = [];
+  const approvalBodies: unknown[] = [];
+  await page.setViewportSize({ width: 390, height: 844 });
+  await mockApi(page, true, health, {
+    certificateFixture: actionableAttachCertificates,
+    nginxFixture: issueNginx,
+    onCertbotAttachPlan: (body) => planBodies.push(body),
+    onCertbotAttachApproval: (body) => approvalBodies.push(body),
+  });
+  await page.goto("/certificates");
+
+  await expect(page.getByText("G2 연결 가능")).toBeVisible();
+  await page.getByRole("button", { name: "Nginx 연결 계획 만들기" }).dblclick();
+  await expect(page.getByRole("heading", { name: "care.example.com TLS 연결 계획" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "G2 · 제한된 설정 자동 원복" })).toBeVisible();
+  await expect(page.getByText(/jw-agent\/tls\/server\.crt.*live\/care\.example\.com\/fullchain\.pem/)).toBeVisible();
+  await expect(
+    page.getByLabel("Nginx TLS 인증서 연결").getByText(certbotAttachPlan.certificateFingerprint),
+  ).toBeVisible();
+
+  const approval = page.getByRole("button", { name: "재인증 후 TLS 연결" });
+  await page.getByLabel("Linux 계정 비밀번호로 exact plan 승인").fill("fixture-password");
+  await expect(approval).toBeDisabled();
+  await page.getByLabel(/인증서 지시문 두 개가 교체됨/).check();
+  await expect(approval).toBeDisabled();
+  await page.getByLabel(/nginx\.service reload와 기존 연결 재수립/).check();
+  await approval.dblclick();
+
+  await expect(page.getByRole("heading", { name: "TLS 연결 검증 완료" })).toBeVisible();
+  await expect(page.getByText(/SNI 인증서 지문·Certbot 갱신 상태/)).toBeVisible();
+  expect(planBodies).toHaveLength(1);
+  expect(approvalBodies).toHaveLength(1);
+  const planBody = planBodies[0] as Record<string, unknown>;
+  const approvalBody = approvalBodies[0] as Record<string, unknown>;
+  expect(planBody.primaryDomain).toBe("care.example.com");
+  expect(planBody.siteId).toBe(issueNginx.sites[1]?.siteId);
+  expect(planBody.expectedSiteDigest).toBe(issueNginx.sites[1]?.availableDigest);
+  expect(planBody.expectedInventoryDigest).toBe(certificates.inventoryDigest);
+  expect(planBody.expectedCertificateFingerprint).toBe(certificates.certificates[0]?.fingerprintSha256);
+  expect(approvalBody.configReplaceConfirmed).toBe(true);
+  expect(approvalBody.serviceReloadConfirmed).toBe(true);
+  expect(JSON.stringify(approvalBodies)).not.toContain("fixture-password");
   const hasOverflow = await page.evaluate(
     () => document.documentElement.scrollWidth > document.documentElement.clientWidth,
   );

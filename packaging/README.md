@@ -22,8 +22,9 @@ The current public edge still accepts an existing valid certificate path only.
 The P2C package contains the isolated one-shot runner, sanitized read-only
 certificate inventory, a planned/PAM-approved renewal dry-run, and guided
 issuance with DNS/listener/webroot preflight and explicit G1 external-effect
-consent. The private-LAN CA-failure path is VM-proven; public-CA success and
-local Nginx attachment remain unverified and separately gated.
+consent. The private-LAN CA-failure path and protected-vhost G2 attachment with
+loopback SNI read-back and exact rollback are VM-proven. Public-CA success
+remains unverified and separately gated.
 
 The public proxy socket uses the dedicated `jw-agent-proxy` group and
 `/run/jw-agent-proxy`. Nginx is never added to the privileged `jw-agent` group
