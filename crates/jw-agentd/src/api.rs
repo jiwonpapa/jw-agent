@@ -21,8 +21,10 @@ use axum::{Json, Router};
 use futures_core::Stream;
 use jw_contracts::{
     AccessSettingsView, AdditionalAuthPolicy, AdditionalAuthProviderStatus, AssuranceLevel,
-    AssuranceView, AuthFailureClass, AuthPurpose, AuthRequest, AuthResult, CapabilityStatus,
-    CapabilityView, CertificateInventoryView, CertificateSummaryView, HealthStatus, HealthView,
+    AssuranceView, AuthFailureClass, AuthPurpose, AuthRequest, AuthResult,
+    CERTBOT_RENEW_TEST_OPERATION, CapabilityStatus, CapabilityView,
+    CertbotRenewTestApprovalRequest, CertbotRenewTestPlanRequest, CertbotRenewTestPlanView,
+    CertificateInventoryView, CertificateSummaryView, HealthStatus, HealthView,
     IPC_PROTOCOL_VERSION, IngressChannel, IntegrationCatalogView, LoginRequest,
     MANAGED_CONFIG_OPERATION, ManagedConfigApprovalRequest, ManagedConfigPlanRequest,
     ManagedConfigPlanView, ManagedConfigResourceView, NGINX_SITE_STATE_OPERATION,
@@ -95,6 +97,8 @@ impl AppState {
         services,
         nginx_sites,
         certificates,
+        plan_certbot_renew_test,
+        approve_certbot_renew_test,
         integrations,
         access_settings,
         update_additional_auth,
@@ -122,6 +126,9 @@ impl AppState {
         NginxSitesView,
         CertificateInventoryView,
         CertificateSummaryView,
+        CertbotRenewTestPlanRequest,
+        CertbotRenewTestPlanView,
+        CertbotRenewTestApprovalRequest,
         jw_contracts::NginxSiteObservation,
         jw_contracts::NginxSiteState,
         NginxSiteStatePlanRequest,
@@ -178,6 +185,14 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/v1/services", get(services))
         .route("/api/v1/services/nginx/sites", get(nginx_sites))
         .route("/api/v1/certificates", get(certificates))
+        .route(
+            "/api/v1/operations/certbot/renew-test/plans",
+            post(plan_certbot_renew_test),
+        )
+        .route(
+            "/api/v1/operations/certbot/renew-test/approvals",
+            post(approve_certbot_renew_test),
+        )
         .route(
             "/api/v1/operations/nginx/site-state/plans",
             post(plan_nginx_site_state),
@@ -493,12 +508,150 @@ async fn certificates(
     headers: HeaderMap,
 ) -> Result<Json<CertificateInventoryView>, ApiProblem> {
     let (_, session) = current_session(&state, &headers, unix_milliseconds()?)?;
-    let inventory = state
+    let mut inventory = state
         .ops
-        .certificate_inventory(session.subject)
+        .certificate_inventory(session.subject.clone())
         .await
         .map_err(map_ops_error)?;
+    if let Some(reason) =
+        certbot_mutation_gate_reason(&state, &session.subject, session.additional_auth_policy).await
+    {
+        inventory.renew_test_operation_type = None;
+        inventory.assurance.reason = Some(reason);
+    }
     Ok(Json(inventory))
+}
+
+async fn certbot_mutation_gate_reason(
+    state: &AppState,
+    subject: &Subject,
+    additional_auth_policy: AdditionalAuthPolicy,
+) -> Option<String> {
+    if !matches!(subject.role, Role::Admin | Role::Operator) {
+        return Some(String::from("현재 계정은 인증서 작업 권한이 없습니다."));
+    }
+    if additional_auth_policy != AdditionalAuthPolicy::Disabled {
+        return Some(String::from(
+            "설정된 추가 인증 수단이 아직 준비되지 않아 인증서 작업이 차단되었습니다.",
+        ));
+    }
+    match state.ops.capabilities().await {
+        Ok(capability) if capability.forensic_lockdown => Some(String::from(
+            "감사 원장 무결성 잠금 상태여서 모든 변경이 차단되었습니다.",
+        )),
+        Ok(capability)
+            if !capability.read_only
+                && capability
+                    .supported_operations
+                    .iter()
+                    .any(|operation| operation == CERTBOT_RENEW_TEST_OPERATION) =>
+        {
+            None
+        }
+        Ok(_) => Some(String::from(
+            "이 서버에서는 Certbot 갱신 사전 검증을 사용할 수 없습니다.",
+        )),
+        Err(_) => Some(String::from(
+            "권한 분리 서비스 상태를 확인할 수 없어 인증서 작업이 차단되었습니다.",
+        )),
+    }
+}
+
+#[utoipa::path(post, path = "/api/v1/operations/certbot/renew-test/plans", request_body = CertbotRenewTestPlanRequest, responses(
+    (status = 200, description = "Immutable Certbot renewal dry-run plan", body = CertbotRenewTestPlanView),
+    (status = 400, description = "Invalid typed request", body = ProblemDetails),
+    (status = 401, description = "Authentication required", body = ProblemDetails),
+    (status = 403, description = "Role or CSRF rejected", body = ProblemDetails),
+    (status = 409, description = "Stale, busy, or idempotency conflict", body = ProblemDetails),
+    (status = 423, description = "Forensic lockdown", body = ProblemDetails)
+))]
+async fn plan_certbot_renew_test(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(input): Json<CertbotRenewTestPlanRequest>,
+) -> Result<Json<CertbotRenewTestPlanView>, ApiProblem> {
+    input.validate().map_err(ApiProblem::bad_request)?;
+    let now = unix_milliseconds()?;
+    let (token, session) = current_session(&state, &headers, now)?;
+    require_csrf(&headers, token.as_str())?;
+    let plan = state
+        .ops
+        .plan_certbot_renew_test(session.subject, input)
+        .await
+        .map_err(map_ops_error)?;
+    Ok(Json(plan))
+}
+
+#[utoipa::path(post, path = "/api/v1/operations/certbot/renew-test/approvals", request_body = CertbotRenewTestApprovalRequest, responses(
+    (status = 202, description = "Certbot renewal test accepted", body = OperationAcceptedView),
+    (status = 400, description = "Invalid approval shape", body = ProblemDetails),
+    (status = 401, description = "Authentication required", body = ProblemDetails),
+    (status = 403, description = "Claim, role, or CSRF rejected", body = ProblemDetails),
+    (status = 409, description = "Expired, stale, busy, or conflicting operation", body = ProblemDetails),
+    (status = 423, description = "Forensic lockdown", body = ProblemDetails),
+    (status = 428, description = "Additional authentication is configured but unavailable", body = ProblemDetails)
+))]
+async fn approve_certbot_renew_test(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(input): Json<CertbotRenewTestApprovalRequest>,
+) -> Result<(StatusCode, Json<OperationAcceptedView>), ApiProblem> {
+    input.validate_shape().map_err(ApiProblem::bad_request)?;
+    let now = unix_milliseconds()?;
+    let (token, session) = current_session(&state, &headers, now)?;
+    require_csrf(&headers, token.as_str())?;
+    if session.additional_auth_policy != AdditionalAuthPolicy::Disabled {
+        return Err(ApiProblem::new(
+            StatusCode::PRECONDITION_REQUIRED,
+            "additional_authentication_unavailable",
+        ));
+    }
+    if input.additional_auth_claim.is_some() {
+        return Err(ApiProblem::bad_request(
+            "additional_authentication_claim_unexpected",
+        ));
+    }
+    state
+        .store
+        .consume_operation_claim(
+            token.as_str(),
+            &session.subject,
+            &input.plan_hash,
+            &input.reauth_token,
+            now,
+        )
+        .map_err(map_operation_claim_error)?;
+    let actor = session.subject;
+    let receipt = state
+        .ops
+        .approve_certbot_renew_test(
+            actor.clone(),
+            input.plan_id,
+            input.plan_hash,
+            input.idempotency_key,
+            input.external_effect_confirmed,
+        )
+        .await
+        .map_err(map_ops_error)?;
+    if receipt.operation_type != CERTBOT_RENEW_TEST_OPERATION {
+        return Err(ApiProblem::internal());
+    }
+    let operation_id = receipt.operation_id.clone();
+    let accepted = OperationAcceptedView {
+        schema_version: receipt.schema_version,
+        operation_type: receipt.operation_type,
+        operation_id: operation_id.clone(),
+        plan_id: receipt.plan_id,
+        plan_hash: receipt.plan_hash,
+        actor: receipt.actor,
+        current_stage: receipt.terminal_state,
+        event_stream: format!("/api/v1/operations/{operation_id}/events"),
+    };
+    let ops = Arc::clone(&state.ops);
+    let _execution_task = tokio::spawn(async move {
+        let _execution_result = ops.execute_operation(actor, operation_id).await;
+    });
+    Ok((StatusCode::ACCEPTED, Json(accepted)))
 }
 
 async fn nginx_mutation_gate_reason(
@@ -1295,7 +1448,8 @@ fn map_ops_error(error: OpsBrokerError) -> ApiProblem {
             | "size_limit"
             | "invalid_encoding"
             | "unsupported_service_action"
-            | "approval_intent" => ApiProblem::bad_request(code),
+            | "approval_intent"
+            | "external_effect_confirmation" => ApiProblem::bad_request(code),
             _ => ApiProblem::new(StatusCode::CONFLICT, code),
         },
     }
@@ -1567,6 +1721,25 @@ mod tests {
             &'a self,
             _actor: Subject,
         ) -> OpsFuture<'a, jw_contracts::CertificateInventoryView> {
+            Box::pin(async move { Err(OpsBrokerError::Unavailable) })
+        }
+
+        fn plan_certbot_renew_test<'a>(
+            &'a self,
+            _actor: Subject,
+            _plan: jw_contracts::CertbotRenewTestPlanRequest,
+        ) -> OpsFuture<'a, jw_contracts::CertbotRenewTestPlanView> {
+            Box::pin(async move { Err(OpsBrokerError::Unavailable) })
+        }
+
+        fn approve_certbot_renew_test<'a>(
+            &'a self,
+            _actor: Subject,
+            _plan_id: String,
+            _plan_hash: String,
+            _idempotency_key: String,
+            _external_effect_confirmed: bool,
+        ) -> OpsFuture<'a, jw_contracts::OperationReceiptView> {
             Box::pin(async move { Err(OpsBrokerError::Unavailable) })
         }
 

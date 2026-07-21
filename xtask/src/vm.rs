@@ -628,6 +628,83 @@ chmod 0600 /etc/letsencrypt/renewal/jw-agent-p1.test.conf
     }
 }
 
+pub fn gate_p2_certbot_renew_operation(_root: &Path, timeout: Duration) -> Result<(), String> {
+    let config = VmConfig::load()?;
+    let password = read_secret(&config.password_file)?;
+    let prepared = config.ssh(
+        "sudo systemctl enable --now certbot.timer\nsudo systemctl restart jw-certd.socket jw-opsd.service jw-agentd.service",
+        None,
+        timeout,
+    )?;
+    require_success(&prepared, "Certbot renewal operation preparation", false)?;
+    wait_for_public_agent(&config, timeout)?;
+    let result = (|| {
+        let mut session = P2ApiSession::login(&config, &password, timeout)?;
+        let success = session.operate_certbot_renew_test(&config, &password, timeout)?;
+        require_terminal(&success, "SUCCEEDED", "Certbot renewal dry-run")?;
+        for evidence in [
+            "\"resultCode\":\"certbot_renew_dry_run_started\"",
+            "\"resultCode\":\"certbot_renew_dry_run_completed\"",
+            "\"resultCode\":\"renewal_test_verified\"",
+        ] {
+            if !success.contains(evidence) {
+                return Err(format!("Certbot renewal receipt omitted {evidence}"));
+            }
+        }
+        for forbidden in [
+            "No renewals were attempted",
+            "/etc/letsencrypt",
+            "BEGIN PRIVATE KEY",
+            "accountEmail",
+        ] {
+            if success.contains(forbidden) {
+                return Err(format!("Certbot renewal receipt exposed {forbidden}"));
+            }
+        }
+        let snapshot = config.ssh(
+            "sudo find /var/lib/jw-agent/opsd/snapshots -type f -name certificate-inventory.json -user root -perm 0600 -print -quit | grep -q .\n! sudo strings /var/lib/jw-agent/opsd/opsd.sqlite3 | grep -Fq 'No renewals were attempted'\n! sudo journalctl -u jw-opsd.service -u jw-agentd.service -u 'jw-certd@*.service' --no-pager -o cat | grep -Fq 'No renewals were attempted'\n! pgrep -x jw-certd >/dev/null\n! find /run/jw-agent-certd -maxdepth 1 -type f -name 'request-*.ini' | grep -q .",
+            None,
+            timeout,
+        )?;
+        require_success(&snapshot, "Certbot renewal evidence boundary", false)?;
+
+        let disabled = config.ssh("sudo systemctl disable --now certbot.timer", None, timeout)?;
+        require_success(&disabled, "Certbot timer failure fixture", false)?;
+        let failure = session.operate_certbot_renew_test(&config, &password, timeout)?;
+        require_terminal(&failure, "REJECTED", "Certbot unhealthy timer rejection")?;
+        if !failure.contains("\"resultCode\":\"renewal_timer_unhealthy\"")
+            || failure.contains("\"rollbackResult\":\"verified\"")
+        {
+            return Err(String::from(
+                "Certbot timer failure was missing or falsely reported as rolled back",
+            ));
+        }
+        Ok(())
+    })();
+    let restored = config.ssh(
+        "sudo systemctl enable --now certbot.timer\nsudo systemctl restart jw-certd.socket jw-opsd.service jw-agentd.service",
+        None,
+        timeout,
+    );
+    match (result, restored) {
+        (Ok(()), Ok(output)) => {
+            require_success(&output, "Certbot renewal operation cleanup", false)
+        }
+        (Err(error), Ok(output)) => {
+            match require_success(&output, "Certbot renewal operation cleanup", false) {
+                Ok(()) => Err(error),
+                Err(cleanup_error) => Err(format!(
+                    "{error}; Certbot renewal cleanup also failed: {cleanup_error}"
+                )),
+            }
+        }
+        (Ok(()), Err(cleanup_error)) => Err(cleanup_error),
+        (Err(error), Err(cleanup_error)) => Err(format!(
+            "{error}; Certbot renewal cleanup also failed: {cleanup_error}"
+        )),
+    }
+}
+
 pub fn gate_p2_managed_config(_root: &Path, timeout: Duration) -> Result<(), String> {
     let config = VmConfig::load()?;
     let password = read_secret(&config.password_file)?;
@@ -1259,6 +1336,119 @@ impl P2ApiSession {
     ) -> Result<String, String> {
         let plan = self.plan_managed_config(config, site_name, proposed_content, timeout)?;
         self.approve_managed_config(config, password, &plan, timeout)
+    }
+
+    fn operate_certbot_renew_test(
+        &mut self,
+        config: &VmConfig,
+        password: &str,
+        timeout: Duration,
+    ) -> Result<String, String> {
+        let inventory = self.get(config, "/api/v1/certificates", timeout)?;
+        expect_http(&inventory, 200, "Certbot renewal inventory")?;
+        let operation_type = json_string_field(&inventory.body, "renewTestOperationType")?;
+        if operation_type != "certbot.certificate.renew_test/v1" {
+            return Err(String::from(
+                "certificate inventory did not advertise the typed renewal test",
+            ));
+        }
+        let schema_version = u16::try_from(json_unsigned_field(&inventory.body, "schemaVersion")?)
+            .map_err(|_| String::from("certificate schema version overflow"))?;
+        let inventory_digest = json_string_field(&inventory.body, "inventoryDigest")?;
+        let idempotency_key = operation_idempotency_key()?;
+        let plan_body = format!(
+            "{{\"schemaVersion\":{},\"operationType\":{},\"expectedInventoryDigest\":{},\"idempotencyKey\":{}}}",
+            schema_version,
+            json_string(&operation_type),
+            json_string(&inventory_digest),
+            json_string(&idempotency_key),
+        );
+        let plan = public_api_request(
+            config,
+            "POST",
+            "/api/v1/operations/certbot/renew-test/plans",
+            &self.cookie_jar.path,
+            Some(&self.csrf_token),
+            Some(plan_body.as_bytes()),
+            timeout,
+        )?;
+        expect_http(&plan, 200, "Certbot renewal plan")?;
+        if !plan.body.contains("\"level\":\"g1_verified_action\"")
+            || !plan.body.contains("\"rollbackSupport\":\"not_guaranteed\"")
+            || !plan.body.contains("ACME staging")
+        {
+            return Err(String::from(
+                "Certbot renewal plan omitted its G1 external-effect boundary",
+            ));
+        }
+        let plan_id = json_string_field(&plan.body, "planId")?;
+        let plan_hash = json_string_field(&plan.body, "planHash")?;
+        let reauth_body = format!(
+            "{{\"password\":{},\"purpose\":{{\"kind\":\"operation\",\"planHash\":{}}}}}",
+            json_string(password),
+            json_string(&plan_hash),
+        );
+        let reauth = public_api_request(
+            config,
+            "POST",
+            "/api/v1/auth/reauth",
+            &self.cookie_jar.path,
+            Some(&self.csrf_token),
+            Some(reauth_body.as_bytes()),
+            timeout,
+        )?;
+        expect_http(&reauth, 200, "Certbot exact-plan PAM reauthentication")?;
+        self.csrf_token = json_string_field(&reauth.body, "csrfToken")?;
+        let reauth_token = json_string_field(&reauth.body, "reauthToken")?;
+        let approval_body = format!(
+            "{{\"schemaVersion\":{},\"planId\":{},\"planHash\":{},\"idempotencyKey\":{},\"reauthToken\":{},\"externalEffectConfirmed\":true}}",
+            schema_version,
+            json_string(&plan_id),
+            json_string(&plan_hash),
+            json_string(&idempotency_key),
+            json_string(&reauth_token),
+        );
+        let accepted = public_api_request(
+            config,
+            "POST",
+            "/api/v1/operations/certbot/renew-test/approvals",
+            &self.cookie_jar.path,
+            Some(&self.csrf_token),
+            Some(approval_body.as_bytes()),
+            timeout,
+        )?;
+        expect_http(&accepted, 202, "Certbot renewal approval")?;
+        let operation_id = json_string_field(&accepted.body, "operationId")?;
+        let event_stream = json_string_field(&accepted.body, "eventStream")?;
+        if event_stream != format!("/api/v1/operations/{operation_id}/events") {
+            return Err(String::from(
+                "Certbot renewal returned a non-canonical event stream",
+            ));
+        }
+        let operation_path = format!("/api/v1/operations/{operation_id}");
+        let started = Instant::now();
+        loop {
+            let current = self.get(config, &operation_path, timeout)?;
+            expect_http(&current, 200, "Certbot renewal receipt")?;
+            let stage = json_string_field(&current.body, "terminalState")?;
+            if matches!(
+                stage.as_str(),
+                "SUCCEEDED"
+                    | "ROLLED_BACK"
+                    | "RECOVERY_REQUIRED"
+                    | "REJECTED"
+                    | "EXPIRED"
+                    | "CANCELLED_BEFORE_APPLY"
+            ) {
+                return Ok(current.body);
+            }
+            if started.elapsed() >= timeout {
+                return Err(String::from(
+                    "Certbot renewal test did not reach a terminal receipt before timeout",
+                ));
+            }
+            thread::sleep(Duration::from_millis(250));
+        }
     }
 }
 

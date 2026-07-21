@@ -14,6 +14,7 @@ pub struct OpsPaths {
     pub letsencrypt_live: PathBuf,
     pub letsencrypt_archive: PathBuf,
     pub letsencrypt_renewal: PathBuf,
+    pub certbot_executable: PathBuf,
     pub enforce_root_ownership: bool,
 }
 
@@ -30,6 +31,7 @@ impl Default for OpsPaths {
             letsencrypt_live: PathBuf::from("/etc/letsencrypt/live"),
             letsencrypt_archive: PathBuf::from("/etc/letsencrypt/archive"),
             letsencrypt_renewal: PathBuf::from("/etc/letsencrypt/renewal"),
+            certbot_executable: PathBuf::from("/usr/bin/certbot"),
             enforce_root_ownership: true,
         }
     }
@@ -50,6 +52,7 @@ impl OpsPaths {
             letsencrypt_live: root.join("etc/letsencrypt/live"),
             letsencrypt_archive: root.join("etc/letsencrypt/archive"),
             letsencrypt_renewal: root.join("etc/letsencrypt/renewal"),
+            certbot_executable: root.join("usr/bin/certbot"),
             enforce_root_ownership: false,
         }
     }

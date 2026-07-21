@@ -11,6 +11,7 @@ use jw_contracts::{
     AssuranceLevel, AssuranceView, CertificateInventoryView, CertificateSummaryView,
     OPERATION_SCHEMA_VERSION, RollbackSupport, sha256_digest, validate_domain,
 };
+use serde::Deserialize;
 use serde::Serialize;
 
 use crate::config::OpsPaths;
@@ -20,6 +21,27 @@ use crate::runner::{CommandClass, OperationRunner};
 const CERTIFICATE_MAX_BYTES: u64 = 256 * 1_024;
 const COMMAND_OUTPUT_MAX_BYTES: usize = 64 * 1_024;
 const OPENSSL_TIMEOUT: Duration = Duration::from_secs(5);
+
+pub const CERTBOT_RENEW_IMPACT: [&str; 3] = [
+    "Certbot이 ACME staging 서버에 실제 갱신 challenge를 요청할 수 있습니다.",
+    "인증서 교체를 적용하지 않는 dry-run이지만 외부 CA 통신과 challenge 요청은 되돌릴 수 없습니다.",
+    "실행은 최대 12분 걸릴 수 있으며 결과 원문 대신 digest와 상태만 기록합니다.",
+];
+
+pub const CERTBOT_RENEW_RECOVERY_PATH: [&str; 3] = [
+    "SSH로 certbot.timer와 Nginx 상태를 확인합니다.",
+    "감사 영수증의 command class·exit·timeout digest를 확인합니다.",
+    "중단된 dry-run은 새 계획과 재인증으로 다시 실행합니다.",
+];
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CertbotRenewPlanPayload {
+    pub inventory_digest: String,
+    pub timer_enabled: bool,
+    pub timer_active: bool,
+    pub certificate_count: u32,
+}
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -36,7 +58,7 @@ pub fn certificate_inventory(
     runner: &dyn OperationRunner,
     now_ms: i64,
 ) -> Result<CertificateInventoryView, OpsError> {
-    let certbot_installed = Path::new("/usr/bin/certbot").is_file();
+    let certbot_installed = paths.certbot_executable.is_file();
     let timer_enabled = runner
         .run(CommandClass::CertbotTimerEnabled)
         .is_ok_and(|evidence| evidence.success);
@@ -364,6 +386,29 @@ fn inventory_assurance() -> AssuranceView {
         rollback_verifier: Vec::new(),
         reason: Some(String::from(
             "발급·attach 작업은 P2C operation fault gate 전까지 차단됩니다.",
+        )),
+    }
+}
+
+#[must_use]
+pub fn renew_test_assurance() -> AssuranceView {
+    AssuranceView {
+        level: AssuranceLevel::G1VerifiedAction,
+        rollback_support: RollbackSupport::NotGuaranteed,
+        operation_available: true,
+        scope: vec![String::from(
+            "고정된 certbot renew --dry-run만 one-shot network runner에서 실행합니다.",
+        )],
+        excluded_effects: vec![String::from(
+            "CA challenge·rate-limit 기록 같은 외부 효과는 원복할 수 없습니다.",
+        )],
+        apply_verifier: vec![
+            String::from("Certbot exit와 timeout 상태를 digest-only 증거로 검증합니다."),
+            String::from("certbot.timer와 sanitized certificate inventory를 다시 읽습니다."),
+        ],
+        rollback_verifier: Vec::new(),
+        reason: Some(String::from(
+            "로컬 설정을 바꾸지 않는 외부 갱신 검증이므로 자동 원복 대상이 없습니다.",
         )),
     }
 }

@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+mod certbot_runner;
 mod certificate;
 mod config;
 mod digest;
@@ -11,6 +12,7 @@ mod nginx;
 mod runner;
 mod snapshot;
 
+pub use certbot_runner::{CertbotRunner, UdsCertbotRunner};
 pub use config::{OpsPaths, OpsPolicy};
 pub use engine::OpsService;
 pub use error::OpsError;

@@ -1,12 +1,94 @@
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
-use crate::{AssuranceView, IPC_PROTOCOL_VERSION};
+use crate::{
+    AssuranceView, IDEMPOTENCY_KEY_MAX_BYTES, IDEMPOTENCY_KEY_MIN_BYTES, IPC_PROTOCOL_VERSION,
+    OPERATION_SCHEMA_VERSION, OperationApprovalRequest, Subject, validate_digest,
+};
 
 pub const CERT_FRAME_MAX_BYTES: usize = 16 * 1_024;
 pub const CERTBOT_ISSUE_OPERATION: &str = "certbot.certificate.issue/v1";
 pub const CERTBOT_RENEW_TEST_OPERATION: &str = "certbot.certificate.renew_test/v1";
 pub const CERTBOT_MAX_DOMAINS: usize = 5;
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CertbotRenewTestPlanRequest {
+    pub schema_version: u16,
+    pub operation_type: String,
+    pub expected_inventory_digest: String,
+    pub idempotency_key: String,
+}
+
+impl CertbotRenewTestPlanRequest {
+    pub fn validate(&self) -> Result<(), &'static str> {
+        if self.schema_version != OPERATION_SCHEMA_VERSION {
+            return Err("schema_version");
+        }
+        if self.operation_type != CERTBOT_RENEW_TEST_OPERATION {
+            return Err("operation_type");
+        }
+        validate_digest(&self.expected_inventory_digest)?;
+        validate_token(
+            &self.idempotency_key,
+            IDEMPOTENCY_KEY_MIN_BYTES,
+            IDEMPOTENCY_KEY_MAX_BYTES,
+            "idempotency_key",
+        )
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CertbotRenewTestPlanView {
+    pub schema_version: u16,
+    pub operation_type: String,
+    pub plan_id: String,
+    pub plan_hash: String,
+    pub created_at: String,
+    pub expires_at: String,
+    pub actor: Subject,
+    pub inventory_digest: String,
+    pub timer_enabled: bool,
+    pub timer_active: bool,
+    pub certificate_count: u32,
+    pub impact: Vec<String>,
+    pub recovery_path: Vec<String>,
+    pub assurance: AssuranceView,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CertbotRenewTestApprovalRequest {
+    pub schema_version: u16,
+    pub plan_id: String,
+    pub plan_hash: String,
+    pub idempotency_key: String,
+    #[schema(format = Password)]
+    pub reauth_token: String,
+    #[schema(format = Password)]
+    pub additional_auth_claim: Option<String>,
+    pub external_effect_confirmed: bool,
+}
+
+impl CertbotRenewTestApprovalRequest {
+    pub fn validate_shape(&self) -> Result<(), &'static str> {
+        OperationApprovalRequest {
+            schema_version: self.schema_version,
+            plan_id: self.plan_id.clone(),
+            plan_hash: self.plan_hash.clone(),
+            idempotency_key: self.idempotency_key.clone(),
+            reauth_token: self.reauth_token.clone(),
+            additional_auth_claim: self.additional_auth_claim.clone(),
+        }
+        .validate_shape()?;
+        if self.external_effect_confirmed {
+            Ok(())
+        } else {
+            Err("external_effect_confirmation")
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
@@ -269,8 +351,8 @@ fn validate_token(
 #[cfg(test)]
 mod tests {
     use super::{
-        CertbotCommand, CertbotCommandRequest, CertificateEnvironment, canonical_domains,
-        validate_domain,
+        CertbotCommand, CertbotCommandRequest, CertbotRenewTestApprovalRequest,
+        CertificateEnvironment, canonical_domains, validate_domain,
     };
 
     #[test]
@@ -309,5 +391,24 @@ mod tests {
         };
         *tos_agreed = false;
         assert_eq!(request.validate(1_000), Err("tos_not_agreed"));
+    }
+
+    #[test]
+    fn renewal_approval_requires_external_effect_confirmation() {
+        let mut request = CertbotRenewTestApprovalRequest {
+            schema_version: 1,
+            plan_id: String::from("plan_0123456789abcdef"),
+            plan_hash: crate::sha256_digest(b"plan"),
+            idempotency_key: String::from("renew-key-0123456"),
+            reauth_token: String::from("reauth-token-0123456789"),
+            additional_auth_claim: None,
+            external_effect_confirmed: false,
+        };
+        assert_eq!(
+            request.validate_shape(),
+            Err("external_effect_confirmation")
+        );
+        request.external_effect_confirmed = true;
+        assert!(request.validate_shape().is_ok());
     }
 }

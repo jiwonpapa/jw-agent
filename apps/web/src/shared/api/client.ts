@@ -7,6 +7,9 @@ import type {
   AccessSettingsView,
   AdditionalAuthPolicy,
   CertificateInventoryView,
+  CertbotRenewTestApprovalRequest,
+  CertbotRenewTestPlanRequest,
+  CertbotRenewTestPlanView,
   HealthView,
   HostObservation,
   IntegrationCatalogView,
@@ -125,6 +128,34 @@ export async function getCertificates(signal?: AbortSignal): Promise<Certificate
   const { data, error, response } = await api.GET("/api/v1/certificates", {
     signal: signal ?? null,
   });
+  if (data !== undefined) return data;
+  throw new ApiError(error, response);
+}
+
+export async function planCertbotRenewTest(
+  input: CertbotRenewTestPlanRequest,
+): Promise<CertbotRenewTestPlanView> {
+  const { data, error, response } = await api.POST(
+    "/api/v1/operations/certbot/renew-test/plans",
+    {
+      body: input,
+      headers: mutationHeaders(),
+    },
+  );
+  if (data !== undefined) return data;
+  throw new ApiError(error, response);
+}
+
+export async function approveCertbotRenewTest(
+  input: CertbotRenewTestApprovalRequest,
+): Promise<OperationAcceptedView> {
+  const { data, error, response } = await api.POST(
+    "/api/v1/operations/certbot/renew-test/approvals",
+    {
+      body: input,
+      headers: mutationHeaders(),
+    },
+  );
   if (data !== undefined) return data;
   throw new ApiError(error, response);
 }

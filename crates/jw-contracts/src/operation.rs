@@ -480,6 +480,17 @@ pub enum OpsRequestBody {
     CertificateInventory {
         actor: Subject,
     },
+    PlanCertbotRenewTest {
+        actor: Subject,
+        plan: crate::CertbotRenewTestPlanRequest,
+    },
+    ApproveCertbotRenewTest {
+        actor: Subject,
+        plan_id: String,
+        plan_hash: String,
+        idempotency_key: String,
+        external_effect_confirmed: bool,
+    },
     ReadManagedConfig {
         actor: Subject,
         resource_id: String,
@@ -524,9 +535,19 @@ impl OpsRequest {
         if self.deadline_unix_ms <= now_unix_ms {
             return Err("deadline_expired");
         }
+        if matches!(
+            &self.body,
+            OpsRequestBody::ApproveCertbotRenewTest {
+                external_effect_confirmed: false,
+                ..
+            }
+        ) {
+            return Err("external_effect_confirmation");
+        }
         match &self.body {
             OpsRequestBody::Capabilities => Ok(()),
             OpsRequestBody::CertificateInventory { .. } => Ok(()),
+            OpsRequestBody::PlanCertbotRenewTest { plan, .. } => plan.validate(),
             OpsRequestBody::ReadManagedConfig { resource_id, .. } => {
                 validate_identifier(resource_id, "ngc_", "resource_id")
             }
@@ -539,6 +560,12 @@ impl OpsRequest {
                 ..
             }
             | OpsRequestBody::ApproveManagedConfig {
+                plan_id,
+                plan_hash,
+                idempotency_key,
+                ..
+            }
+            | OpsRequestBody::ApproveCertbotRenewTest {
                 plan_id,
                 plan_hash,
                 idempotency_key,
@@ -579,6 +606,7 @@ pub struct OpsResponse {
 pub enum OpsResponseBody {
     Capabilities(OpsCapabilityResponse),
     CertificateInventory(crate::CertificateInventoryView),
+    CertbotRenewTestPlan(crate::CertbotRenewTestPlanView),
     ManagedConfigResource(ManagedConfigResourceView),
     NginxSiteStatePlan(NginxSiteStatePlanView),
     ManagedConfigPlan(ManagedConfigPlanView),

@@ -164,6 +164,38 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/operations/certbot/renew-test/approvals": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["approve_certbot_renew_test"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/operations/certbot/renew-test/plans": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["plan_certbot_renew_test"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/operations/nginx/site-state/approvals": {
         parameters: {
             query?: never;
@@ -360,6 +392,43 @@ export interface components {
             opsd: components["schemas"]["CapabilityStatus"];
             readOnly: boolean;
             supportedOperations: string[];
+        };
+        CertbotRenewTestApprovalRequest: {
+            /** Format: password */
+            additionalAuthClaim?: string | null;
+            externalEffectConfirmed: boolean;
+            idempotencyKey: string;
+            planHash: string;
+            planId: string;
+            /** Format: password */
+            reauthToken: string;
+            /** Format: int32 */
+            schemaVersion: number;
+        };
+        CertbotRenewTestPlanRequest: {
+            expectedInventoryDigest: string;
+            idempotencyKey: string;
+            operationType: string;
+            /** Format: int32 */
+            schemaVersion: number;
+        };
+        CertbotRenewTestPlanView: {
+            actor: components["schemas"]["Subject"];
+            assurance: components["schemas"]["AssuranceView"];
+            /** Format: int32 */
+            certificateCount: number;
+            createdAt: string;
+            expiresAt: string;
+            impact: string[];
+            inventoryDigest: string;
+            operationType: string;
+            planHash: string;
+            planId: string;
+            recoveryPath: string[];
+            /** Format: int32 */
+            schemaVersion: number;
+            timerActive: boolean;
+            timerEnabled: boolean;
         };
         CertificateInventoryView: {
             assurance: components["schemas"]["AssuranceView"];
@@ -1075,6 +1144,153 @@ export interface operations {
             };
             /** @description Authentication required */
             401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    approve_certbot_renew_test: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CertbotRenewTestApprovalRequest"];
+            };
+        };
+        responses: {
+            /** @description Certbot renewal test accepted */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OperationAcceptedView"];
+                };
+            };
+            /** @description Invalid approval shape */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Authentication required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Claim, role, or CSRF rejected */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Expired, stale, busy, or conflicting operation */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Forensic lockdown */
+            423: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Additional authentication is configured but unavailable */
+            428: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    plan_certbot_renew_test: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CertbotRenewTestPlanRequest"];
+            };
+        };
+        responses: {
+            /** @description Immutable Certbot renewal dry-run plan */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CertbotRenewTestPlanView"];
+                };
+            };
+            /** @description Invalid typed request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Authentication required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Role or CSRF rejected */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Stale, busy, or idempotency conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Forensic lockdown */
+            423: {
                 headers: {
                     [name: string]: unknown;
                 };

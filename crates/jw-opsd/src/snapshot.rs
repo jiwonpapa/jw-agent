@@ -35,6 +35,16 @@ pub struct ManagedConfigSnapshot {
     pub gid: u32,
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CertificateInventorySnapshot {
+    pub schema_version: u16,
+    pub inventory_digest: String,
+    pub timer_enabled: bool,
+    pub timer_active: bool,
+    pub certificate_count: u32,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SnapshotRecord {
     pub relative_path: String,
@@ -61,6 +71,23 @@ pub fn write_managed_config_snapshot(
     let bytes =
         serde_json::to_vec(snapshot).map_err(|error| OpsError::Filesystem(error.to_string()))?;
     write_snapshot_bytes(paths, policy, operation_id, "managed-config.json", &bytes)
+}
+
+pub fn write_certificate_inventory_snapshot(
+    paths: &OpsPaths,
+    policy: &OpsPolicy,
+    operation_id: &str,
+    snapshot: &CertificateInventorySnapshot,
+) -> Result<SnapshotRecord, OpsError> {
+    let bytes =
+        serde_json::to_vec(snapshot).map_err(|error| OpsError::Filesystem(error.to_string()))?;
+    write_snapshot_bytes(
+        paths,
+        policy,
+        operation_id,
+        "certificate-inventory.json",
+        &bytes,
+    )
 }
 
 fn write_snapshot_bytes(
@@ -122,6 +149,14 @@ pub fn read_managed_config_snapshot(
     record: &SnapshotRecord,
 ) -> Result<ManagedConfigSnapshot, OpsError> {
     let bytes = read_snapshot_bytes(paths, record, 2 * 1_024 * 1_024)?;
+    serde_json::from_slice(&bytes).map_err(|error| OpsError::Filesystem(error.to_string()))
+}
+
+pub fn read_certificate_inventory_snapshot(
+    paths: &OpsPaths,
+    record: &SnapshotRecord,
+) -> Result<CertificateInventorySnapshot, OpsError> {
+    let bytes = read_snapshot_bytes(paths, record, 64 * 1_024)?;
     serde_json::from_slice(&bytes).map_err(|error| OpsError::Filesystem(error.to_string()))
 }
 

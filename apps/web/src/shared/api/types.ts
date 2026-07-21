@@ -9,6 +9,11 @@ export type NginxSitesView = components["schemas"]["NginxSitesView"];
 export type NginxSiteObservation = components["schemas"]["NginxSiteObservation"];
 export type CertificateInventoryView = components["schemas"]["CertificateInventoryView"];
 export type CertificateSummaryView = components["schemas"]["CertificateSummaryView"];
+export type CertbotRenewTestPlanRequest =
+  components["schemas"]["CertbotRenewTestPlanRequest"];
+export type CertbotRenewTestPlanView = components["schemas"]["CertbotRenewTestPlanView"];
+export type CertbotRenewTestApprovalRequest =
+  components["schemas"]["CertbotRenewTestApprovalRequest"];
 export type NginxSiteState = components["schemas"]["NginxSiteState"];
 export type NginxSiteStatePlanRequest =
   components["schemas"]["NginxSiteStatePlanRequest"];

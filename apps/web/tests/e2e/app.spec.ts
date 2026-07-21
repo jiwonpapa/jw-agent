@@ -282,6 +282,74 @@ const certificates = {
   },
 };
 
+const verifiedActionAssurance = {
+  level: "g1_verified_action",
+  rollbackSupport: "not_guaranteed",
+  operationAvailable: true,
+  scope: ["고정된 certbot renew --dry-run만 one-shot network runner에서 실행합니다."],
+  excludedEffects: ["CA challenge·rate-limit 기록 같은 외부 효과는 원복할 수 없습니다."],
+  applyVerifier: [
+    "Certbot exit와 timeout 상태를 digest-only 증거로 검증합니다.",
+    "certbot.timer와 sanitized certificate inventory를 다시 읽습니다.",
+  ],
+  rollbackVerifier: [],
+  reason: "로컬 설정을 바꾸지 않는 외부 갱신 검증이므로 자동 원복 대상이 없습니다.",
+} satisfies OperationReceiptView["assurance"];
+
+const actionableCertificates = {
+  ...certificates,
+  renewTestOperationType: "certbot.certificate.renew_test/v1",
+};
+
+const certbotRenewPlan = {
+  schemaVersion: 1,
+  operationType: "certbot.certificate.renew_test/v1",
+  planId: "plan_certbot_fixture",
+  planHash: `sha256:${"9".repeat(64)}`,
+  createdAt: "2026-07-21T02:11:00Z",
+  expiresAt: "2026-07-21T02:21:00Z",
+  actor: session.subject,
+  inventoryDigest: certificates.inventoryDigest,
+  timerEnabled: true,
+  timerActive: true,
+  certificateCount: 1,
+  impact: [
+    "Certbot이 ACME staging 서버에 실제 갱신 challenge를 요청할 수 있습니다.",
+    "인증서 교체를 적용하지 않는 dry-run이지만 외부 CA 통신과 challenge 요청은 되돌릴 수 없습니다.",
+  ],
+  recoveryPath: ["SSH로 certbot.timer와 Nginx 상태를 확인합니다."],
+  assurance: verifiedActionAssurance,
+};
+
+const certbotRenewReceipt: OperationReceiptView = {
+  schemaVersion: 1,
+  operationType: "certbot.certificate.renew_test/v1",
+  operationId: "op_fixture",
+  planId: certbotRenewPlan.planId,
+  planHash: certbotRenewPlan.planHash,
+  actor: session.subject as OperationReceiptView["actor"],
+  terminalState: "SUCCEEDED",
+  beforeDigest: certificates.inventoryDigest,
+  afterDigest: certificates.inventoryDigest,
+  stages: [
+    { sequence: 1, stage: "APPROVED", recordedAt: "2026-07-21T02:12:00Z", resultCode: "approved", evidenceDigest: certbotRenewPlan.planHash },
+    { sequence: 2, stage: "SNAPSHOTTED", recordedAt: "2026-07-21T02:12:01Z", resultCode: "snapshot_durable", evidenceDigest: certificates.inventoryDigest },
+    { sequence: 3, stage: "APPLYING", recordedAt: "2026-07-21T02:12:02Z", resultCode: "certbot_renew_dry_run_started", evidenceDigest: certificates.inventoryDigest },
+    { sequence: 4, stage: "VALIDATING", recordedAt: "2026-07-21T02:12:03Z", resultCode: "certbot_renew_dry_run_completed", evidenceDigest: certificates.inventoryDigest },
+    { sequence: 5, stage: "SUCCEEDED", recordedAt: "2026-07-21T02:12:04Z", resultCode: "renewal_test_verified", evidenceDigest: certificates.inventoryDigest },
+  ],
+  assurance: verifiedActionAssurance,
+  rollbackResult: null,
+  recoveryPath: [],
+};
+
+const certbotRenewAccepted = {
+  ...operationAccepted,
+  operationType: "certbot.certificate.renew_test/v1",
+  planId: certbotRenewPlan.planId,
+  planHash: certbotRenewPlan.planHash,
+};
+
 const integrations = {
   observedAt: "2026-07-21T02:10:00Z",
   status: "observed",
@@ -356,6 +424,9 @@ async function mockApi(
     onConfigPlan?: (body: unknown) => void;
     onConfigApproval?: (body: unknown) => void;
     onEvents?: () => void;
+    certificateFixture?: Record<string, unknown>;
+    onCertbotPlan?: (body: unknown) => void;
+    onCertbotApproval?: (body: unknown) => void;
   } = {},
 ): Promise<void> {
   let authenticated = initiallyAuthenticated;
@@ -386,7 +457,9 @@ async function mockApi(
       });
     }
     if (path === "/api/v1/host") return route.fulfill({ json: host });
-    if (path === "/api/v1/certificates") return route.fulfill({ json: certificates });
+    if (path === "/api/v1/certificates") {
+      return route.fulfill({ json: operationOptions.certificateFixture ?? certificates });
+    }
     if (path === "/api/v1/services/nginx/sites") return route.fulfill({ json: nginx });
     if (path === `/api/v1/config-resources/${configResourceId}` && request.method() === "GET") {
       return route.fulfill({ json: managedConfigResource });
@@ -408,6 +481,15 @@ async function mockApi(
       operationOptions.onConfigApproval?.(request.postDataJSON());
       activeReceipt = managedConfigReceipt;
       return route.fulfill({ status: 202, json: managedConfigAccepted });
+    }
+    if (path === "/api/v1/operations/certbot/renew-test/plans" && request.method() === "POST") {
+      operationOptions.onCertbotPlan?.(request.postDataJSON());
+      return route.fulfill({ json: certbotRenewPlan });
+    }
+    if (path === "/api/v1/operations/certbot/renew-test/approvals" && request.method() === "POST") {
+      operationOptions.onCertbotApproval?.(request.postDataJSON());
+      activeReceipt = certbotRenewReceipt;
+      return route.fulfill({ status: 202, json: certbotRenewAccepted });
     }
     if (path === "/api/v1/operations/op_fixture/events") {
       operationOptions.onEvents?.();
@@ -668,6 +750,52 @@ test("certificate inventory stays read-only and responsive without exposing key 
   await expect(page.getByText("webroot 관리")).toBeVisible();
   await expect(page.getByText("조회 전용")).toBeVisible();
   await expect(page.getByRole("button", { name: /발급|갱신|적용/ })).toHaveCount(0);
+  expect(await page.locator("body").innerText()).not.toContain("PRIVATE KEY");
+  const hasOverflow = await page.evaluate(
+    () => document.documentElement.scrollWidth > document.documentElement.clientWidth,
+  );
+  expect(hasOverflow).toBe(false);
+  const accessibility = await new AxeBuilder({ page }).analyze();
+  expect(
+    accessibility.violations.filter((violation) =>
+      ["critical", "serious"].includes(violation.impact ?? ""),
+    ),
+  ).toEqual([]);
+});
+
+test("G1 Certbot renewal test requires plan, external-effect intent, and PAM approval", async ({ page }) => {
+  const planBodies: unknown[] = [];
+  const approvalBodies: unknown[] = [];
+  await page.setViewportSize({ width: 390, height: 844 });
+  await mockApi(page, true, health, {
+    certificateFixture: actionableCertificates,
+    onCertbotPlan: (body) => planBodies.push(body),
+    onCertbotApproval: (body) => approvalBodies.push(body),
+  });
+  await page.goto("/certificates");
+
+  await expect(page.getByText("G1 검증 가능")).toBeVisible();
+  await page.getByRole("button", { name: "갱신 사전 검증 계획 만들기" }).dblclick();
+  await expect(page.getByRole("heading", { name: "외부 갱신 사전 검증 계획" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "G1 · 자동 원복 보장 없음" })).toBeVisible();
+  await expect(page.getByText(/challenge·rate-limit 기록은 되돌릴 수 없습니다/)).toBeVisible();
+
+  const approval = page.getByRole("button", { name: "재인증 후 dry-run 실행" });
+  await page.getByLabel("Linux 계정 비밀번호로 exact plan 승인").fill("fixture-password");
+  await expect(approval).toBeDisabled();
+  await page.getByLabel(/외부 CA 요청은 원복할 수 없다는 점/).check();
+  await approval.dblclick();
+
+  await expect(page.getByRole("heading", { name: "갱신 검증 완료" })).toBeVisible();
+  await expect(page.getByText(/timer·sanitized inventory 재조회/)).toBeVisible();
+  expect(planBodies).toHaveLength(1);
+  expect(approvalBodies).toHaveLength(1);
+  const planBody = planBodies[0] as Record<string, unknown>;
+  const approvalBody = approvalBodies[0] as Record<string, unknown>;
+  expect(approvalBody.planHash).toBe(certbotRenewPlan.planHash);
+  expect(approvalBody.idempotencyKey).toBe(planBody.idempotencyKey);
+  expect(approvalBody.externalEffectConfirmed).toBe(true);
+  expect(JSON.stringify(approvalBodies)).not.toContain("fixture-password");
   expect(await page.locator("body").innerText()).not.toContain("PRIVATE KEY");
   const hasOverflow = await page.evaluate(
     () => document.documentElement.scrollWidth > document.documentElement.clientWidth,

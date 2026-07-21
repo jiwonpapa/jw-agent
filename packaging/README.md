@@ -18,10 +18,11 @@ An existing public-edge site remains administrator-owned: upgrading the package
 does not replace it. P2B managed-config requests require the reviewed `64k`
 JSON-envelope limit from the current template while decoded configuration content
 remains capped at `24 KiB`.
-The current P2B package still accepts an existing valid certificate path only;
-the P2C package contains the isolated one-shot runner and sanitized read-only
-certificate inventory. Issuance, attachment, and renewal are not advertised until the typed operation
-and its VM fault lane pass.
+The current public edge still accepts an existing valid certificate path only.
+The P2C package contains the isolated one-shot runner, sanitized read-only
+certificate inventory, and a planned/PAM-approved renewal dry-run with G1
+receipts. Issuance and attachment are not advertised until their typed operation
+and VM fault lane pass.
 
 The public proxy socket uses the dedicated `jw-agent-proxy` group and
 `/run/jw-agent-proxy`. Nginx is never added to the privileged `jw-agent` group

@@ -515,6 +515,17 @@ const GATES: &[Gate] = &[
         run: vm::gate_p2_certificate_inventory,
     },
     Gate {
+        id: "VM-P2-CERTBOT-RENEW-OPERATION",
+        owner: "Certificate Lifecycle Maintainer",
+        scope: "G1 Certbot renewal plan, PAM approval, one-shot execution, and read-back",
+        inputs: "installed P2C operation package, public API, PAM fixture, certbot.timer",
+        lanes: P2_VM_LANES,
+        timeout_seconds: 300,
+        evidence: "success and unhealthy-timer receipts, private snapshot, digest-only output, and worker cleanup passed",
+        failure_policy: "fail lane on bypassed plan/reauth, raw output, false rollback, unhealthy timer success, or retained worker",
+        run: vm::gate_p2_certbot_renew_operation,
+    },
+    Gate {
         id: "VM-SECRET-SCAN",
         owner: "Security Maintainer",
         scope: "journal, SQLite, snapshot, process arguments, and package logs",

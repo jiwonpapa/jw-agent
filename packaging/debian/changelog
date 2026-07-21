@@ -1,3 +1,12 @@
+jw-agent (0.2.0~p2.5) noble; urgency=medium
+
+  * Add planned and PAM-approved Certbot renewal dry-run operations.
+  * Keep Certbot execution in the root-only one-shot network runner.
+  * Record private inventory snapshots and digest-only G1 receipts.
+  * Add responsive G1 disclosure and explicit external-effect consent.
+
+ -- JW Agent Maintainers <maintainers@example.invalid>  Tue, 21 Jul 2026 23:00:00 +0900
+
 jw-agent (0.2.0~p2.4) noble; urgency=medium
 
   * Add sanitized Certbot lineage and renewal timer inventory.

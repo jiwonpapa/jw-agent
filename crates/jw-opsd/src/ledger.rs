@@ -5,13 +5,15 @@ use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::Path;
 
 use jw_contracts::{
-    AssuranceView, MANAGED_CONFIG_OPERATION, ManagedConfigPlanView, NGINX_SITE_STATE_OPERATION,
-    NginxSiteState, NginxSiteStatePlanView, OPERATION_SCHEMA_VERSION, OperationReceiptView,
-    OperationStage, OperationStageEvidenceView, Role, Subject,
+    AssuranceView, CERTBOT_RENEW_TEST_OPERATION, CertbotRenewTestPlanView,
+    MANAGED_CONFIG_OPERATION, ManagedConfigPlanView, NGINX_SITE_STATE_OPERATION, NginxSiteState,
+    NginxSiteStatePlanView, OPERATION_SCHEMA_VERSION, OperationReceiptView, OperationStage,
+    OperationStageEvidenceView, Role, Subject,
 };
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use serde::{Deserialize, Serialize};
 
+use crate::certificate::{CERTBOT_RENEW_RECOVERY_PATH, CertbotRenewPlanPayload};
 use crate::config::OpsPaths;
 use crate::digest::ledger_event_digest;
 use crate::error::OpsError;
@@ -44,6 +46,7 @@ pub struct StoredPlan {
     pub resource_key: String,
     pub assurance: AssuranceView,
     pub managed_config: Option<ManagedConfigPlanPayload>,
+    pub certbot_renew: Option<CertbotRenewPlanPayload>,
 }
 
 impl StoredPlan {
@@ -161,13 +164,16 @@ impl Ledger {
             .map_err(|error| OpsError::Storage(error.to_string()))?;
         let payload = serde_json::to_string(&plan.managed_config)
             .map_err(|error| OpsError::Storage(error.to_string()))?;
+        let certificate_payload = serde_json::to_string(&plan.certbot_renew)
+            .map_err(|error| OpsError::Storage(error.to_string()))?;
         transaction.execute(
             "INSERT INTO plans (
                 plan_id, operation_type, plan_hash, actor_uid, actor_username, actor_role,
                 site_id, display_name, current_state, target_state, available_digest,
                 enabled_state_digest, created_at_ms, expires_at_ms, idempotency_key,
-                request_digest, resource_key, assurance_json, payload_json
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)",
+                request_digest, resource_key, assurance_json, payload_json,
+                certificate_payload_json
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)",
             params![
                 plan.plan_id,
                 plan.operation_type,
@@ -188,6 +194,7 @@ impl Ledger {
                 plan.resource_key,
                 assurance,
                 payload,
+                certificate_payload,
             ],
         )?;
         transaction.execute(
@@ -264,13 +271,15 @@ impl Ledger {
                 params![plan.resource_key, operation_id, now_ms],
             )
             .map_err(|_| OpsError::Rejected("resource_busy"))?;
-        transaction
-            .execute(
-                "INSERT INTO resource_locks (resource_key, operation_id, acquired_at_ms)
-                 VALUES (?1, ?2, ?3)",
-                params!["nginx/reload", operation_id, now_ms],
-            )
-            .map_err(|_| OpsError::Rejected("resource_busy"))?;
+        if plan.operation_type != CERTBOT_RENEW_TEST_OPERATION {
+            transaction
+                .execute(
+                    "INSERT INTO resource_locks (resource_key, operation_id, acquired_at_ms)
+                     VALUES (?1, ?2, ?3)",
+                    params!["nginx/reload", operation_id, now_ms],
+                )
+                .map_err(|_| OpsError::Rejected("resource_busy"))?;
+        }
         transaction.execute(
             "UPDATE idempotency SET operation_id = ?1 WHERE idempotency_key = ?2",
             params![operation_id, idempotency_key],
@@ -549,6 +558,41 @@ impl Ledger {
         })
     }
 
+    pub fn certbot_renew_plan_view(
+        &self,
+        plan: &StoredPlan,
+    ) -> Result<CertbotRenewTestPlanView, OpsError> {
+        if plan.operation_type != CERTBOT_RENEW_TEST_OPERATION {
+            return Err(OpsError::Rejected("operation_type"));
+        }
+        let payload = plan
+            .certbot_renew
+            .as_ref()
+            .ok_or(OpsError::ForensicLockdown)?;
+        Ok(CertbotRenewTestPlanView {
+            schema_version: OPERATION_SCHEMA_VERSION,
+            operation_type: plan.operation_type.clone(),
+            plan_id: plan.plan_id.clone(),
+            plan_hash: plan.plan_hash.clone(),
+            created_at: format_time(plan.created_at_ms)?,
+            expires_at: format_time(plan.expires_at_ms)?,
+            actor: plan.actor.clone(),
+            inventory_digest: payload.inventory_digest.clone(),
+            timer_enabled: payload.timer_enabled,
+            timer_active: payload.timer_active,
+            certificate_count: payload.certificate_count,
+            impact: crate::certificate::CERTBOT_RENEW_IMPACT
+                .iter()
+                .map(ToString::to_string)
+                .collect(),
+            recovery_path: CERTBOT_RENEW_RECOVERY_PATH
+                .iter()
+                .map(ToString::to_string)
+                .collect(),
+            assurance: plan.assurance.clone(),
+        })
+    }
+
     fn validate_continuity(&self) -> Result<(), OpsError> {
         let integrity: String = self
             .connection
@@ -771,7 +815,8 @@ fn load_plan_from(connection: &Connection, plan_id: &str) -> Result<StoredPlan, 
             "SELECT operation_type, plan_id, plan_hash, actor_uid, actor_username, actor_role, site_id,
                     display_name, current_state, target_state, available_digest,
                     enabled_state_digest, created_at_ms, expires_at_ms, idempotency_key,
-                    request_digest, resource_key, assurance_json, payload_json
+                    request_digest, resource_key, assurance_json, payload_json,
+                    certificate_payload_json
              FROM plans WHERE plan_id = ?1",
             [plan_id],
             |row| {
@@ -795,6 +840,7 @@ fn load_plan_from(connection: &Connection, plan_id: &str) -> Result<StoredPlan, 
                     row.get::<_, String>(16)?,
                     row.get::<_, String>(17)?,
                     row.get::<_, String>(18)?,
+                    row.get::<_, String>(19)?,
                 ))
             },
         )
@@ -814,6 +860,8 @@ fn load_plan_from(connection: &Connection, plan_id: &str) -> Result<StoredPlan, 
                 serde_json::from_str(&row.17).map_err(|_| OpsError::ForensicLockdown)?;
             let managed_config: Option<ManagedConfigPlanPayload> =
                 serde_json::from_str(&row.18).map_err(|_| OpsError::ForensicLockdown)?;
+            let certbot_renew: Option<CertbotRenewPlanPayload> =
+                serde_json::from_str(&row.19).map_err(|_| OpsError::ForensicLockdown)?;
             Ok(StoredPlan {
                 operation_type: row.0,
                 plan_id: row.1,
@@ -836,6 +884,7 @@ fn load_plan_from(connection: &Connection, plan_id: &str) -> Result<StoredPlan, 
                 resource_key: row.16,
                 assurance,
                 managed_config,
+                certbot_renew,
             })
         })
 }
@@ -848,12 +897,20 @@ fn migrate(connection: &Connection) -> Result<(), OpsError> {
             connection.pragma_update(None, "user_version", 1)?;
             connection.execute_batch(include_str!("../migrations/0002_managed_config.sql"))?;
             connection.pragma_update(None, "user_version", 2)?;
+            connection.execute_batch(include_str!("../migrations/0003_certbot_renew.sql"))?;
+            connection.pragma_update(None, "user_version", 3)?;
         }
         1 => {
             connection.execute_batch(include_str!("../migrations/0002_managed_config.sql"))?;
             connection.pragma_update(None, "user_version", 2)?;
+            connection.execute_batch(include_str!("../migrations/0003_certbot_renew.sql"))?;
+            connection.pragma_update(None, "user_version", 3)?;
         }
-        2 => {}
+        2 => {
+            connection.execute_batch(include_str!("../migrations/0003_certbot_renew.sql"))?;
+            connection.pragma_update(None, "user_version", 3)?;
+        }
+        3 => {}
         _ => return Err(OpsError::ForensicLockdown),
     }
     Ok(())
@@ -862,6 +919,8 @@ fn migrate(connection: &Connection) -> Result<(), OpsError> {
 fn recovery_path_for(operation_type: &str) -> Vec<String> {
     let values: &[&str] = if operation_type == MANAGED_CONFIG_OPERATION {
         &MANAGED_CONFIG_RECOVERY_PATH
+    } else if operation_type == jw_contracts::CERTBOT_RENEW_TEST_OPERATION {
+        &CERTBOT_RENEW_RECOVERY_PATH
     } else {
         &NGINX_RECOVERY_PATH
     };
@@ -1207,6 +1266,7 @@ mod tests {
                 reason: None,
             },
             managed_config: None,
+            certbot_renew: None,
         }
     }
 
