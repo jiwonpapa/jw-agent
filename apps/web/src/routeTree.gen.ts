@@ -15,6 +15,7 @@ import { Route as LoginRouteImport } from './routes/login'
 import { Route as AuthenticatedCertificatesRouteImport } from './routes/_authenticated.certificates'
 import { Route as AuthenticatedIntegrationsRouteImport } from './routes/_authenticated.integrations'
 import { Route as AuthenticatedOverviewRouteImport } from './routes/_authenticated.overview'
+import { Route as AuthenticatedTerminalRouteImport } from './routes/_authenticated.terminal'
 import { Route as AuthenticatedServicesNginxRouteImport } from './routes/_authenticated.services.nginx'
 import { Route as AuthenticatedSessionReauthRouteImport } from './routes/_authenticated.session.reauth'
 import { Route as AuthenticatedSettingsAccessRouteImport } from './routes/_authenticated.settings.access'
@@ -50,6 +51,11 @@ const AuthenticatedOverviewRoute = AuthenticatedOverviewRouteImport.update({
   path: '/overview',
   getParentRoute: () => AuthenticatedRoute,
 } as any)
+const AuthenticatedTerminalRoute = AuthenticatedTerminalRouteImport.update({
+  id: '/terminal',
+  path: '/terminal',
+  getParentRoute: () => AuthenticatedRoute,
+} as any)
 const AuthenticatedServicesNginxRoute =
   AuthenticatedServicesNginxRouteImport.update({
     id: '/services/nginx',
@@ -75,6 +81,7 @@ export interface FileRoutesByFullPath {
   '/certificates': typeof AuthenticatedCertificatesRoute
   '/integrations': typeof AuthenticatedIntegrationsRoute
   '/overview': typeof AuthenticatedOverviewRoute
+  '/terminal': typeof AuthenticatedTerminalRoute
   '/services/nginx': typeof AuthenticatedServicesNginxRoute
   '/session/reauth': typeof AuthenticatedSessionReauthRoute
   '/settings/access': typeof AuthenticatedSettingsAccessRoute
@@ -85,6 +92,7 @@ export interface FileRoutesByTo {
   '/certificates': typeof AuthenticatedCertificatesRoute
   '/integrations': typeof AuthenticatedIntegrationsRoute
   '/overview': typeof AuthenticatedOverviewRoute
+  '/terminal': typeof AuthenticatedTerminalRoute
   '/services/nginx': typeof AuthenticatedServicesNginxRoute
   '/session/reauth': typeof AuthenticatedSessionReauthRoute
   '/settings/access': typeof AuthenticatedSettingsAccessRoute
@@ -97,6 +105,7 @@ export interface FileRoutesById {
   '/_authenticated/certificates': typeof AuthenticatedCertificatesRoute
   '/_authenticated/integrations': typeof AuthenticatedIntegrationsRoute
   '/_authenticated/overview': typeof AuthenticatedOverviewRoute
+  '/_authenticated/terminal': typeof AuthenticatedTerminalRoute
   '/_authenticated/services/nginx': typeof AuthenticatedServicesNginxRoute
   '/_authenticated/session/reauth': typeof AuthenticatedSessionReauthRoute
   '/_authenticated/settings/access': typeof AuthenticatedSettingsAccessRoute
@@ -109,6 +118,7 @@ export interface FileRouteTypes {
     | '/certificates'
     | '/integrations'
     | '/overview'
+    | '/terminal'
     | '/services/nginx'
     | '/session/reauth'
     | '/settings/access'
@@ -119,6 +129,7 @@ export interface FileRouteTypes {
     | '/certificates'
     | '/integrations'
     | '/overview'
+    | '/terminal'
     | '/services/nginx'
     | '/session/reauth'
     | '/settings/access'
@@ -130,6 +141,7 @@ export interface FileRouteTypes {
     | '/_authenticated/certificates'
     | '/_authenticated/integrations'
     | '/_authenticated/overview'
+    | '/_authenticated/terminal'
     | '/_authenticated/services/nginx'
     | '/_authenticated/session/reauth'
     | '/_authenticated/settings/access'
@@ -185,6 +197,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedOverviewRouteImport
       parentRoute: typeof AuthenticatedRoute
     }
+    '/_authenticated/terminal': {
+      id: '/_authenticated/terminal'
+      path: '/terminal'
+      fullPath: '/terminal'
+      preLoaderRoute: typeof AuthenticatedTerminalRouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
     '/_authenticated/services/nginx': {
       id: '/_authenticated/services/nginx'
       path: '/services/nginx'
@@ -213,6 +232,7 @@ interface AuthenticatedRouteChildren {
   AuthenticatedCertificatesRoute: typeof AuthenticatedCertificatesRoute
   AuthenticatedIntegrationsRoute: typeof AuthenticatedIntegrationsRoute
   AuthenticatedOverviewRoute: typeof AuthenticatedOverviewRoute
+  AuthenticatedTerminalRoute: typeof AuthenticatedTerminalRoute
   AuthenticatedServicesNginxRoute: typeof AuthenticatedServicesNginxRoute
   AuthenticatedSessionReauthRoute: typeof AuthenticatedSessionReauthRoute
   AuthenticatedSettingsAccessRoute: typeof AuthenticatedSettingsAccessRoute
@@ -222,6 +242,7 @@ const AuthenticatedRouteChildren: AuthenticatedRouteChildren = {
   AuthenticatedCertificatesRoute: AuthenticatedCertificatesRoute,
   AuthenticatedIntegrationsRoute: AuthenticatedIntegrationsRoute,
   AuthenticatedOverviewRoute: AuthenticatedOverviewRoute,
+  AuthenticatedTerminalRoute: AuthenticatedTerminalRoute,
   AuthenticatedServicesNginxRoute: AuthenticatedServicesNginxRoute,
   AuthenticatedSessionReauthRoute: AuthenticatedSessionReauthRoute,
   AuthenticatedSettingsAccessRoute: AuthenticatedSettingsAccessRoute,

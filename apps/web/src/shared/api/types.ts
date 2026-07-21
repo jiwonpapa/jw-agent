@@ -54,3 +54,6 @@ export type IntegrationCategory = components["schemas"]["IntegrationCategory"];
 export type IntegrationLifecycleStatus =
   components["schemas"]["IntegrationLifecycleStatus"];
 export type IntegrationInstallStatus = components["schemas"]["IntegrationInstallStatus"];
+export type TerminalCapabilityView = components["schemas"]["TerminalCapabilityView"];
+export type TerminalTicketRequest = components["schemas"]["TerminalTicketRequest"];
+export type TerminalTicketView = components["schemas"]["TerminalTicketView"];

@@ -120,6 +120,7 @@ const REQUIRED_FOUNDATION_PATHS: &[&str] = &[
     "docs/90-specs/operations/managed-config-file-v1.md",
     "docs/90-specs/operations/certbot-certificate-v1.md",
     "docs/90-specs/access/openssh-terminal-sftp-v1.md",
+    "docs/90-specs/access/openssh-password-broker-v1.md",
     "docs/90-specs/auth/pam-login-v1.md",
     "docs/90-specs/auth/totp-step-up-v1.md",
     "docs/90-specs/ui/overview-v1.md",
@@ -133,6 +134,7 @@ const REQUIRED_FOUNDATION_PATHS: &[&str] = &[
     "docs/90-specs/adr/0010-local-maintenance-surfaces.md",
     "docs/90-specs/adr/0011-certbot-network-runner.md",
     "docs/90-specs/adr/0012-loopback-tls-verifier.md",
+    "docs/90-specs/adr/0013-system-openssh-client.md",
     "tests/spec-fixtures/nginx-site-state-set-v1.json",
 ];
 
@@ -176,9 +178,16 @@ const P1_REQUIRED_PATHS: &[&str] = &[
 ];
 
 const P2_REQUIRED_PATHS: &[&str] = &[
+    "apps/web/src/features/terminal/terminal-screen.tsx",
+    "apps/web/src/routes/_authenticated.terminal.tsx",
     "crates/jw-certd/src/lib.rs",
+    "crates/jw-agentd/migrations/0002_terminal_audit.sql",
+    "crates/jw-agentd/src/askpass.rs",
+    "crates/jw-agentd/src/terminal.rs",
+    "crates/jw-agentd/src/terminal_session.rs",
     "crates/jw-contracts/src/certificate.rs",
     "crates/jw-contracts/src/operation.rs",
+    "crates/jw-contracts/src/terminal.rs",
     "crates/jw-opsd/migrations/0001_initial.sql",
     "crates/jw-opsd/migrations/0002_managed_config.sql",
     "crates/jw-opsd/migrations/0005_certbot_attach.sql",
@@ -306,6 +315,17 @@ const GATES: &[Gate] = &[
         evidence: "forbidden failure shortcuts and unsafe leakage absent",
         failure_policy: "fail lane on forbidden source pattern",
         run: gate_rust_source_policy,
+    },
+    Gate {
+        id: "P2-TERMINAL-BOUNDARY",
+        owner: "Manual Access Maintainer",
+        scope: "system OpenSSH terminal dependency, credential, privilege, and proxy boundary",
+        inputs: "Accepted access specs, Cargo/Bun locks, package policy, agentd terminal sources, and opsd sources",
+        lanes: P2_LOCAL_LANES,
+        timeout_seconds: 3,
+        evidence: "fixed loopback OpenSSH, strict host key, one-shot askpass, exact xterm pins, bounded WSS, and no opsd shell passed",
+        failure_policy: "fail lane on credential persistence, broad SSH dependency, root helper shell path, missing bound, or proxy regression",
+        run: gate_p2_terminal_boundary,
     },
     Gate {
         id: "RUST-FMT",
@@ -548,6 +568,17 @@ const GATES: &[Gate] = &[
         evidence: "successful SNI fingerprint read-back and forced verifier failure exact rollback passed",
         failure_policy: "fail lane on unplanned attach, wrong SNI certificate, inexact rollback, unavailable Nginx, or raw certificate persistence",
         run: vm::gate_p2_certbot_attach_operation,
+    },
+    Gate {
+        id: "VM-P2-OPENSSH-TERMINAL",
+        owner: "Manual Access Maintainer",
+        scope: "same-origin WSS ticket, non-root OpenSSH PTY, resize, replay, origin, revoke, and audit",
+        inputs: "installed P2D package, public TLS API, PAM fixture, loopback sshd, strict host key, and agentd audit DB",
+        lanes: P2_VM_LANES,
+        timeout_seconds: 180,
+        evidence: "non-root command I/O and resize, ticket replay/wrong-origin denial, logout close, metadata audit, and process cleanup passed",
+        failure_policy: "fail lane on root path, weak host key, credential persistence, replay, missing bounds/audit, leaked process, or lost SSH service",
+        run: vm::gate_p2_openssh_terminal,
     },
     Gate {
         id: "VM-SECRET-SCAN",
@@ -973,6 +1004,100 @@ fn gate_rust_source_policy(root: &Path, _timeout: Duration) -> Result<(), String
                     "{}:{} leaks unsafe outside ffi-pam",
                     display_relative(root, &file),
                     line_index + 1
+                ));
+            }
+        }
+    }
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(failures.join("; "))
+    }
+}
+
+fn gate_p2_terminal_boundary(root: &Path, _timeout: Duration) -> Result<(), String> {
+    let agent_manifest = read_text(&root.join("crates/jw-agentd/Cargo.toml"))?;
+    let root_manifest = read_text(&root.join("Cargo.toml"))?;
+    let web_manifest = read_text(&root.join("apps/web/package.json"))?;
+    let package_control = read_text(&root.join("packaging/debian/control"))?;
+    let tmpfiles = read_text(&root.join("packaging/tmpfiles/jw-agent.conf"))?;
+    let proxy = read_text(&root.join("packaging/nginx/proxy-common.conf"))?;
+    let terminal = read_text(&root.join("crates/jw-agentd/src/terminal_session.rs"))?;
+    let askpass = read_text(&root.join("crates/jw-agentd/src/askpass.rs"))?;
+    let audit = read_text(&root.join("crates/jw-agentd/migrations/0002_terminal_audit.sql"))?;
+    let mut failures = Vec::new();
+
+    for (content, needle, label) in [
+        (&agent_manifest, "\"ws\"", "Axum WSS feature"),
+        (&agent_manifest, "\"term\"", "nix PTY feature"),
+        (&agent_manifest, "\"process\"", "Tokio process feature"),
+        (
+            &web_manifest,
+            "\"@xterm/xterm\": \"6.0.0\"",
+            "exact xterm pin",
+        ),
+        (
+            &web_manifest,
+            "\"@xterm/addon-fit\": \"0.11.0\"",
+            "exact fit addon pin",
+        ),
+        (
+            &package_control,
+            "openssh-client",
+            "OpenSSH package dependency",
+        ),
+        (
+            &tmpfiles,
+            "/run/jw-agent/askpass 0700 jw-agent jw-agent",
+            "private askpass runtime",
+        ),
+        (
+            &proxy,
+            "proxy_set_header Upgrade $http_upgrade;",
+            "WebSocket upgrade proxy",
+        ),
+        (&terminal, "StrictHostKeyChecking=yes", "strict host key"),
+        (&terminal, "EscapeChar=none", "local SSH escape denial"),
+        (&terminal, ".arg(\"--ctty\")", "controlling PTY wrapper"),
+        (
+            &terminal,
+            ".arg(LOOPBACK_HOST)",
+            "fixed loopback destination",
+        ),
+        (&askpass, "file_type().is_fifo()", "FIFO type validation"),
+        (&askpass, "fs::remove_file(&path)", "one-shot FIFO unlink"),
+        (&audit, "terminal_sessions", "terminal audit table"),
+    ] {
+        if !content.contains(needle) {
+            failures.push(format!("missing {label}"));
+        }
+    }
+    if root_manifest.contains("russh") || agent_manifest.contains("russh") {
+        failures.push(String::from(
+            "Rust SSH stack is forbidden for the local MVP",
+        ));
+    }
+    for forbidden in ["password", "ticket", "command", "input", "output"] {
+        if audit.lines().any(|line| {
+            line.split(|character: char| !character.is_ascii_alphanumeric() && character != '_')
+                .any(|word| word == forbidden)
+        }) {
+            failures.push(format!(
+                "terminal audit schema contains forbidden {forbidden} field"
+            ));
+        }
+    }
+    let opsd = root.join("crates/jw-opsd/src");
+    for file in regular_files(&opsd)? {
+        if file.extension() == Some(OsStr::new("rs")) {
+            let content = read_text(&file)?;
+            if content.contains("Terminal")
+                || content.contains("openpty")
+                || content.contains("SSH_ASKPASS")
+            {
+                failures.push(format!(
+                    "root helper gained terminal surface in {}",
+                    display_relative(root, &file)
                 ));
             }
         }

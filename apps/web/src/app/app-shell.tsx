@@ -10,6 +10,7 @@ import {
   Server,
   Settings2,
   ShieldCheck,
+  SquareTerminal,
 } from "lucide-react";
 import { useState, type ReactNode } from "react";
 
@@ -27,6 +28,7 @@ const navigationIcons = {
   nginx: Server,
   certificates: BadgeCheck,
   integrations: PackageSearch,
+  terminal: SquareTerminal,
   access: ShieldCheck,
 } as const;
 

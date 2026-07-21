@@ -8,6 +8,7 @@ import {
   getIntegrations,
   getNginxSites,
   getSession,
+  getTerminalCapability,
 } from "./client";
 
 export const queryKeys = {
@@ -18,6 +19,7 @@ export const queryKeys = {
   certificates: ["certificates"] as const,
   integrations: ["integrations"] as const,
   accessSettings: ["settings", "access"] as const,
+  terminal: ["terminal", "capability"] as const,
 };
 
 export const healthQueryOptions = queryOptions({
@@ -66,5 +68,12 @@ export const accessSettingsQueryOptions = queryOptions({
   queryKey: queryKeys.accessSettings,
   queryFn: ({ signal }) => getAccessSettings(signal),
   staleTime: 15_000,
+  retry: 1,
+});
+
+export const terminalQueryOptions = queryOptions({
+  queryKey: queryKeys.terminal,
+  queryFn: ({ signal }) => getTerminalCapability(signal),
+  staleTime: 10_000,
   retry: 1,
 });

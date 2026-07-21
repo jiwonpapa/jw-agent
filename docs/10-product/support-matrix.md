@@ -3,7 +3,7 @@
 Status: Accepted  
 Authority: Product  
 Owner: Support Maintainer  
-Last reviewed: 2026-07-21
+Last reviewed: 2026-07-22
 
 | Surface | MVP support | Mode |
 |---|---|---|
@@ -21,8 +21,8 @@ Last reviewed: 2026-07-21
 | Public browser | Nginx+Certbot HTTPS 443 → agentd UDS | Opt-in supported |
 | Recovery browser | loopback through SSH tunnel | Required fallback |
 | Responsive web | 320px mobile through desktop | Supported |
-| Web terminal | existing OpenSSH, non-root Linux user | P2 G1 after gate |
-| SFTP | existing OpenSSH subsystem, non-root Linux user | P2 G0/G1 after gate |
+| Web terminal | existing OpenSSH, non-root Linux user | P2 `G1 VM_PASS`; loopback password auth required |
+| SFTP | existing OpenSSH subsystem, non-root Linux user | P2 G0/G1 pending implementation |
 | Managed config | adapter allowlisted resource | Nginx active profile `VM_PASS`; others after gate |
 | Direct agentd Internet bind | any TCP port | Unsupported |
 
@@ -35,7 +35,8 @@ Last reviewed: 2026-07-21
 - P2C one-shot runner, SAN·만료·fingerprint·timer 조회, `certbot.certificate.renew_test/v1`, guided issue의 CA 실패 경로와 `certbot.certificate.attach/v1`의 SNI read-back·강제 실패 원복을 VM에서 검증했습니다. 공인 CA 발급 성공은 별도 public-domain gate 전까지 `UNVERIFIED`입니다.
 - `nginx.site_state.set/v1`과 활성 standard-layout 리소스의 `service.config_file.set/v1`은 `SUPPORTED + VM_PASS + G2`입니다.
 - 비활성 site, 24 KiB 초과, UTF-8이 아닌 파일, NUL·보호 marker, 비표준 owner/mode·symlink·hardlink는 설정 편집 `UNSUPPORTED`입니다.
-- terminal·SFTP는 OpenSSH 발견, non-root account, same-origin WSS와 session policy가 모두 충족될 때만 capability를 반환합니다.
+- terminal은 OpenSSH 발견, non-root account, same-origin WSS와 session policy가 모두 충족될 때만 capability를 반환합니다. package는 기존 sshd 인증 정책을 자동 변경하지 않습니다.
+- SFTP는 terminal 증거를 재사용해 지원 완료로 표시하지 않으며 별도 path·quota·transfer gate 전까지 `UNIMPLEMENTED`입니다.
 - 관찰 실패, 미설치, 지원 불가, 권한 부족을 서로 다른 상태로 표시합니다.
 - 지원표는 구현 단계에서 capability registry로 이전하고 문서를 생성합니다.
 

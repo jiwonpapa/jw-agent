@@ -252,6 +252,30 @@ const access = {
   assurance: policyAssurance,
 };
 
+const terminalCapability = {
+  available: true,
+  reason: null,
+  username: "operator",
+  assurance: {
+    level: "g1_verified_action",
+    rollbackSupport: "not_guaranteed",
+    operationAvailable: true,
+    scope: ["현재 로그인한 non-root Linux 계정의 제한 시간 OpenSSH 세션"],
+    excludedEffects: ["터미널에서 실행한 명령과 외부 효과의 자동 원복", "root 로그인"],
+    applyVerifier: ["PAM 재인증", "strict OpenSSH host key"],
+    rollbackVerifier: ["자동 원복 없음"],
+    reason: null,
+  },
+  limits: {
+    ticketTtlSeconds: 30,
+    idleTimeoutSeconds: 300,
+    maxLifetimeSeconds: 1800,
+    maxFrameBytes: 16384,
+    maxOutputBufferBytes: 262144,
+    maxSessionsPerUser: 1,
+  },
+};
+
 const certificates = {
   schemaVersion: 1,
   observedAt: "2026-07-21T02:10:00Z",
@@ -574,6 +598,8 @@ async function mockApi(
     onCertbotIssueApproval?: (body: unknown) => void;
     onCertbotAttachPlan?: (body: unknown) => void;
     onCertbotAttachApproval?: (body: unknown) => void;
+    onTerminalTicket?: (body: unknown) => void;
+    terminalFixture?: Record<string, unknown>;
   } = {},
 ): Promise<void> {
   let authenticated = initiallyAuthenticated;
@@ -604,6 +630,22 @@ async function mockApi(
       });
     }
     if (path === "/api/v1/host") return route.fulfill({ json: host });
+    if (path === "/api/v1/terminal" && request.method() === "GET") {
+      return route.fulfill({ json: operationOptions.terminalFixture ?? terminalCapability });
+    }
+    if (path === "/api/v1/terminal/tickets" && request.method() === "POST") {
+      operationOptions.onTerminalTicket?.(request.postDataJSON());
+      return route.fulfill({
+        status: 201,
+        json: {
+          ticket: "A".repeat(43),
+          expiresAt: "2026-07-21T02:11:30Z",
+          websocketPath: "/api/v1/terminal/connect",
+          assurance: terminalCapability.assurance,
+          limits: terminalCapability.limits,
+        },
+      });
+    }
     if (path === "/api/v1/certificates") {
       return route.fulfill({ json: operationOptions.certificateFixture ?? certificates });
     }
@@ -758,6 +800,72 @@ test("access screen states provider limitation without false protection claim", 
   await expect(page.getByText(/G2 · 제한된 설정 자동 원복 지원/)).toBeVisible();
   const accessibility = await new AxeBuilder({ page }).analyze();
   expect(accessibility.violations.filter((violation) => ["critical", "serious"].includes(violation.impact ?? ""))).toEqual([]);
+});
+
+for (const viewport of [
+  { width: 320, height: 800 },
+  { width: 768, height: 1024 },
+  { width: 1440, height: 900 },
+]) {
+  test(
+    `terminal keeps G1 approval visible at ${String(viewport.width)}x${String(viewport.height)}`,
+    async ({ page }) => {
+      await page.setViewportSize(viewport);
+      await mockApi(page, true);
+      await page.goto("/terminal");
+      await expect(page.getByRole("heading", { name: "비루트 터미널" })).toBeVisible();
+      await expect(page.getByText("G1 · 자동 원복 없음")).toBeVisible();
+      await expect(page.getByText(/잘못된 명령으로 서비스나 데이터가 손상될 수 있음/)).toBeVisible();
+      const connect = page.getByRole("button", { name: "재인증 후 연결" });
+      await page.getByLabel("Linux 비밀번호 재확인").fill("fixture-terminal-password");
+      await expect(connect).toBeDisabled();
+      await page.getByLabel(/터미널 명령은 자동 원복되지 않으며/).check();
+      await expect(connect).toBeEnabled();
+      const hasOverflow = await page.evaluate(
+        () => document.documentElement.scrollWidth > document.documentElement.clientWidth,
+      );
+      expect(hasOverflow).toBe(false);
+    },
+  );
+}
+
+test("terminal ticket keeps password out of URL and browser storage", async ({ page }) => {
+  let ticketBody: unknown;
+  await page.routeWebSocket("**/api/v1/terminal/connect", (socket) => {
+    socket.send(JSON.stringify({
+      type: "ready",
+      sessionId: "0123456789abcdef0123456789abcdef",
+      assurance: "g1_verified_action",
+    }));
+  });
+  await mockApi(page, true, health, {
+    onTerminalTicket: (body) => {
+      ticketBody = body;
+    },
+  });
+  await page.goto("/terminal");
+  await page.getByLabel("Linux 비밀번호 재확인").fill("fixture-terminal-password");
+  await page.getByLabel(/터미널 명령은 자동 원복되지 않으며/).check();
+  await page.getByRole("button", { name: "재인증 후 연결" }).click();
+  await expect(page.getByText(/세션 01234567/)).toBeVisible();
+  expect(ticketBody).toEqual({
+    password: "fixture-terminal-password",
+    rows: 24,
+    cols: 80,
+    riskConfirmed: true,
+  });
+  expect(page.url()).not.toContain("fixture-terminal-password");
+  const stored = await page.evaluate(() => ({
+    local: Object.values(localStorage),
+    session: Object.values(sessionStorage),
+  }));
+  expect(JSON.stringify(stored)).not.toContain("fixture-terminal-password");
+  const accessibility = await new AxeBuilder({ page }).analyze();
+  expect(
+    accessibility.violations.filter((violation) =>
+      ["critical", "serious"].includes(violation.impact ?? ""),
+    ),
+  ).toEqual([]);
 });
 
 test("G2 Nginx change discloses rollback scope before exact-plan PAM approval", async ({ page }) => {

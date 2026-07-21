@@ -14,6 +14,279 @@ use std::time::{Duration, Instant};
 const OUTPUT_LIMIT_BYTES: usize = 128 * 1_024;
 const RECOVERY_HOST: &str = "127.0.0.1:8787";
 const RECOVERY_ORIGIN: &str = "http://127.0.0.1:8787";
+const TERMINAL_WS_PROBE: &str = r#"
+import base64
+import hashlib
+import json
+import os
+import socket
+import ssl
+import struct
+import sys
+import time
+
+cfg = json.load(sys.stdin)
+
+def report_probe_error(exception_type, value, traceback):
+    message = str(value)
+    allowed = (
+        "websocket ",
+        "HTTP ",
+        "server websocket ",
+        "unsupported websocket ",
+        "terminal ",
+        "logout ",
+        "valid terminal ",
+        "consumed terminal ",
+        "wrong Origin ",
+        "revocation terminal ",
+        "unsupported terminal ",
+    )
+    if not message.startswith(allowed):
+        message = "unexpected probe failure (" + exception_type.__name__ + ")"
+    sys.stderr.write("terminal probe: " + message + "\n")
+
+sys.excepthook = report_probe_error
+
+class Ws:
+    def __init__(self, stream, buffered=b""):
+        self.stream = stream
+        self.buffered = bytearray(buffered)
+
+    def read_exact(self, count, deadline):
+        while len(self.buffered) < count:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise RuntimeError("websocket receive deadline exceeded")
+            self.stream.settimeout(min(remaining, 2.0))
+            try:
+                chunk = self.stream.recv(65536)
+            except socket.timeout:
+                continue
+            if not chunk:
+                raise RuntimeError("websocket closed without a close frame")
+            self.buffered.extend(chunk)
+        value = bytes(self.buffered[:count])
+        del self.buffered[:count]
+        return value
+
+    def send(self, opcode, payload=b""):
+        if isinstance(payload, str):
+            payload = payload.encode("utf-8")
+        first = 0x80 | opcode
+        size = len(payload)
+        mask = os.urandom(4)
+        if size < 126:
+            header = bytes((first, 0x80 | size))
+        elif size <= 65535:
+            header = bytes((first, 0x80 | 126)) + struct.pack("!H", size)
+        else:
+            header = bytes((first, 0x80 | 127)) + struct.pack("!Q", size)
+        masked = bytes(value ^ mask[index % 4] for index, value in enumerate(payload))
+        self.stream.sendall(header + mask + masked)
+
+    def receive(self, deadline):
+        first, second = self.read_exact(2, deadline)
+        if first & 0x70:
+            raise RuntimeError("websocket RSV bits were set")
+        opcode = first & 0x0F
+        size = second & 0x7F
+        if second & 0x80:
+            raise RuntimeError("server websocket frame was masked")
+        if size == 126:
+            size = struct.unpack("!H", self.read_exact(2, deadline))[0]
+        elif size == 127:
+            size = struct.unpack("!Q", self.read_exact(8, deadline))[0]
+        if size > 262144:
+            raise RuntimeError("server websocket frame exceeded probe bound")
+        payload = self.read_exact(size, deadline)
+        if opcode == 0x9:
+            self.send(0xA, payload)
+            return self.receive(deadline)
+        if opcode == 0xA:
+            return self.receive(deadline)
+        if opcode not in (0x1, 0x2, 0x8):
+            raise RuntimeError("unsupported websocket frame opcode")
+        return opcode, payload
+
+    def close(self):
+        try:
+            self.send(0x8, struct.pack("!H", 1000))
+        except Exception:
+            pass
+        self.stream.close()
+
+
+def tls_stream():
+    raw = socket.create_connection((cfg["address"], 443), timeout=10)
+    context = ssl.create_default_context(cafile=cfg["ca"])
+    return context.wrap_socket(raw, server_hostname=cfg["host"])
+
+
+def read_http(stream):
+    buffered = bytearray()
+    while b"\r\n\r\n" not in buffered:
+        chunk = stream.recv(4096)
+        if not chunk:
+            raise RuntimeError("HTTP response ended before headers")
+        buffered.extend(chunk)
+        if len(buffered) > 65536:
+            raise RuntimeError("HTTP response headers exceeded probe bound")
+    head, body = bytes(buffered).split(b"\r\n\r\n", 1)
+    lines = head.decode("ascii").split("\r\n")
+    parts = lines[0].split(" ", 2)
+    if len(parts) < 2 or not parts[1].isdigit():
+        raise RuntimeError("HTTP response status was invalid")
+    headers = {}
+    for line in lines[1:]:
+        if ":" not in line:
+            raise RuntimeError("HTTP response header was invalid")
+        name, value = line.split(":", 1)
+        headers[name.strip().lower()] = value.strip()
+    return int(parts[1]), headers, body
+
+
+def websocket(origin):
+    stream = tls_stream()
+    key = base64.b64encode(os.urandom(16)).decode("ascii")
+    request = (
+        "GET /api/v1/terminal/connect HTTP/1.1\r\n"
+        + "Host: " + cfg["host"] + "\r\n"
+        + "Origin: " + origin + "\r\n"
+        + "Cookie: " + cfg["cookie"] + "\r\n"
+        + "Upgrade: websocket\r\n"
+        + "Connection: Upgrade\r\n"
+        + "Sec-WebSocket-Version: 13\r\n"
+        + "Sec-WebSocket-Key: " + key + "\r\n"
+        + "Sec-WebSocket-Protocol: jw-terminal-v1, ticket." + cfg["ticket"] + "\r\n\r\n"
+    )
+    stream.sendall(request.encode("ascii"))
+    status, headers, buffered = read_http(stream)
+    if status == 101:
+        expected = base64.b64encode(
+            hashlib.sha1((key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").encode("ascii")).digest()
+        ).decode("ascii")
+        if headers.get("sec-websocket-accept") != expected:
+            raise RuntimeError("websocket accept proof did not match")
+        if headers.get("sec-websocket-protocol") != "jw-terminal-v1":
+            raise RuntimeError("websocket subprotocol was not constrained")
+        return status, Ws(stream, buffered)
+    stream.close()
+    return status, None
+
+
+def require_ready(ws):
+    deadline = time.monotonic() + 12
+    while True:
+        opcode, payload = ws.receive(deadline)
+        if opcode == 0x8:
+            reason = payload[2:].decode("utf-8", "replace") if len(payload) >= 2 else ""
+            raise RuntimeError("terminal closed before ready: " + reason)
+        if opcode == 0x1:
+            message = json.loads(payload.decode("utf-8"))
+            if message.get("type") == "ready" and message.get("assurance") == "g1_verified_action":
+                return
+
+
+def logout():
+    stream = tls_stream()
+    request = (
+        "POST /api/v1/auth/logout HTTP/1.1\r\n"
+        + "Host: " + cfg["host"] + "\r\n"
+        + "Origin: https://" + cfg["host"] + "\r\n"
+        + "Cookie: " + cfg["cookie"] + "\r\n"
+        + "X-CSRF-Token: " + cfg["csrf"] + "\r\n"
+        + "Content-Length: 0\r\n"
+        + "Connection: close\r\n\r\n"
+    )
+    stream.sendall(request.encode("ascii"))
+    status, _, _ = read_http(stream)
+    stream.close()
+    if status != 204:
+        raise RuntimeError("logout did not return HTTP 204")
+
+
+mode = cfg["mode"]
+origin = "https://" + cfg["host"]
+if mode == "success_replay":
+    status, ws = websocket(origin)
+    if status != 101:
+        raise RuntimeError("valid terminal ticket did not upgrade")
+    require_ready(ws)
+    time.sleep(1.0)
+    ws.send(0x1, json.dumps({"type": "input", "data": "\r"}, separators=(",", ":")))
+    time.sleep(1.0)
+    ws.send(0x1, json.dumps({"type": "resize", "rows": 40, "cols": 100}, separators=(",", ":")))
+    ws.send(0x1, json.dumps({"type": "input", "data": "printf 'JW_TERMINAL_%s\\n' 'VM_OK'; stty size; exit\r"}, separators=(",", ":")))
+    deadline = time.monotonic() + 15
+    output = bytearray()
+    while time.monotonic() < deadline:
+        try:
+            opcode, payload = ws.receive(deadline)
+        except RuntimeError as error:
+            if str(error) == "websocket receive deadline exceeded":
+                break
+            raise
+        if opcode in (0x1, 0x2):
+            output.extend(payload)
+            if len(output) > 262144:
+                raise RuntimeError("terminal output exceeded probe bound")
+        if b"JW_TERMINAL_VM_OK" in output and b"40 100" in output:
+            break
+        if opcode == 0x8:
+            break
+    ws.close()
+    if b"JW_TERMINAL_VM_OK" not in output or b"40 100" not in output:
+        raise RuntimeError(
+            "terminal evidence was missing command="
+            + str(b"JW_TERMINAL_VM_OK" in output).lower()
+            + " resize="
+            + str(b"40 100" in output).lower()
+        )
+    replay_status, replay_ws = websocket(origin)
+    if replay_ws is not None:
+        replay_ws.close()
+    if replay_status != 401:
+        raise RuntimeError("consumed terminal ticket was reusable")
+elif mode == "wrong_origin":
+    rejected_status, rejected_ws = websocket("https://attacker.example")
+    if rejected_ws is not None:
+        rejected_ws.close()
+    if rejected_status != 403:
+        raise RuntimeError("wrong Origin was not rejected")
+    status, ws = websocket(origin)
+    if status != 101:
+        raise RuntimeError("wrong Origin consumed the valid ticket")
+    require_ready(ws)
+    time.sleep(1.0)
+    ws.send(0x1, json.dumps({"type": "input", "data": "exit\r"}, separators=(",", ":")))
+    deadline = time.monotonic() + 12
+    while True:
+        opcode, _ = ws.receive(deadline)
+        if opcode == 0x8:
+            break
+    ws.stream.close()
+elif mode == "logout_revoke":
+    status, ws = websocket(origin)
+    if status != 101:
+        raise RuntimeError("revocation terminal ticket did not upgrade")
+    require_ready(ws)
+    logout()
+    deadline = time.monotonic() + 12
+    reason = ""
+    while True:
+        opcode, payload = ws.receive(deadline)
+        if opcode == 0x8:
+            reason = payload[2:].decode("utf-8", "replace") if len(payload) >= 2 else ""
+            break
+    ws.stream.close()
+    if reason != "session_revoked":
+        raise RuntimeError("logout did not revoke the active terminal")
+else:
+    raise RuntimeError("unsupported terminal probe mode")
+
+print("TERMINAL_PROBE_PASS")
+"#;
 
 pub fn gate_preflight(_root: &Path, timeout: Duration) -> Result<(), String> {
     let config = VmConfig::load()?;
@@ -79,6 +352,10 @@ cmp -s "$tmpdir/etc/pam.d/jw-agent" /etc/pam.d/jw-agent
 dpkg-query -W -f='${{db:Status-Abbrev}}' libpam0g | grep -q '^ii'
 dpkg-query -W -f='${{db:Status-Abbrev}}' libsqlite3-0 | grep -q '^ii'
 dpkg-query -W -f='${{db:Status-Abbrev}}' certbot | grep -q '^ii'
+dpkg-query -W -f='${{db:Status-Abbrev}}' openssh-client | grep -q '^ii'
+test -x /usr/bin/ssh
+test -x /usr/bin/setsid
+test -x /usr/bin/stty
 ldd /usr/lib/jw-agent/jw-authd | grep -q 'libpam\.so\.0'
 ldd /usr/lib/jw-agent/jw-agentd | grep -q 'libsqlite3\.so\.0'
 test -x /usr/lib/jw-agent/jw-certd
@@ -115,6 +392,9 @@ test "$(sudo stat -c '%U:%G:%a' /run/jw-agent/authd.sock)" = jw-agent:jw-agent:6
 test "$(sudo stat -c '%U:%G:%a' /run/jw-agent-certd/certd.sock)" = root:root:600
 test "$(sudo stat -c '%U:%G:%a' /run/jw-agent/opsd.sock)" = root:jw-agent:660
 test "$(sudo stat -c '%U:%G:%a' /run/jw-agent)" = root:jw-agent:2750
+test "$(sudo stat -c '%U:%G:%a' /run/jw-agent/askpass)" = jw-agent:jw-agent:700
+test "$(sudo stat -c '%U:%G:%a' /etc/jw-agent/ssh_known_hosts)" = root:root:644
+sudo grep -Eq '^jw-agent-loopback[[:space:]]+ssh-ed25519[[:space:]]+' /etc/jw-agent/ssh_known_hosts
 test "$(sudo stat -c '%U:%G:%a' /var/lib/jw-agent/opsd)" = root:root:700
 test "$(sudo stat -c '%U:%G:%a' /var/lib/jw-agent/opsd/snapshots)" = root:root:700
 test "$(sudo stat -c '%U:%G:%a' /var/lib/jw-agent/opsd/opsd.sqlite3)" = root:jw-agent:600
@@ -866,6 +1146,140 @@ pub fn gate_p2_certbot_attach_operation(_root: &Path, timeout: Duration) -> Resu
     }
 }
 
+pub fn gate_p2_openssh_terminal(_root: &Path, timeout: Duration) -> Result<(), String> {
+    let config = VmConfig::load()?;
+    let password = read_secret(&config.password_file)?;
+    restart_edge_and_agentd_and_wait(&config, timeout)?;
+    let runtime = config.ssh(
+        &format!(r#"set -eu
+systemctl is-active --quiet ssh.service
+test "$(sudo stat -c '%U:%G:%a' /etc/jw-agent/ssh_known_hosts)" = root:root:644
+test "$(sudo stat -c '%U:%G:%a' /run/jw-agent/askpass)" = jw-agent:jw-agent:700
+sudo grep -Eq '^jw-agent-loopback[[:space:]]+ssh-ed25519[[:space:]]+' /etc/jw-agent/ssh_known_hosts
+test -x /usr/bin/ssh
+test -x /usr/bin/setsid
+test -x /usr/bin/stty
+sudo /usr/sbin/sshd -T -C user={},addr=127.0.0.1,laddr=127.0.0.1,host=localhost | grep -Fxq 'passwordauthentication yes'
+sudo /usr/sbin/sshd -T -C user={},addr={},laddr={},host=localhost | grep -Fxq 'passwordauthentication no'"#,
+            config.admin_user,
+            config.admin_user,
+            config.public_address,
+            config.public_address,
+        ),
+        None,
+        timeout,
+    )?;
+    require_success(&runtime, "OpenSSH terminal runtime authority", false)?;
+
+    let session = P2ApiSession::login(&config, &password, timeout)?;
+    let capability = session.get(&config, "/api/v1/terminal", timeout)?;
+    expect_http(&capability, 200, "terminal capability")?;
+    for expected in [
+        "\"available\":true",
+        "\"level\":\"g1_verified_action\"",
+        "\"rollbackSupport\":\"not_guaranteed\"",
+        "\"ticketTtlSeconds\":30",
+        "\"idleTimeoutSeconds\":300",
+        "\"maxLifetimeSeconds\":1800",
+        "\"maxFrameBytes\":16384",
+        "\"maxSessionsPerUser\":1",
+    ] {
+        if !capability.body.contains(expected) {
+            return Err(format!("terminal capability omitted {expected}"));
+        }
+    }
+    let cookie = session.public_cookie_header()?;
+
+    let success_ticket = session.issue_terminal_ticket(&config, &password, timeout)?;
+    run_terminal_websocket_probe(
+        &config,
+        &cookie,
+        &session.csrf_token,
+        &success_ticket,
+        "success_replay",
+        timeout,
+    )?;
+    thread::sleep(Duration::from_millis(250));
+
+    let origin_ticket = session.issue_terminal_ticket(&config, &password, timeout)?;
+    run_terminal_websocket_probe(
+        &config,
+        &cookie,
+        &session.csrf_token,
+        &origin_ticket,
+        "wrong_origin",
+        timeout,
+    )?;
+    thread::sleep(Duration::from_millis(250));
+
+    let revoke_ticket = session.issue_terminal_ticket(&config, &password, timeout)?;
+    run_terminal_websocket_probe(
+        &config,
+        &cookie,
+        &session.csrf_token,
+        &revoke_ticket,
+        "logout_revoke",
+        timeout,
+    )?;
+
+    let evidence = config.ssh(
+        r#"set -eu
+attempt=0
+while test "$attempt" -lt 50; do
+    if ! pgrep -u jw-agent -f '/usr/bin/(ssh|setsid)' >/dev/null 2>&1 && ! sudo find /run/jw-agent/askpass -mindepth 1 -print -quit | grep -q .; then
+        break
+    fi
+    attempt=$((attempt + 1))
+    sleep 0.1
+done
+! pgrep -u jw-agent -f '/usr/bin/(ssh|setsid)' >/dev/null 2>&1
+! sudo find /run/jw-agent/askpass -mindepth 1 -print -quit | grep -q .
+sudo python3 -c 'import sqlite3; c=sqlite3.connect("/var/lib/jw-agent/agentd/agentd.sqlite3"); rows=c.execute("select state,close_reason,bytes_in,bytes_out from terminal_sessions order by started_at_unix_ms desc limit 3").fetchall(); assert len(rows)==3; assert all(r[0]=="closed" for r in rows); assert any(r[1]=="session_revoked" for r in rows); assert any(r[2]>0 and r[3]>0 for r in rows); names={r[1] for r in c.execute("pragma table_info(terminal_sessions)")}; assert not names.intersection({"command","input","output","password","ticket"})'
+systemctl is-active --quiet ssh.service
+sudo journalctl -u jw-agentd.service --since '10 minutes ago' --no-pager -o cat | grep -Fq 'reason=session_revoked'"#,
+        None,
+        timeout,
+    )?;
+    require_success(&evidence, "OpenSSH terminal audit and cleanup", false)
+}
+
+fn run_terminal_websocket_probe(
+    config: &VmConfig,
+    cookie: &str,
+    csrf_token: &str,
+    ticket: &str,
+    mode: &str,
+    timeout: Duration,
+) -> Result<(), String> {
+    if !matches!(mode, "success_replay" | "wrong_origin" | "logout_revoke") {
+        return Err(String::from("unsupported terminal websocket probe mode"));
+    }
+    let input = format!(
+        "{{\"address\":{},\"host\":{},\"ca\":{},\"cookie\":{},\"csrf\":{},\"ticket\":{},\"mode\":{}}}",
+        json_string(&config.public_address.to_string()),
+        json_string(&config.public_host),
+        json_string(&config.ca_certificate.display().to_string()),
+        json_string(cookie),
+        json_string(csrf_token),
+        json_string(ticket),
+        json_string(mode),
+    );
+    let arguments = [OsString::from("-c"), OsString::from(TERMINAL_WS_PROBE)];
+    let result = run_capture(
+        OsStr::new("python3"),
+        &arguments,
+        Some(input.as_bytes()),
+        timeout,
+    )?;
+    require_success(&result, "bounded terminal websocket probe", false)?;
+    if text(&result.stdout)?.trim() != "TERMINAL_PROBE_PASS" {
+        return Err(String::from(
+            "bounded terminal websocket probe returned unexpected evidence",
+        ));
+    }
+    Ok(())
+}
+
 fn prepare_certbot_attach_fixture(config: &VmConfig, timeout: Duration) -> Result<(), String> {
     let script = r#"sudo sh -eu -c '
 test ! -e /var/tmp/jw-agent-vm-certbot-attach.active
@@ -1240,6 +1654,75 @@ impl P2ApiSession {
             None,
             timeout,
         )
+    }
+
+    fn issue_terminal_ticket(
+        &self,
+        config: &VmConfig,
+        password: &str,
+        timeout: Duration,
+    ) -> Result<String, String> {
+        let body = format!(
+            "{{\"password\":{},\"rows\":24,\"cols\":80,\"riskConfirmed\":true}}",
+            json_string(password),
+        );
+        let response = public_api_request(
+            config,
+            "POST",
+            "/api/v1/terminal/tickets",
+            &self.cookie_jar.path,
+            Some(&self.csrf_token),
+            Some(body.as_bytes()),
+            timeout,
+        )?;
+        expect_http(&response, 201, "terminal one-shot ticket")?;
+        if response.body.contains(password)
+            || !response.body.contains("\"level\":\"g1_verified_action\"")
+            || !response
+                .body
+                .contains("\"rollbackSupport\":\"not_guaranteed\"")
+            || !response
+                .body
+                .contains("\"websocketPath\":\"/api/v1/terminal/connect\"")
+        {
+            return Err(String::from(
+                "terminal ticket response leaked a credential or omitted its G1 boundary",
+            ));
+        }
+        let ticket = json_string_field(&response.body, "ticket")?;
+        if ticket.len() != 43
+            || !ticket
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+        {
+            return Err(String::from("terminal ticket shape is invalid"));
+        }
+        Ok(ticket)
+    }
+
+    fn public_cookie_header(&self) -> Result<String, String> {
+        let content = fs::read_to_string(&self.cookie_jar.path)
+            .map_err(|error| format!("cannot read terminal cookie jar: {error}"))?;
+        for line in content.lines() {
+            let normalized = line.strip_prefix("#HttpOnly_").map_or(line, |value| value);
+            if normalized.starts_with('#') || normalized.trim().is_empty() {
+                continue;
+            }
+            let fields: Vec<&str> = normalized.split('\t').collect();
+            if fields.len() == 7 && fields[5] == "__Host-jw_session" {
+                let token = fields[6];
+                if token.len() == 43
+                    && token
+                        .bytes()
+                        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+                {
+                    return Ok(format!("__Host-jw_session={token}"));
+                }
+            }
+        }
+        Err(String::from(
+            "public terminal session cookie is unavailable",
+        ))
     }
 
     fn wait_for_operation_available(

@@ -9,12 +9,13 @@ mod observation;
 mod operation;
 mod problem;
 mod settings;
+mod terminal;
 
 pub use assurance::{AssuranceLevel, AssuranceView, RollbackSupport};
 pub use auth::{
     AuthFailureClass, AuthPurpose, AuthRequest, AuthResponse, AuthResult, IngressChannel,
-    LoginRequest, ReauthPurpose, ReauthRequest, ReauthView, Role, SecretString, SessionView,
-    Subject,
+    LoginRequest, PASSWORD_MAX_BYTES, ReauthPurpose, ReauthRequest, ReauthView, Role, SecretString,
+    SessionView, Subject,
 };
 pub use certificate::{
     CERT_FRAME_MAX_BYTES, CERTBOT_ATTACH_OPERATION, CERTBOT_ISSUE_OPERATION, CERTBOT_MAX_DOMAINS,
@@ -56,6 +57,13 @@ pub use problem::ProblemDetails;
 pub use settings::{
     AccessSettingsView, AdditionalAuthPolicy, AdditionalAuthProviderStatus,
     UpdateAdditionalAuthRequest,
+};
+pub use terminal::{
+    TERMINAL_IDLE_TIMEOUT_SECONDS, TERMINAL_MAX_COLS, TERMINAL_MAX_FRAME_BYTES,
+    TERMINAL_MAX_LIFETIME_SECONDS, TERMINAL_MAX_OUTPUT_BUFFER_BYTES, TERMINAL_MAX_ROWS,
+    TERMINAL_MIN_COLS, TERMINAL_MIN_ROWS, TERMINAL_TICKET_TTL_SECONDS, TerminalCapabilityView,
+    TerminalClientMessage, TerminalLimitsView, TerminalTicketRequest, TerminalTicketView,
+    validate_terminal_size,
 };
 
 pub const API_VERSION: &str = "v1";

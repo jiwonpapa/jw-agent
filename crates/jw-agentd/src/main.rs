@@ -8,7 +8,8 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use jw_agentd::{
-    AgentConfig, ApiDoc, AppState, SessionStore, UdsAuthBroker, UdsOpsBroker, build_router,
+    AgentConfig, ApiDoc, AppState, SessionStore, TerminalBroker, UdsAuthBroker, UdsOpsBroker,
+    build_router,
 };
 use jw_contracts::IngressChannel;
 use tokio::net::{TcpListener, UnixListener};
@@ -26,6 +27,9 @@ async fn main() -> ExitCode {
 }
 
 async fn run() -> Result<(), String> {
+    if jw_agentd::askpass::requested() {
+        return jw_agentd::askpass::run();
+    }
     let mut arguments = env::args().skip(1);
     match arguments.next().as_deref() {
         Some("openapi") => {
@@ -67,17 +71,21 @@ async fn serve() -> Result<(), String> {
         config.ops_socket.clone(),
         config.operation_timeout,
     ));
+    let terminal = TerminalBroker::default();
 
     let recovery_listener = TcpListener::bind(config.recovery_address)
         .await
         .map_err(|error| format!("cannot bind recovery listener: {error}"))?;
-    let recovery_app = build_router(AppState::new(
-        config.clone(),
-        IngressChannel::Recovery,
-        store.clone(),
-        auth.clone(),
-        ops.clone(),
-    ));
+    let recovery_app = build_router(
+        AppState::new(
+            config.clone(),
+            IngressChannel::Recovery,
+            store.clone(),
+            auth.clone(),
+            ops.clone(),
+        )
+        .with_terminal_broker(terminal.clone()),
+    );
 
     if config.public_host.is_some() {
         prepare_socket(&config.proxy_socket)?;
@@ -85,13 +93,10 @@ async fn serve() -> Result<(), String> {
             .map_err(|error| format!("cannot bind public proxy socket: {error}"))?;
         std::fs::set_permissions(&config.proxy_socket, std::fs::Permissions::from_mode(0o660))
             .map_err(|error| format!("cannot set public proxy socket permissions: {error}"))?;
-        let public_app = build_router(AppState::new(
-            config,
-            IngressChannel::Public,
-            store,
-            auth,
-            ops,
-        ));
+        let public_app = build_router(
+            AppState::new(config, IngressChannel::Public, store, auth, ops)
+                .with_terminal_broker(terminal),
+        );
         let recovery = axum::serve(recovery_listener, recovery_app);
         let public = axum::serve(public_listener, public_app);
         tokio::try_join!(recovery, public)

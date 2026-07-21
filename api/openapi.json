@@ -1468,6 +1468,112 @@
           }
         }
       }
+    },
+    "/api/v1/terminal": {
+      "get": {
+        "tags": [],
+        "operationId": "terminal_capability",
+        "responses": {
+          "200": {
+            "description": "Non-root OpenSSH terminal capability",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TerminalCapabilityView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/terminal/tickets": {
+      "post": {
+        "tags": [],
+        "operationId": "issue_terminal_ticket",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TerminalTicketRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Single-use terminal WebSocket ticket",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TerminalTicketView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid dimensions or missing risk confirmation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role, Origin, CSRF, or subject rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Terminal unavailable or already active",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "428": {
+            "description": "Configured additional authentication is unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -3512,6 +3618,134 @@
             "minimum": 0
           },
           "username": {
+            "type": "string"
+          }
+        }
+      },
+      "TerminalCapabilityView": {
+        "type": "object",
+        "required": [
+          "available",
+          "username",
+          "assurance",
+          "limits"
+        ],
+        "properties": {
+          "assurance": {
+            "$ref": "#/components/schemas/AssuranceView"
+          },
+          "available": {
+            "type": "boolean"
+          },
+          "limits": {
+            "$ref": "#/components/schemas/TerminalLimitsView"
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "username": {
+            "type": "string"
+          }
+        }
+      },
+      "TerminalLimitsView": {
+        "type": "object",
+        "required": [
+          "ticketTtlSeconds",
+          "idleTimeoutSeconds",
+          "maxLifetimeSeconds",
+          "maxFrameBytes",
+          "maxOutputBufferBytes",
+          "maxSessionsPerUser"
+        ],
+        "properties": {
+          "idleTimeoutSeconds": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "maxFrameBytes": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "maxLifetimeSeconds": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "maxOutputBufferBytes": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "maxSessionsPerUser": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "ticketTtlSeconds": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "TerminalTicketRequest": {
+        "type": "object",
+        "required": [
+          "password",
+          "rows",
+          "cols",
+          "riskConfirmed"
+        ],
+        "properties": {
+          "cols": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "password": {
+            "type": "string",
+            "format": "password",
+            "maxLength": 1024
+          },
+          "riskConfirmed": {
+            "type": "boolean"
+          },
+          "rows": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        },
+        "additionalProperties": false
+      },
+      "TerminalTicketView": {
+        "type": "object",
+        "required": [
+          "ticket",
+          "expiresAt",
+          "websocketPath",
+          "assurance",
+          "limits"
+        ],
+        "properties": {
+          "assurance": {
+            "$ref": "#/components/schemas/AssuranceView"
+          },
+          "expiresAt": {
+            "type": "string"
+          },
+          "limits": {
+            "$ref": "#/components/schemas/TerminalLimitsView"
+          },
+          "ticket": {
+            "type": "string",
+            "format": "password"
+          },
+          "websocketPath": {
             "type": "string"
           }
         }

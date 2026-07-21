@@ -36,6 +36,7 @@ Last reviewed: 2026-07-21
 - [Local maintenance surfaces ADR](90-specs/adr/0010-local-maintenance-surfaces.md)
 - [Certbot one-shot network runner ADR](90-specs/adr/0011-certbot-network-runner.md)
 - [Loopback TLS verifier ADR](90-specs/adr/0012-loopback-tls-verifier.md)
+- [System OpenSSH client ADR](90-specs/adr/0013-system-openssh-client.md)
 
 ## 30 Domain
 
@@ -63,6 +64,7 @@ Last reviewed: 2026-07-21
 
 - [권한·Identity·Session](70-security/privilege-and-auth.md)
 - [Linux PAM 인증](70-security/pam-authentication.md)
+- [OpenSSH one-shot password broker](90-specs/access/openssh-password-broker-v1.md)
 - [공개 접속 보안](70-security/public-access.md)
 - [로깅과 포렌식](70-security/logging-and-forensics.md)
 - [업데이트와 공급망](70-security/update-supply-chain.md)

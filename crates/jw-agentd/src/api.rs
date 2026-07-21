@@ -7,6 +7,7 @@ use std::task::{Context, Poll};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use axum::body::Body;
+use axum::extract::ws::WebSocketUpgrade;
 use axum::extract::{DefaultBodyLimit, Path, State};
 use axum::http::header::{
     CACHE_CONTROL, CONTENT_SECURITY_POLICY, CONTENT_TYPE, COOKIE, HOST, ORIGIN, REFERRER_POLICY,
@@ -35,7 +36,8 @@ use jw_contracts::{
     OperationAcceptedView, OperationApprovalRequest, OperationReceiptView,
     OperationStageEvidenceView, ProblemDetails, ReauthPurpose, ReauthRequest, ReauthView, Role,
     RollbackSupport, ServiceAction, ServiceSummary, ServicesView, SessionView, Subject,
-    UpdateAdditionalAuthRequest,
+    TERMINAL_MAX_FRAME_BYTES, TERMINAL_MAX_OUTPUT_BUFFER_BYTES, TerminalCapabilityView,
+    TerminalLimitsView, TerminalTicketRequest, TerminalTicketView, UpdateAdditionalAuthRequest,
 };
 use sha2::{Digest, Sha256};
 use tower_http::services::{ServeDir, ServeFile};
@@ -46,6 +48,10 @@ use crate::integration_catalog::{IntegrationObservationProfile, observe_integrat
 use crate::observation::{ObservationProfile, observe_host, observe_nginx_with_mutation_gate};
 use crate::ops_client::OpsBrokerError;
 use crate::session::{OperationClaimError, PolicyUpdateError};
+use crate::terminal::{
+    TerminalBroker, TerminalTicketError, TerminalTicketIssue, terminal_runtime_available,
+};
+use crate::terminal_session::run_terminal;
 use crate::{AgentConfig, AuthBroker, OpsBroker, SessionStore};
 
 const API_BODY_MAX_BYTES: usize = 64 * 1_024;
@@ -64,6 +70,7 @@ pub struct AppState {
     pub store: SessionStore,
     pub auth: Arc<dyn AuthBroker>,
     pub ops: Arc<dyn OpsBroker>,
+    pub terminal: TerminalBroker,
     auth_limiter: AuthLimiter,
 }
 
@@ -82,8 +89,15 @@ impl AppState {
             store,
             auth,
             ops,
+            terminal: TerminalBroker::default(),
             auth_limiter: AuthLimiter::default(),
         }
+    }
+
+    #[must_use]
+    pub fn with_terminal_broker(mut self, terminal: TerminalBroker) -> Self {
+        self.terminal = terminal;
+        self
     }
 }
 
@@ -116,6 +130,8 @@ impl AppState {
         approve_managed_config,
         operation_events,
         operation_receipt,
+        terminal_capability,
+        issue_terminal_ticket,
     ),
     components(schemas(
         AccessSettingsView,
@@ -177,6 +193,10 @@ impl AppState {
         SessionView,
         jw_contracts::Subject,
         UpdateAdditionalAuthRequest,
+        TerminalCapabilityView,
+        TerminalLimitsView,
+        TerminalTicketRequest,
+        TerminalTicketView,
     )),
     tags((name = "jw-agent", description = "JW Agent local management API"))
 )]
@@ -193,6 +213,9 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/v1/auth/logout", post(logout))
         .route("/api/v1/auth/session", get(session))
         .route("/api/v1/auth/reauth", post(reauthenticate))
+        .route("/api/v1/terminal", get(terminal_capability))
+        .route("/api/v1/terminal/tickets", post(issue_terminal_ticket))
+        .route("/api/v1/terminal/connect", get(connect_terminal))
         .route("/api/v1/host", get(host))
         .route("/api/v1/capabilities", get(capabilities))
         .route("/api/v1/services", get(services))
@@ -330,7 +353,10 @@ async fn login(
         .issue_session(&subject, state.channel, now)
         .map_err(|_| ApiProblem::internal())?;
     if let Some(prior) = prior_token
-        && state.store.revoke_session(prior.as_str(), now).is_err()
+        && {
+            state.terminal.revoke_session(prior.as_str());
+            state.store.revoke_session(prior.as_str(), now).is_err()
+        }
     {
         let _cleanup = state.store.revoke_session(issued.token(), now);
         return Err(ApiProblem::internal());
@@ -365,6 +391,7 @@ async fn logout(State(state): State<AppState>, headers: HeaderMap) -> Result<Res
         .store
         .revoke_session(token.as_str(), now)
         .map_err(|_| ApiProblem::internal())?;
+    state.terminal.revoke_session(token.as_str());
     let mut response = StatusCode::NO_CONTENT.into_response();
     clear_session_cookie(&state, &mut response)?;
     Ok(response)
@@ -427,6 +454,7 @@ async fn reauthenticate(
             return Err(ApiProblem::internal());
         }
     };
+    state.terminal.revoke_session(old_token.as_str());
     if state.store.revoke_session(old_token.as_str(), now).is_err() {
         let _cleanup = state.store.revoke_session(issued.token(), now);
         return Err(ApiProblem::internal());
@@ -439,6 +467,244 @@ async fn reauthenticate(
     let mut api_response = Json(view).into_response();
     set_session_cookie(&state, issued.token(), &mut api_response)?;
     Ok(api_response)
+}
+
+#[utoipa::path(get, path = "/api/v1/terminal", responses(
+    (status = 200, description = "Non-root OpenSSH terminal capability", body = TerminalCapabilityView),
+    (status = 401, description = "Authentication required", body = ProblemDetails)
+))]
+async fn terminal_capability(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<TerminalCapabilityView>, ApiProblem> {
+    let (_, session) = current_session(&state, &headers, unix_milliseconds()?)?;
+    let reason = terminal_gate_reason(&state, &session);
+    Ok(Json(TerminalCapabilityView {
+        available: reason.is_none(),
+        reason: reason.clone(),
+        username: session.subject.username,
+        assurance: terminal_assurance(reason),
+        limits: TerminalLimitsView::default(),
+    }))
+}
+
+#[utoipa::path(post, path = "/api/v1/terminal/tickets", request_body = TerminalTicketRequest, responses(
+    (status = 201, description = "Single-use terminal WebSocket ticket", body = TerminalTicketView),
+    (status = 400, description = "Invalid dimensions or missing risk confirmation", body = ProblemDetails),
+    (status = 401, description = "Authentication failed", body = ProblemDetails),
+    (status = 403, description = "Role, Origin, CSRF, or subject rejected", body = ProblemDetails),
+    (status = 409, description = "Terminal unavailable or already active", body = ProblemDetails),
+    (status = 428, description = "Configured additional authentication is unavailable", body = ProblemDetails)
+))]
+async fn issue_terminal_ticket(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(input): Json<TerminalTicketRequest>,
+) -> Result<(StatusCode, Json<TerminalTicketView>), ApiProblem> {
+    input.validate().map_err(ApiProblem::bad_request)?;
+    let now = unix_milliseconds()?;
+    let (session_token, session) = current_session(&state, &headers, now)?;
+    require_csrf(&headers, session_token.as_str())?;
+    let origin = require_exact_origin(&state, &headers)?;
+    if session.additional_auth_policy != AdditionalAuthPolicy::Disabled {
+        return Err(ApiProblem::new(
+            StatusCode::PRECONDITION_REQUIRED,
+            "additional_authentication_unavailable",
+        ));
+    }
+    if terminal_gate_reason(&state, &session).is_some() {
+        return Err(ApiProblem::new(
+            StatusCode::CONFLICT,
+            "terminal_unavailable",
+        ));
+    }
+    let source = request_source(&state, &headers)?;
+    state
+        .auth_limiter
+        .consume(&source, &session.subject.username)?;
+
+    let ssh_password = jw_contracts::SecretString::new(input.password.expose().to_owned());
+    let request_id = random_identifier()?;
+    let auth_request = AuthRequest {
+        protocol_version: IPC_PROTOCOL_VERSION,
+        request_id: request_id.clone(),
+        deadline_unix_ms: deadline(now, state.config.auth_timeout),
+        username: session.subject.username.clone(),
+        password: input.password,
+        remote_address: Some(source),
+        purpose: AuthPurpose::StepUp {
+            context_digest: String::from("terminal"),
+        },
+    };
+    let response = state
+        .auth
+        .authenticate(auth_request)
+        .await
+        .map_err(|_| ApiProblem::unavailable("authentication_unavailable"))?;
+    validate_auth_response(&response, &request_id)?;
+    let authenticated = match response.result {
+        AuthResult::Authenticated { subject, .. } => subject,
+        AuthResult::Failed { class } => return Err(auth_failure(class)),
+    };
+    if authenticated.uid == 0
+        || authenticated.uid != session.subject.uid
+        || authenticated.username != session.subject.username
+        || authenticated.role != session.subject.role
+        || authenticated.role == Role::Viewer
+    {
+        return Err(ApiProblem::forbidden("terminal_subject_mismatch"));
+    }
+
+    let issued = state
+        .terminal
+        .issue(TerminalTicketIssue {
+            session_token: session_token.as_str(),
+            subject: authenticated,
+            ingress: state.channel,
+            origin,
+            password: ssh_password,
+            rows: input.rows,
+            cols: input.cols,
+            now_unix_ms: now,
+        })
+        .map_err(map_terminal_ticket_error)?;
+    state
+        .terminal
+        .schedule_expiry(issued.ticket.expose())
+        .map_err(map_terminal_ticket_error)?;
+    let view = TerminalTicketView {
+        ticket: issued.ticket,
+        expires_at: format_unix_ms(issued.expires_at_unix_ms)?,
+        websocket_path: String::from("/api/v1/terminal/connect"),
+        assurance: terminal_assurance(None),
+        limits: TerminalLimitsView::default(),
+    };
+    Ok((StatusCode::CREATED, Json(view)))
+}
+
+async fn connect_terminal(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    websocket: WebSocketUpgrade,
+) -> Result<Response, ApiProblem> {
+    let origin = require_exact_origin(&state, &headers)?;
+    let now = unix_milliseconds()?;
+    let (session_token, session) = current_session(&state, &headers, now)?;
+    if terminal_gate_reason(&state, &session).is_some() {
+        return Err(ApiProblem::new(
+            StatusCode::CONFLICT,
+            "terminal_unavailable",
+        ));
+    }
+    let ticket = websocket_ticket(&headers)?;
+    let lease = state
+        .terminal
+        .consume(
+            ticket.as_str(),
+            session_token.as_str(),
+            state.channel,
+            &origin,
+        )
+        .map_err(map_terminal_ticket_error)?;
+    let config = state.config.clone();
+    let store = state.store.clone();
+    Ok(websocket
+        .protocols(["jw-terminal-v1"])
+        .max_frame_size(TERMINAL_MAX_FRAME_BYTES)
+        .max_message_size(TERMINAL_MAX_FRAME_BYTES)
+        .write_buffer_size(64 * 1_024)
+        .max_write_buffer_size(TERMINAL_MAX_OUTPUT_BUFFER_BYTES)
+        .on_upgrade(move |socket| async move {
+            let summary = run_terminal(socket, lease, config, store).await;
+            eprintln!(
+                "jw-agentd terminal session={} reason={} bytes_in={} bytes_out={}",
+                summary.session_id, summary.reason, summary.bytes_in, summary.bytes_out
+            );
+        }))
+}
+
+fn terminal_gate_reason(state: &AppState, session: &SessionView) -> Option<String> {
+    if session.subject.uid == 0 || session.subject.role == Role::Viewer {
+        return Some(String::from("현재 계정은 터미널 세션을 열 수 없습니다."));
+    }
+    if session.additional_auth_policy != AdditionalAuthPolicy::Disabled {
+        return Some(String::from(
+            "설정된 추가 인증 provider가 아직 없어 터미널이 차단되었습니다.",
+        ));
+    }
+    terminal_runtime_available(&state.config)
+        .err()
+        .map(str::to_owned)
+}
+
+fn terminal_assurance(reason: Option<String>) -> AssuranceView {
+    AssuranceView {
+        level: AssuranceLevel::G1VerifiedAction,
+        rollback_support: RollbackSupport::NotGuaranteed,
+        operation_available: reason.is_none(),
+        scope: vec![String::from(
+            "현재 로그인한 non-root Linux 계정의 제한 시간 OpenSSH 세션",
+        )],
+        excluded_effects: vec![
+            String::from("터미널에서 실행한 명령과 외부 효과의 자동 원복"),
+            String::from("root 로그인과 sudo 비밀번호 자동 입력"),
+        ],
+        apply_verifier: vec![
+            String::from("PAM 재인증과 canonical UID/username 일치"),
+            String::from("고정 loopback 대상과 strict OpenSSH host key"),
+        ],
+        rollback_verifier: vec![String::from(
+            "자동 원복 없음; 세션 종료 후 감사 메타데이터만 보존",
+        )],
+        reason,
+    }
+}
+
+fn require_exact_origin(state: &AppState, headers: &HeaderMap) -> Result<String, ApiProblem> {
+    let origin = headers
+        .get(ORIGIN)
+        .and_then(|value| value.to_str().ok())
+        .ok_or_else(|| ApiProblem::forbidden("origin_required"))?;
+    if origin != state.config.expected_origin(state.channel) {
+        return Err(ApiProblem::forbidden("origin_rejected"));
+    }
+    Ok(origin.to_owned())
+}
+
+fn websocket_ticket(headers: &HeaderMap) -> Result<Zeroizing<String>, ApiProblem> {
+    let protocols = headers
+        .get("sec-websocket-protocol")
+        .and_then(|value| value.to_str().ok())
+        .ok_or_else(|| ApiProblem::unauthorized("terminal_ticket_required"))?;
+    if protocols.len() > 256 {
+        return Err(ApiProblem::bad_request("terminal_protocol_invalid"));
+    }
+    let mut version_seen = false;
+    let mut ticket = None;
+    for protocol in protocols.split(',').map(str::trim) {
+        if protocol == "jw-terminal-v1" {
+            version_seen = true;
+        } else if let Some(value) = protocol.strip_prefix("ticket.")
+            && ticket.replace(value).is_some()
+        {
+            return Err(ApiProblem::bad_request("terminal_protocol_invalid"));
+        }
+    }
+    if !version_seen {
+        return Err(ApiProblem::bad_request("terminal_protocol_invalid"));
+    }
+    ticket
+        .map(|value| Zeroizing::new(value.to_owned()))
+        .ok_or_else(|| ApiProblem::unauthorized("terminal_ticket_required"))
+}
+
+fn map_terminal_ticket_error(error: TerminalTicketError) -> ApiProblem {
+    match error {
+        TerminalTicketError::Busy => ApiProblem::new(StatusCode::CONFLICT, "terminal_busy"),
+        TerminalTicketError::Expired => ApiProblem::unauthorized("terminal_ticket_expired"),
+        TerminalTicketError::Invalid => ApiProblem::unauthorized("terminal_ticket_rejected"),
+        TerminalTicketError::Storage => ApiProblem::internal(),
+    }
 }
 
 #[utoipa::path(get, path = "/api/v1/host", responses(
@@ -1846,6 +2112,14 @@ fn now_rfc3339() -> Result<String, ApiProblem> {
         .map_err(|_| ApiProblem::internal())
 }
 
+fn format_unix_ms(unix_ms: i64) -> Result<String, ApiProblem> {
+    let nanos = i128::from(unix_ms).saturating_mul(1_000_000);
+    time::OffsetDateTime::from_unix_timestamp_nanos(nanos)
+        .map_err(|_| ApiProblem::internal())?
+        .format(&time::format_description::well_known::Rfc3339)
+        .map_err(|_| ApiProblem::internal())
+}
+
 #[derive(Clone, Default)]
 struct AuthLimiter {
     state: Arc<Mutex<AuthLimiterState>>,
@@ -2040,7 +2314,9 @@ mod tests {
     use crate::ops_client::{OpsBrokerError, OpsFuture};
     use crate::{AgentConfig, AuthBroker, OpsBroker, SessionStore};
 
-    use super::{AppState, AuthLimiter, login, session_cookie, validate_request_boundary};
+    use super::{
+        AppState, AuthLimiter, login, session_cookie, validate_request_boundary, websocket_ticket,
+    };
 
     struct StaticAuth;
     struct StaticOps;
@@ -2227,6 +2503,12 @@ mod tests {
             ops_socket: PathBuf::from("/run/jw-agent/opsd.sock"),
             database: path.clone(),
             web_root: std::env::temp_dir(),
+            ssh_executable: PathBuf::from("/usr/bin/ssh"),
+            ssh_known_hosts: PathBuf::from("/etc/jw-agent/ssh_known_hosts"),
+            askpass_executable: PathBuf::from("/usr/lib/jw-agent/jw-agentd"),
+            askpass_directory: PathBuf::from("/run/jw-agent/askpass"),
+            stty_executable: PathBuf::from("/usr/bin/stty"),
+            setsid_executable: PathBuf::from("/usr/bin/setsid"),
             auth_timeout: Duration::from_secs(8),
             operation_timeout: Duration::from_secs(125),
         };
@@ -2379,5 +2661,28 @@ mod tests {
         assert_eq!(rate_problem.status, StatusCode::TOO_MANY_REQUESTS);
         drop(state);
         cleanup_database(&path)
+    }
+
+    #[test]
+    fn terminal_websocket_ticket_is_header_only_and_single_value() -> Result<(), String> {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "sec-websocket-protocol",
+            HeaderValue::from_static(
+                "jw-terminal-v1, ticket.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            ),
+        );
+        let ticket = websocket_ticket(&headers)
+            .map_err(|_| String::from("valid terminal protocol rejected"))?;
+        assert_eq!(ticket.len(), 43);
+
+        headers.insert(
+            "sec-websocket-protocol",
+            HeaderValue::from_static(
+                "jw-terminal-v1, ticket.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA, ticket.BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+            ),
+        );
+        assert!(websocket_ticket(&headers).is_err());
+        Ok(())
     }
 }

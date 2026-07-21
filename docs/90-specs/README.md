@@ -14,7 +14,8 @@ Last reviewed: 2026-07-21
 
 ## Access specs
 
-- [ACCESS-OPENSSH-TERMINAL-SFTP-V1](access/openssh-terminal-sftp-v1.md) — Accepted, blocked on dependency and security gate
+- [ACCESS-OPENSSH-TERMINAL-SFTP-V1](access/openssh-terminal-sftp-v1.md) — Accepted, terminal implementation active; SFTP pending
+- [ACCESS-OPENSSH-PASSWORD-BROKER-V1](access/openssh-password-broker-v1.md) — Accepted, memory-only one-shot credential boundary
 
 ## Authentication specs
 
@@ -43,6 +44,7 @@ Last reviewed: 2026-07-21
 - [ADR-0010 Local maintenance surfaces and P2 entry](adr/0010-local-maintenance-surfaces.md) — Accepted
 - [ADR-0011 One-shot Certbot network runner](adr/0011-certbot-network-runner.md) — Accepted
 - [ADR-0012 One-shot loopback TLS verifier](adr/0012-loopback-tls-verifier.md) — Accepted
+- [ADR-0013 System OpenSSH client](adr/0013-system-openssh-client.md) — Accepted
 
 ## Spec template requirements
 

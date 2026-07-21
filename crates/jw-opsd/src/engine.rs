@@ -49,7 +49,7 @@ pub struct OpsService {
     runner: Arc<dyn OperationRunner>,
     certbot_runner: Arc<dyn CertbotRunner>,
     forensic_lockdown: Arc<AtomicBool>,
-    execution_lock: Arc<Mutex<()>>,
+    request_lock: Arc<Mutex<()>>,
 }
 
 #[derive(Serialize)]
@@ -257,7 +257,7 @@ impl OpsService {
             runner,
             certbot_runner,
             forensic_lockdown: Arc::new(AtomicBool::new(false)),
-            execution_lock: Arc::new(Mutex::new(())),
+            request_lock: Arc::new(Mutex::new(())),
         }
     }
 
@@ -280,15 +280,20 @@ impl OpsService {
 
     #[must_use]
     pub fn response_for(&self, request: &OpsRequest, now_ms: i64) -> OpsResponse {
-        let body = match request.validate(now_ms) {
-            Ok(()) => match self.handle_body(&request.body, now_ms) {
-                Ok(body) => body,
-                Err(error) => OpsResponseBody::Rejected(OpsRejectedResponse {
-                    code: error.code().to_owned(),
+        let body = match self.request_lock.lock() {
+            Ok(_guard) => match request.validate(now_ms) {
+                Ok(()) => match self.handle_body(&request.body, now_ms) {
+                    Ok(body) => body,
+                    Err(error) => OpsResponseBody::Rejected(OpsRejectedResponse {
+                        code: error.code().to_owned(),
+                    }),
+                },
+                Err(code) => OpsResponseBody::Rejected(OpsRejectedResponse {
+                    code: code.to_owned(),
                 }),
             },
-            Err(code) => OpsResponseBody::Rejected(OpsRejectedResponse {
-                code: code.to_owned(),
+            Err(_) => OpsResponseBody::Rejected(OpsRejectedResponse {
+                code: String::from("forensic_lockdown"),
             }),
         };
         OpsResponse {
@@ -1125,10 +1130,6 @@ impl OpsService {
         operation_id: &str,
         now_ms: i64,
     ) -> Result<OperationReceiptView, OpsError> {
-        let _execution_guard = self
-            .execution_lock
-            .lock()
-            .map_err(|_| OpsError::ForensicLockdown)?;
         let mut ledger = self.open_ledger()?;
         let operation = ledger.load_operation(operation_id)?;
         if operation.plan.actor != *actor {

@@ -15,6 +15,16 @@ users:
 package_update: false
 packages:
   - qemu-guest-agent
+write_files:
+  - path: /etc/ssh/sshd_config.d/60-jw-agent-loopback-password.conf
+    owner: root:root
+    permissions: '0644'
+    content: |
+      Match LocalAddress 127.0.0.1
+          PasswordAuthentication yes
+          KbdInteractiveAuthentication no
 runcmd:
+  - sshd -t
+  - systemctl reload ssh.service
   - systemctl enable --now qemu-guest-agent
   - [cloud-init-per, once, jw-agent-ready, touch, /var/tmp/jw-agent-vm-ready]

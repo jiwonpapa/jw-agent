@@ -1,3 +1,13 @@
+jw-agent (0.2.0~p2.8) noble; urgency=medium
+
+  * Add same-origin non-root OpenSSH web terminal with bounded WSS and PTY.
+  * Keep PAM password in a one-shot memory ticket and 0600 askpass FIFO.
+  * Enforce strict loopback host keys, fixed SSH arguments, and no opsd shell.
+  * Add G1 disclosure, responsive xterm UI, and metadata-only session audit.
+  * Serialize opsd requests across SQLite and checkpoint-file transitions.
+
+ -- JW Agent Maintainers <maintainers@example.invalid>  Wed, 22 Jul 2026 02:20:00 +0900
+
 jw-agent (0.2.0~p2.7) noble; urgency=medium
 
   * Add G2 Certbot lineage attachment for the protected Nginx vhost.

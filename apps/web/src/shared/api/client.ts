@@ -33,6 +33,9 @@ import type {
   ProblemDetails,
   ReauthView,
   SessionView,
+  TerminalCapabilityView,
+  TerminalTicketRequest,
+  TerminalTicketView,
 } from "./types";
 
 const api = createClient<paths>({
@@ -403,4 +406,36 @@ export async function reauthenticateForPolicy(input: {
     return data;
   }
   throw new ApiError(error, response);
+}
+
+export async function getTerminalCapability(
+  signal?: AbortSignal,
+): Promise<TerminalCapabilityView> {
+  const { data, error, response } = await api.GET("/api/v1/terminal", {
+    signal: signal ?? null,
+  });
+  if (data !== undefined) return data;
+  throw new ApiError(error, response);
+}
+
+export async function issueTerminalTicket(
+  input: TerminalTicketRequest,
+): Promise<TerminalTicketView> {
+  const { data, error, response } = await api.POST("/api/v1/terminal/tickets", {
+    body: input,
+    headers: mutationHeaders(),
+  });
+  if (data !== undefined) return data;
+  throw new ApiError(error, response);
+}
+
+export function openTerminalSocket(websocketPath: string, ticket: string): WebSocket {
+  if (websocketPath !== "/api/v1/terminal/connect") {
+    throw new Error("서버가 허용하지 않은 터미널 경로를 반환했습니다.");
+  }
+  const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+  return new WebSocket(
+    `${protocol}//${window.location.host}${websocketPath}`,
+    ["jw-terminal-v1", `ticket.${ticket}`],
+  );
 }

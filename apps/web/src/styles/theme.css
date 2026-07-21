@@ -140,6 +140,38 @@
     padding: 2rem 1rem;
   }
 
+  .terminal-frame {
+    position: relative;
+    min-height: 22rem;
+    height: min(58dvh, 42rem);
+    overflow: hidden;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-panel);
+    background: #111820;
+  }
+
+  .terminal-host {
+    height: 100%;
+    padding: 0.75rem;
+  }
+
+  .terminal-host .xterm {
+    height: 100%;
+  }
+
+  .terminal-placeholder {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-content: center;
+    justify-items: center;
+    gap: 0.75rem;
+    padding: 1.5rem;
+    color: #aab6c2;
+    text-align: center;
+    font-size: 0.875rem;
+  }
+
   @media (min-width: 64rem) {
     .app-body {
       grid-template-columns: 4.5rem minmax(0, 1fr);

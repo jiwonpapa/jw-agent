@@ -420,6 +420,38 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/terminal": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["terminal_capability"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/terminal/tickets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["issue_terminal_ticket"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -924,6 +956,42 @@ export interface components {
             /** Format: int32 */
             uid: number;
             username: string;
+        };
+        TerminalCapabilityView: {
+            assurance: components["schemas"]["AssuranceView"];
+            available: boolean;
+            limits: components["schemas"]["TerminalLimitsView"];
+            reason?: string | null;
+            username: string;
+        };
+        TerminalLimitsView: {
+            /** Format: int64 */
+            idleTimeoutSeconds: number;
+            maxFrameBytes: number;
+            /** Format: int64 */
+            maxLifetimeSeconds: number;
+            maxOutputBufferBytes: number;
+            /** Format: int32 */
+            maxSessionsPerUser: number;
+            /** Format: int64 */
+            ticketTtlSeconds: number;
+        };
+        TerminalTicketRequest: {
+            /** Format: int32 */
+            cols: number;
+            /** Format: password */
+            password: string;
+            riskConfirmed: boolean;
+            /** Format: int32 */
+            rows: number;
+        };
+        TerminalTicketView: {
+            assurance: components["schemas"]["AssuranceView"];
+            expiresAt: string;
+            limits: components["schemas"]["TerminalLimitsView"];
+            /** Format: password */
+            ticket: string;
+            websocketPath: string;
         };
         UpdateAdditionalAuthRequest: {
             policy: components["schemas"]["AdditionalAuthPolicy"];
@@ -2264,6 +2332,104 @@ export interface operations {
                 };
             };
             /** @description Recent PAM reauthentication required */
+            428: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    terminal_capability: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Non-root OpenSSH terminal capability */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TerminalCapabilityView"];
+                };
+            };
+            /** @description Authentication required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    issue_terminal_ticket: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TerminalTicketRequest"];
+            };
+        };
+        responses: {
+            /** @description Single-use terminal WebSocket ticket */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TerminalTicketView"];
+                };
+            };
+            /** @description Invalid dimensions or missing risk confirmation */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Authentication failed */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Role, Origin, CSRF, or subject rejected */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Terminal unavailable or already active */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Configured additional authentication is unavailable */
             428: {
                 headers: {
                     [name: string]: unknown;

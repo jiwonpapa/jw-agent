@@ -12,6 +12,7 @@ use subtle::ConstantTimeEq;
 use zeroize::{Zeroize, Zeroizing};
 
 const MIGRATION_1: &str = include_str!("../migrations/0001_initial.sql");
+const MIGRATION_2: &str = include_str!("../migrations/0002_terminal_audit.sql");
 const TOKEN_BYTES: usize = 32;
 const TOKEN_TEXT_BYTES: usize = 43;
 const PUBLIC_IDLE_MS: i64 = 15 * 60 * 1_000;
@@ -184,6 +185,69 @@ impl SessionStore {
                 [now_unix_ms],
             )
             .map_err(|error| error.to_string())
+    }
+
+    pub fn record_terminal_start(
+        &self,
+        session_id: &str,
+        subject: &Subject,
+        ingress: IngressChannel,
+        now_unix_ms: i64,
+    ) -> Result<(), String> {
+        if session_id.len() != 32 || subject.uid == 0 {
+            return Err(String::from("terminal audit identity is invalid"));
+        }
+        let changed = self
+            .connection()?
+            .execute(
+                "INSERT INTO terminal_sessions(\
+                    session_id, actor_uid, actor_username, ingress, remote_host, \
+                    started_at_unix_ms, ended_at_unix_ms, close_reason, bytes_in, bytes_out, state\
+                 ) VALUES (?1, ?2, ?3, ?4, '127.0.0.1', ?5, NULL, NULL, 0, 0, 'active')",
+                params![
+                    session_id,
+                    subject.uid,
+                    subject.username,
+                    ingress_value(ingress),
+                    now_unix_ms,
+                ],
+            )
+            .map_err(|error| error.to_string())?;
+        if changed == 1 {
+            Ok(())
+        } else {
+            Err(String::from("terminal audit start was not recorded"))
+        }
+    }
+
+    pub fn record_terminal_finish(
+        &self,
+        session_id: &str,
+        reason: &str,
+        bytes_in: u64,
+        bytes_out: u64,
+        now_unix_ms: i64,
+    ) -> Result<(), String> {
+        if reason.is_empty() || reason.len() > 64 {
+            return Err(String::from("terminal audit reason is invalid"));
+        }
+        let stored_in = i64::try_from(bytes_in).map_or(i64::MAX, std::convert::identity);
+        let stored_out = i64::try_from(bytes_out).map_or(i64::MAX, std::convert::identity);
+        let changed = self
+            .connection()?
+            .execute(
+                "UPDATE terminal_sessions \
+                 SET ended_at_unix_ms = ?1, close_reason = ?2, bytes_in = ?3, bytes_out = ?4, \
+                     state = 'closed' \
+                 WHERE session_id = ?5 AND state = 'active'",
+                params![now_unix_ms, reason, stored_in, stored_out, session_id],
+            )
+            .map_err(|error| error.to_string())?;
+        if changed == 1 {
+            Ok(())
+        } else {
+            Err(String::from("terminal audit finish was not recorded"))
+        }
     }
 
     pub fn additional_auth_policy(&self) -> Result<AdditionalAuthPolicy, String> {
@@ -438,6 +502,23 @@ fn migrate(path: &Path, now_unix_ms: i64) -> Result<(), String> {
             [now_unix_ms],
         )
         .map_err(|error| error.to_string())?;
+    transaction
+        .execute_batch(MIGRATION_2)
+        .map_err(|error| error.to_string())?;
+    transaction
+        .execute(
+            "INSERT OR IGNORE INTO schema_migrations(version, applied_at_unix_ms) VALUES (2, ?1)",
+            [now_unix_ms],
+        )
+        .map_err(|error| error.to_string())?;
+    transaction
+        .execute(
+            "UPDATE terminal_sessions \
+             SET ended_at_unix_ms = ?1, close_reason = 'daemon_restart', state = 'closed' \
+             WHERE state = 'active'",
+            [now_unix_ms],
+        )
+        .map_err(|error| error.to_string())?;
     transaction.commit().map_err(|error| error.to_string())
 }
 
@@ -656,6 +737,51 @@ mod tests {
             fs::remove_file(shm).map_err(|error| error.to_string())?;
         }
         Ok(())
+    }
+
+    #[test]
+    fn terminal_audit_is_metadata_only_and_restart_closes_active_session() -> Result<(), String> {
+        let path = test_path()?;
+        let store = SessionStore::open(path.clone(), 1_000)?;
+        let subject = Subject {
+            uid: 1_000,
+            username: String::from("operator"),
+            role: Role::Operator,
+        };
+        store.record_terminal_start(
+            "0123456789abcdef0123456789abcdef",
+            &subject,
+            IngressChannel::Recovery,
+            2_000,
+        )?;
+        drop(store);
+
+        let reopened = SessionStore::open(path.clone(), 3_000)?;
+        let record: (String, String, i64, i64) = reopened
+            .connection()?
+            .query_row(
+                "SELECT state, close_reason, bytes_in, bytes_out \
+                 FROM terminal_sessions WHERE session_id = ?1",
+                ["0123456789abcdef0123456789abcdef"],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .map_err(|error| error.to_string())?;
+        assert_eq!(
+            record,
+            (String::from("closed"), String::from("daemon_restart"), 0, 0,)
+        );
+        let columns: i64 = reopened
+            .connection()?
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('terminal_sessions') \
+                 WHERE name IN ('command', 'input', 'output', 'password', 'ticket')",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|error| error.to_string())?;
+        assert_eq!(columns, 0);
+        drop(reopened);
+        cleanup_test_database(&path)
     }
 
     #[test]

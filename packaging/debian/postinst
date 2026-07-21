@@ -3,6 +3,18 @@ set -e
 
 if [ "$1" = "configure" ]; then
     systemd-sysusers /usr/lib/sysusers.d/jw-agent.conf
+    install -d -o root -g root -m 0755 /etc/jw-agent
+    if [ -r /etc/ssh/ssh_host_ed25519_key.pub ]; then
+        known_hosts_temp="$(mktemp /etc/jw-agent/.ssh_known_hosts.XXXXXX)"
+        awk 'NF >= 2 { print "jw-agent-loopback " $1 " " $2; exit }' \
+            /etc/ssh/ssh_host_ed25519_key.pub > "$known_hosts_temp"
+        if [ ! -s "$known_hosts_temp" ]; then
+            rm -f "$known_hosts_temp"
+            exit 1
+        fi
+        install -o root -g root -m 0644 "$known_hosts_temp" /etc/jw-agent/ssh_known_hosts
+        rm -f "$known_hosts_temp"
+    fi
 fi
 
 #DEBHELPER#

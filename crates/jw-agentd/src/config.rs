@@ -11,6 +11,12 @@ pub const DEFAULT_AUTH_SOCKET: &str = "/run/jw-agent/authd.sock";
 pub const DEFAULT_OPS_SOCKET: &str = "/run/jw-agent/opsd.sock";
 pub const DEFAULT_DATABASE: &str = "/var/lib/jw-agent/agentd/agentd.sqlite3";
 pub const DEFAULT_WEB_ROOT: &str = "/usr/share/jw-agent/web";
+pub const DEFAULT_SSH_EXECUTABLE: &str = "/usr/bin/ssh";
+pub const DEFAULT_SSH_KNOWN_HOSTS: &str = "/etc/jw-agent/ssh_known_hosts";
+pub const DEFAULT_ASKPASS_EXECUTABLE: &str = "/usr/lib/jw-agent/jw-agentd";
+pub const DEFAULT_ASKPASS_DIRECTORY: &str = "/run/jw-agent/askpass";
+pub const DEFAULT_STTY_EXECUTABLE: &str = "/usr/bin/stty";
+pub const DEFAULT_SETSID_EXECUTABLE: &str = "/usr/bin/setsid";
 pub const DEFAULT_OPERATION_TIMEOUT_SECONDS: u64 = 14 * 60;
 
 #[derive(Clone, Debug)]
@@ -24,6 +30,12 @@ pub struct AgentConfig {
     pub ops_socket: PathBuf,
     pub database: PathBuf,
     pub web_root: PathBuf,
+    pub ssh_executable: PathBuf,
+    pub ssh_known_hosts: PathBuf,
+    pub askpass_executable: PathBuf,
+    pub askpass_directory: PathBuf,
+    pub stty_executable: PathBuf,
+    pub setsid_executable: PathBuf,
     pub auth_timeout: Duration,
     pub operation_timeout: Duration,
 }
@@ -61,6 +73,12 @@ impl AgentConfig {
             ops_socket: PathBuf::from(environment_or("JW_AGENT_OPS_SOCKET", DEFAULT_OPS_SOCKET)),
             database: PathBuf::from(environment_or("JW_AGENT_DATABASE", DEFAULT_DATABASE)),
             web_root: PathBuf::from(environment_or("JW_AGENT_WEB_ROOT", DEFAULT_WEB_ROOT)),
+            ssh_executable: PathBuf::from(DEFAULT_SSH_EXECUTABLE),
+            ssh_known_hosts: PathBuf::from(DEFAULT_SSH_KNOWN_HOSTS),
+            askpass_executable: PathBuf::from(DEFAULT_ASKPASS_EXECUTABLE),
+            askpass_directory: PathBuf::from(DEFAULT_ASKPASS_DIRECTORY),
+            stty_executable: PathBuf::from(DEFAULT_STTY_EXECUTABLE),
+            setsid_executable: PathBuf::from(DEFAULT_SETSID_EXECUTABLE),
             auth_timeout: Duration::from_secs(8),
             operation_timeout: operation_timeout()?,
         })

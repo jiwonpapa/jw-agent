@@ -1,9 +1,9 @@
 # Ubuntu 24.04 VM evidence matrix
 
-Status: P2B VM_PASS; P2C runner, inventory, renewal, issuance failure safety, and protected-vhost attach rollback VM_PASS; public CA success pending  
+Status: P2B VM_PASS; P2C lifecycle VM_PASS except public CA success; P2D terminal VM_PASS and SFTP pending  
 Authority: Delivery  
 Owner: Verification Maintainer  
-Last reviewed: 2026-07-21
+Last reviewed: 2026-07-22
 
 This directory defines real-OS evidence that cannot be claimed from macOS or
 mock browser tests. The `p2-vm` xtask lane owns the repeatable OS, package,
@@ -25,17 +25,17 @@ JW_VM_PUBLIC_ADDRESS=192.168.0.142
 JW_VM_CA_CERT=/path/to/test-ca.crt
 JW_VM_ADMIN_USER=jwvmadmin
 JW_VM_PASSWORD_FILE=/path/to/mode-0600-fixture-password
-JW_VM_REMOTE_PACKAGE=/home/neojins/jw-agent_0.2.0~p2.7_amd64.deb
-JW_VM_EXPECTED_PACKAGE_SHA256=87ac41e0ac34c4e1d0a4af66dc5af8de904b5eda4bbfc19c3608a6affe0edfa6
-JW_VM_EXPECTED_VERSION=0.2.0~p2.7
+JW_VM_REMOTE_PACKAGE=/home/neojins/jw-agent_0.2.0~p2.8_amd64.deb
+JW_VM_EXPECTED_PACKAGE_SHA256=d1b8591a57a66255e4d7260f5c568613497dbe0d3cf29667698f32716509ff64
+JW_VM_EXPECTED_VERSION=0.2.0~p2.8
 cargo xtask verify p2-vm
 ```
 
 ## Current VM evidence
 
 - domain: `jw-agent-p1`, Ubuntu 24.04.4 LTS, kernel `6.8.0-136-generic`
-- package: `jw-agent 0.2.0~p2.7`, SHA-256 `87ac41e0ac34c4e1d0a4af66dc5af8de904b5eda4bbfc19c3608a6affe0edfa6`, Lintian clean
-- lanes: `p2-local` 19 PASS, `p2-browser` 8 PASS with 23 browser scenarios, `p2-vm` 20 PASS
+- package: `jw-agent 0.2.0~p2.8`, SHA-256 `d1b8591a57a66255e4d7260f5c568613497dbe0d3cf29667698f32716509ff64`, Lintian clean
+- lanes: `p2-local` 20 PASS, `p2-browser` 8 PASS with 27 browser scenarios, `p2-vm` 21 PASS
 - automated VM scenarios: installed PAM fixture equality, no `pam_faillock`, `jw-authd → libpam.so.0`, `jw-agentd → libsqlite3.so.0`, repeated product-login failures followed by unchanged Linux password state and working OpenSSH key recovery
 - automated P2 faults: success, verified no-op, syntax failure rollback, injected reload failure rollback, 1 MiB snapshot filesystem cancellation before apply, deleted checkpoint lockdown and restoration
 - automated P2B config faults: >16 KiB active save/no-op, exact syntax/reload rollback, external drift preservation, inactive denial, private proposal cleanup, internal temp discovery exclusion and startup cleanup
@@ -44,14 +44,16 @@ cargo xtask verify p2-vm
 - automated P2C renewal operation: immutable plan, PAM approval, private inventory snapshot, real Ubuntu Certbot dry-run, digest-only receipt, timer-unhealthy rejection, one-shot cleanup
 - automated P2C issuance failure: exact DNS/listener/webroot preflight, staging plan, two G1 confirmations, PAM approval, real public-CA rejection, unchanged inventory, no false rollback, ephemeral email/proposal cleanup
 - automated P2C attach: exact protected-vhost TLS directive replacement, Nginx syntax/reload/active, timer and loopback SNI fingerprint read-back; forced verifier failure restores exact bytes, owner and mode
+- automated P2D terminal: loopback-only password policy, non-root OpenSSH command I/O, PTY resize, ticket replay and wrong-Origin denial, logout revoke, metadata-only audit, process/FIFO cleanup
 - package runtime: opsd private network namespace, exact `CAP_NET_BIND_SERVICE`, ephemeral Nginx test logs, no listening IP socket, root-owned `0600` ledger, bounded UDS
 - real browser: public HTTPS editor, 24 KiB counter, planned-only warning, G2 scope/exclusions and custom-basename protected vhost; internal temp absent and authenticated fresh-session console error 0
 
 This is a private-LAN `.test` host with a dedicated management-edge test CA.
 The Certbot runner boundary, read-only inventory, renewal dry-run, guided issue
 preflight, public-CA failure handling, and protected-vhost local TLS attachment
-rollback are VM-proven. It is not evidence of public DNS, successful public-CA
-issuance, signed release distribution, or production operation.
+rollback and the bounded non-root terminal are VM-proven. It is not evidence of
+public DNS, successful public-CA issuance, signed release distribution, SFTP,
+or production operation.
 
 ## Required disposable-VM scenarios
 
@@ -63,6 +65,7 @@ issuance, signed release distribution, or production operation.
 | systemd hardening | expected identities, restart behavior, filesystem writes, no authd/opsd network sockets |
 | recovery ingress | loopback-only listener, SSH tunnel access, non-loopback bind refusal, exact Host/Origin |
 | public edge | exact FQDN/TLS, UDS proxy, spoofed forwarding headers cleared, internal ports absent |
+| OpenSSH terminal | loopback-only password policy, fixed client, replay/origin/revoke, bounded PTY and metadata audit |
 | failure recovery | Nginx/TLS failure leaves SSH recovery available and public profile removable |
 | secret scan | password/session tokens absent from journal, DB, process arguments, package logs and evidence |
 

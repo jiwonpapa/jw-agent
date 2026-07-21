@@ -9,18 +9,18 @@ publish = false
 workspace = true
 
 [dependencies]
-axum = { workspace = true, features = ["http1", "json", "tokio"] }
+axum = { workspace = true, features = ["http1", "json", "tokio", "ws"] }
 base64 = { workspace = true, features = ["std"] }
 getrandom.workspace = true
 futures-core.workspace = true
 jw-contracts = { path = "../jw-contracts" }
-nix = { workspace = true, features = ["fs"] }
+nix = { workspace = true, features = ["fs", "term"] }
 rusqlite.workspace = true
 serde_json = { workspace = true, features = ["std"] }
 sha2.workspace = true
 subtle = { workspace = true, features = ["std"] }
 time = { workspace = true, features = ["formatting", "std"] }
-tokio = { workspace = true, features = ["fs", "io-util", "macros", "net", "rt", "sync", "time"] }
+tokio = { workspace = true, features = ["fs", "io-util", "macros", "net", "process", "rt", "sync", "time"] }
 tower-http = { workspace = true, features = ["fs"] }
 utoipa = { workspace = true, features = ["macros"] }
 zeroize = { workspace = true, features = ["alloc"] }
