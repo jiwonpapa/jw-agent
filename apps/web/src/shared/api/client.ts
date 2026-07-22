@@ -23,6 +23,9 @@ import type {
   FileSessionView,
   FileStatView,
   FileTextView,
+  FileUploadPlanRequest,
+  FileUploadPlanView,
+  FileUploadResultView,
   HealthView,
   HostObservation,
   IntegrationCatalogView,
@@ -79,7 +82,7 @@ function forgetSession(): void {
   csrfToken = null;
 }
 
-function mutationHeaders(): HeadersInit {
+function mutationHeaders(): Record<string, string> {
   return csrfToken === null ? {} : { "X-CSRF-Token": csrfToken };
 }
 
@@ -505,6 +508,36 @@ export async function downloadFile(input: FilePathRequest): Promise<Blob> {
     body: input,
     headers: mutationHeaders(),
     parseAs: "blob",
+  });
+  if (data !== undefined) return data;
+  throw new ApiError(error, response);
+}
+
+export async function planFileUpload(
+  input: FileUploadPlanRequest,
+): Promise<FileUploadPlanView> {
+  const { data, error, response } = await api.POST("/api/v1/files/upload/plans", {
+    body: input,
+    headers: mutationHeaders(),
+  });
+  if (data !== undefined) return data;
+  throw new ApiError(error, response);
+}
+
+export async function applyFileUpload(input: {
+  sessionToken: string;
+  planToken: string;
+  content: Uint8Array<ArrayBuffer>;
+}): Promise<FileUploadResultView> {
+  const { data, error, response } = await api.POST("/api/v1/files/upload", {
+    body: input.content as unknown as number[],
+    bodySerializer: (body) => body as unknown as BodyInit,
+    headers: {
+      ...mutationHeaders(),
+      "Content-Type": "application/octet-stream",
+      "X-JW-File-Session": input.sessionToken,
+      "X-JW-Upload-Plan": input.planToken,
+    },
   });
   if (data !== undefined) return data;
   throw new ApiError(error, response);

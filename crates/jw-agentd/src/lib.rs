@@ -16,7 +16,10 @@ pub mod terminal_session;
 pub use api::{ApiDoc, AppState, build_router};
 pub use auth_client::{AuthBroker, UdsAuthBroker};
 pub use config::AgentConfig;
-pub use file_session::{FileBroker, FileLease, FileSessionError, FileSessionIssue};
+pub use file_session::{
+    AppliedUpload, FileBroker, FileLease, FileSessionError, FileSessionIssue, FileUploadLease,
+    IssuedUploadPlan,
+};
 pub use ops_client::{OpsBroker, UdsOpsBroker};
 pub use session::SessionStore;
 pub use terminal::{TerminalBroker, TerminalLease, terminal_runtime_available};

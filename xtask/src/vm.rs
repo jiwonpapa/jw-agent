@@ -360,6 +360,8 @@ ldd /usr/lib/jw-agent/jw-authd | grep -q 'libpam\.so\.0'
 ldd /usr/lib/jw-agent/jw-agentd | grep -q 'libsqlite3\.so\.0'
 test -x /usr/lib/jw-agent/jw-certd
 grep -Fq 'client_max_body_size 64k;' "$tmpdir/usr/share/jw-agent/nginx/jw-agent-management.conf.template"
+grep -Fq 'location = /api/v1/files/upload {{' "$tmpdir/usr/share/jw-agent/nginx/jw-agent-management.conf.template"
+grep -Fq 'client_max_body_size 8m;' "$tmpdir/usr/share/jw-agent/nginx/jw-agent-management.conf.template"
 grep -Fq 'include /usr/share/jw-agent/nginx/acme-challenge.conf;' "$tmpdir/usr/share/jw-agent/nginx/jw-agent-management.conf.template"
 grep -Fq 'd /var/lib/jw-agent 0751 root jw-agent -' "$tmpdir/usr/lib/tmpfiles.d/jw-agent.conf"
 "#
@@ -1462,6 +1464,294 @@ sudo rm -rf -- "$admin_home/jw-agent-sftp-fixture""#,
     }
 }
 
+pub fn gate_p2_openssh_sftp_atomic_upload(_root: &Path, timeout: Duration) -> Result<(), String> {
+    const CREATE: &[u8] = b"JW_SFTP_G1_CREATE_OK\n";
+    const CREATE_DIGEST: &str =
+        "sha256:e2f9121cfa02403f744a46631666b07a4c5517162888fc39a96db225da5fec94";
+    const REPLACE: &[u8] = b"JW_SFTP_G1_REPLACE_OK\n";
+    const REPLACE_DIGEST: &str =
+        "sha256:883864d2696dfc6585c6feb4ceb9beb77865fda5db976f87613d289611c50dfd";
+    const STALE: &[u8] = b"JW_SFTP_G1_STALE_PLAN\n";
+    const STALE_DIGEST: &str =
+        "sha256:b700aaae1c6e1c453f6f29d138c1e9f597ba96c20030d54094855158d3b616f9";
+    const ORIGIN: &[u8] = b"JW_SFTP_G1_ORIGIN_OK\n";
+    const ORIGIN_DIGEST: &str =
+        "sha256:a0940e4b44b2bf792259b25f2688a27f16cba5c155e4595f0c43543340273a55";
+    const DIGEST_OK: &[u8] = b"JW_SFTP_G1_DIGEST_OK\n";
+    const DIGEST_OK_VALUE: &str =
+        "sha256:ce1b2b30134dd725ebf6e9c2cff223d82e8965cc93942b25726eb05077368a20";
+    const DIGEST_NO: &[u8] = b"JW_SFTP_G1_DIGEST_NO\n";
+
+    let config = VmConfig::load()?;
+    let password = read_secret(&config.password_file)?;
+    restart_edge_and_agentd_and_wait(&config, timeout)?;
+    let fixture_command = format!(
+        r#"set -eu
+admin_home="$(getent passwd -- {admin} | cut -d: -f6)"
+test -n "$admin_home"
+case "$admin_home" in /*) ;; *) exit 1 ;; esac
+fixture="$admin_home/jw-agent-sftp-upload-fixture"
+sudo rm -rf -- "$fixture"
+sudo -H -u {admin} mkdir -p "$fixture/directory-target"
+printf 'before\n' | sudo -H -u {admin} tee "$fixture/replace.txt" >/dev/null
+printf 'stale-before\n' | sudo -H -u {admin} tee "$fixture/stale.txt" >/dev/null
+sudo -H -u {admin} ln -s /etc/passwd "$fixture/symlink-target"
+sudo -H -u {admin} chmod 0700 "$fixture" "$fixture/directory-target"
+sudo -H -u {admin} chmod 0640 "$fixture/replace.txt" "$fixture/stale.txt"
+sudo grep -Fq 'location = /api/v1/files/upload {{' /etc/nginx/sites-available/jw-agent-p1
+sudo grep -Fq 'client_max_body_size 8m;' /etc/nginx/sites-available/jw-agent-p1
+sudo nginx -t"#,
+        admin = config.admin_user,
+    );
+    let prepared = config.ssh(&fixture_command, None, timeout)?;
+    require_success(&prepared, "SFTP atomic upload fixture preparation", false)?;
+
+    let result = (|| {
+        let session = P2ApiSession::login(&config, &password, timeout)?;
+        let capability = session.get(&config, "/api/v1/files", timeout)?;
+        expect_http(&capability, 200, "SFTP G1 capability")?;
+        for expected in [
+            "\"level\":\"g1_verified_action\"",
+            "\"rollbackSupport\":\"not_guaranteed\"",
+            "\"maxUploadBytes\":8388608",
+            "\"uploadPlanTtlSeconds\":120",
+        ] {
+            if !capability.body.contains(expected) {
+                return Err(format!("SFTP G1 capability omitted {expected}"));
+            }
+        }
+
+        let mut file_session = session.create_file_session(&config, &password, timeout)?;
+        let base = "jw-agent-sftp-upload-fixture";
+
+        let create_path = format!("{base}/created.txt");
+        let create_plan = session.create_file_upload_plan(
+            &config,
+            FileUploadPlanInput {
+                password: &password,
+                file_session_token: &file_session,
+                path: &create_path,
+                content_bytes: CREATE.len(),
+                content_digest: CREATE_DIGEST,
+                overwrite_confirmed: false,
+            },
+            timeout,
+        )?;
+        let created =
+            session.apply_file_upload(&config, &file_session, &create_plan, CREATE, timeout)?;
+        expect_verified_upload(&created, &create_path, CREATE_DIGEST, "SFTP G1 create")?;
+        let replay =
+            session.apply_file_upload(&config, &file_session, &create_plan, CREATE, timeout)?;
+        expect_http(&replay, 401, "SFTP G1 plan replay denial")?;
+
+        let replace_path = format!("{base}/replace.txt");
+        let missing_confirmation = session.file_upload_plan_request(
+            &config,
+            FileUploadPlanInput {
+                password: &password,
+                file_session_token: &file_session,
+                path: &replace_path,
+                content_bytes: REPLACE.len(),
+                content_digest: REPLACE_DIGEST,
+                overwrite_confirmed: false,
+            },
+            timeout,
+        )?;
+        expect_http(
+            &missing_confirmation,
+            409,
+            "SFTP G1 overwrite confirmation denial",
+        )?;
+        let replace_plan = session.create_file_upload_plan(
+            &config,
+            FileUploadPlanInput {
+                password: &password,
+                file_session_token: &file_session,
+                path: &replace_path,
+                content_bytes: REPLACE.len(),
+                content_digest: REPLACE_DIGEST,
+                overwrite_confirmed: true,
+            },
+            timeout,
+        )?;
+        let replaced =
+            session.apply_file_upload(&config, &file_session, &replace_plan, REPLACE, timeout)?;
+        expect_verified_upload(&replaced, &replace_path, REPLACE_DIGEST, "SFTP G1 replace")?;
+
+        let stale_path = format!("{base}/stale.txt");
+        let stale_plan = session.create_file_upload_plan(
+            &config,
+            FileUploadPlanInput {
+                password: &password,
+                file_session_token: &file_session,
+                path: &stale_path,
+                content_bytes: STALE.len(),
+                content_digest: STALE_DIGEST,
+                overwrite_confirmed: true,
+            },
+            timeout,
+        )?;
+        let external = format!(
+            "printf 'external-change\\n' | sudo -H -u {} tee \"$(getent passwd -- {} | cut -d: -f6)/{stale_path}\" >/dev/null",
+            config.admin_user, config.admin_user,
+        );
+        let changed = config.ssh(&external, None, timeout)?;
+        require_success(&changed, "SFTP stale target mutation fixture", false)?;
+        let stale_apply =
+            session.apply_file_upload(&config, &file_session, &stale_plan, STALE, timeout)?;
+        expect_http(&stale_apply, 409, "SFTP stale target denial")?;
+        if !stale_apply.body.contains("\"code\":\"target_changed\"") {
+            return Err(String::from("SFTP stale target returned the wrong denial"));
+        }
+
+        session.close_file_session(&config, &file_session, timeout)?;
+        restart_edge_and_agentd_and_wait(&config, timeout)?;
+        file_session = session.create_file_session(&config, &password, timeout)?;
+
+        for (path, expected_status, label) in [
+            (format!("{base}/symlink-target"), 403, "symlink target"),
+            (format!("{base}/directory-target"), 409, "directory target"),
+            (String::from("../outside.txt"), 400, "traversal target"),
+        ] {
+            let denied = session.file_upload_plan_request(
+                &config,
+                FileUploadPlanInput {
+                    password: &password,
+                    file_session_token: &file_session,
+                    path: &path,
+                    content_bytes: CREATE.len(),
+                    content_digest: CREATE_DIGEST,
+                    overwrite_confirmed: true,
+                },
+                timeout,
+            )?;
+            expect_http(&denied, expected_status, &format!("SFTP G1 {label} denial"))?;
+        }
+
+        let digest_path = format!("{base}/digest-mismatch.txt");
+        let digest_plan = session.create_file_upload_plan(
+            &config,
+            FileUploadPlanInput {
+                password: &password,
+                file_session_token: &file_session,
+                path: &digest_path,
+                content_bytes: DIGEST_OK.len(),
+                content_digest: DIGEST_OK_VALUE,
+                overwrite_confirmed: false,
+            },
+            timeout,
+        )?;
+        let digest_denied =
+            session.apply_file_upload(&config, &file_session, &digest_plan, DIGEST_NO, timeout)?;
+        expect_http(&digest_denied, 400, "SFTP G1 digest mismatch denial")?;
+
+        session.close_file_session(&config, &file_session, timeout)?;
+        restart_edge_and_agentd_and_wait(&config, timeout)?;
+        file_session = session.create_file_session(&config, &password, timeout)?;
+
+        let origin_path = format!("{base}/origin.txt");
+        let origin_plan = session.create_file_upload_plan(
+            &config,
+            FileUploadPlanInput {
+                password: &password,
+                file_session_token: &file_session,
+                path: &origin_path,
+                content_bytes: ORIGIN.len(),
+                content_digest: ORIGIN_DIGEST,
+                overwrite_confirmed: false,
+            },
+            timeout,
+        )?;
+        let wrong_origin = session.apply_file_upload_with_origin(
+            &config,
+            &file_session,
+            &origin_plan,
+            ORIGIN,
+            "https://wrong-origin.invalid",
+            timeout,
+        )?;
+        expect_http(&wrong_origin, 403, "SFTP G1 wrong Origin denial")?;
+        let origin_success =
+            session.apply_file_upload(&config, &file_session, &origin_plan, ORIGIN, timeout)?;
+        expect_verified_upload(
+            &origin_success,
+            &origin_path,
+            ORIGIN_DIGEST,
+            "SFTP G1 post-Origin apply",
+        )?;
+
+        session.close_file_session(&config, &file_session, timeout)?;
+        let evidence_command = format!(
+            r#"set -eu
+admin_home="$(getent passwd -- {admin} | cut -d: -f6)"
+fixture="$admin_home/jw-agent-sftp-upload-fixture"
+test "$(sudo sha256sum -- "$fixture/created.txt" | awk '{{print $1}}')" = e2f9121cfa02403f744a46631666b07a4c5517162888fc39a96db225da5fec94
+test "$(sudo sha256sum -- "$fixture/replace.txt" | awk '{{print $1}}')" = 883864d2696dfc6585c6feb4ceb9beb77865fda5db976f87613d289611c50dfd
+test "$(sudo sha256sum -- "$fixture/stale.txt" | awk '{{print $1}}')" = 12961f0089ce2736dcc352e0e80f2a297b40c7dcee25ed2d8bb8b158d4715030
+test "$(sudo sha256sum -- "$fixture/origin.txt" | awk '{{print $1}}')" = a0940e4b44b2bf792259b25f2688a27f16cba5c155e4595f0c43543340273a55
+test "$(sudo stat -c %a "$fixture/created.txt")" = 600
+test "$(sudo stat -c %a "$fixture/replace.txt")" = 640
+test ! -e "$fixture/digest-mismatch.txt"
+! sudo -H -u {admin} find "$fixture" -maxdepth 1 -name '.jw-agent-upload-*.tmp' -print -quit | grep -q .
+attempt=0
+while test "$attempt" -lt 50; do
+    if ! pgrep -u jw-agent -f '/usr/bin/ssh' >/dev/null 2>&1 && ! sudo find /run/jw-agent/askpass -mindepth 1 -print -quit | grep -q .; then break; fi
+    attempt=$((attempt + 1))
+    sleep 0.1
+done
+! pgrep -u jw-agent -f '/usr/bin/ssh' >/dev/null 2>&1
+! sudo find /run/jw-agent/askpass -mindepth 1 -print -quit | grep -q .
+sudo python3 -c 'import sqlite3; c=sqlite3.connect("/var/lib/jw-agent/agentd/agentd.sqlite3"); sids=[r[0] for r in c.execute("select session_id from file_sessions order by started_at_unix_ms desc limit 3")]; rows=c.execute("select state,result,length(path_digest),target_state,byte_count from file_uploads where session_id in (?,?,?) order by planned_at_unix_ms",sids).fetchall(); assert len(rows)==5; assert sum(r[0]=="verified" for r in rows)==3; assert sum(r[0]=="failed" for r in rows)==2; assert all(r[2]==32 for r in rows); assert {{r[3] for r in rows}}=={{"create","replace"}}; assert not {{r[1] for r in rows}}.intersection({{"applying","planned","manual_check"}}); names={{r[1] for r in c.execute("pragma table_info(file_uploads)")}}; assert not names.intersection({{"path","content","password","token","temporary_path","file_body"}})'
+! sudo sh -c 'find /var/lib/jw-agent/agentd -maxdepth 1 -type f -name "agentd.sqlite3*" -print0 | xargs -0 -r strings' | grep -Fq 'jw-agent-sftp-upload-fixture'
+! sudo sh -c 'find /var/lib/jw-agent/agentd -maxdepth 1 -type f -name "agentd.sqlite3*" -print0 | xargs -0 -r strings' | grep -Fq 'JW_SFTP_G1_'
+! sudo journalctl -u jw-agentd.service --since '10 minutes ago' --no-pager -o cat | grep -Fq 'JW_SFTP_G1_'
+systemctl is-active --quiet ssh.service"#,
+            admin = config.admin_user,
+        );
+        let evidence = config.ssh(&evidence_command, None, timeout)?;
+        require_success(&evidence, "OpenSSH SFTP atomic upload evidence", false)
+    })();
+
+    let cleanup_command = format!(
+        r#"set -eu
+admin_home="$(getent passwd -- {admin} | cut -d: -f6)"
+sudo rm -rf -- "$admin_home/jw-agent-sftp-upload-fixture""#,
+        admin = config.admin_user,
+    );
+    let cleanup = config.ssh(&cleanup_command, None, timeout);
+    let cleanup = cleanup
+        .and_then(|value| require_success(&value, "SFTP atomic upload fixture cleanup", false));
+    match (result, cleanup) {
+        (Ok(()), Ok(())) => Ok(()),
+        (Err(error), Ok(())) => Err(error),
+        (Ok(()), Err(cleanup_error)) => Err(cleanup_error),
+        (Err(error), Err(cleanup_error)) => Err(format!(
+            "{error}; SFTP atomic upload cleanup also failed: {cleanup_error}"
+        )),
+    }
+}
+
+fn expect_verified_upload(
+    response: &HttpResponse,
+    path: &str,
+    digest: &str,
+    label: &str,
+) -> Result<(), String> {
+    expect_http(response, 200, label)?;
+    if !response
+        .body
+        .contains(&format!("\"path\":{}", json_string(path)))
+        || !response.body.contains(digest)
+        || !response.body.contains("\"level\":\"g1_verified_action\"")
+        || !response
+            .body
+            .contains("\"rollbackSupport\":\"not_guaranteed\"")
+    {
+        return Err(format!("{label} omitted verified G1 read-back evidence"));
+    }
+    Ok(())
+}
+
 fn run_terminal_websocket_probe(
     config: &VmConfig,
     cookie: &str,
@@ -1518,6 +1808,7 @@ chmod 0600 /etc/letsencrypt/renewal/__HOST__.conf
 systemctl enable --now certbot.timer
 nginx -t
 systemctl reload nginx.service
+systemctl reset-failed jw-certd.socket jw-opsd.service jw-agentd.service
 systemctl restart jw-certd.socket jw-opsd.service jw-agentd.service
 '"#
         .replace("__HOST__", &config.public_host);
@@ -1561,6 +1852,7 @@ systemctl daemon-reload
 systemctl enable --now certbot.timer
 nginx -t
 systemctl reload nginx.service
+systemctl reset-failed jw-certd.socket jw-opsd.service jw-agentd.service
 systemctl restart jw-certd.socket jw-opsd.service jw-agentd.service
 '"#
     .replace("__HOST__", &config.public_host);
@@ -1582,10 +1874,12 @@ else
 fi
 sed -i "/# jw-agent-vm-certbot-issue$/d" /etc/hosts
 printf "%s\n" "__ADDRESS__ __HOST__ # jw-agent-vm-certbot-issue" >> /etc/hosts
-sed -i "0,/    server_name __HOST__;/s|    server_name __HOST__;|    server_name __HOST__;\\n\\n    include /usr/share/jw-agent/nginx/acme-challenge.conf;|" /etc/nginx/sites-available/jw-agent-p1
-sed -i "0,/    return 308 /s|    return 308 .*;|    location / { return 308 https://\$host\$request_uri; }|" /etc/nginx/sites-available/jw-agent-p1
+if ! grep -Fq "include /usr/share/jw-agent/nginx/acme-challenge.conf;" /etc/nginx/sites-available/jw-agent-p1; then
+    sed -i "0,/    server_name __HOST__;/s|    server_name __HOST__;|    server_name __HOST__;\\n\\n    include /usr/share/jw-agent/nginx/acme-challenge.conf;|" /etc/nginx/sites-available/jw-agent-p1
+    sed -i "0,/    return 308 /s|    return 308 .*;|    location / { return 308 https://\$host\$request_uri; }|" /etc/nginx/sites-available/jw-agent-p1
+fi
 grep -Fq "include /usr/share/jw-agent/nginx/acme-challenge.conf;" /etc/nginx/sites-available/jw-agent-p1
-grep -Fq "location / { return 308 https://\$host\$request_uri; }" /etc/nginx/sites-available/jw-agent-p1 || { echo "HTTP redirect was not moved into a fallback location" >&2; exit 1; }
+grep -Fq "location / {" /etc/nginx/sites-available/jw-agent-p1 || { echo "HTTP redirect was not moved into a fallback location" >&2; exit 1; }
 install -d -o root -g root -m 0755 /var/lib/jw-agent/acme-webroot/.well-known/acme-challenge
 printf "%s\n" "jw-agent-vm-acme" > /var/lib/jw-agent/acme-webroot/.well-known/acme-challenge/preflight
 chmod 0644 /var/lib/jw-agent/acme-webroot/.well-known/acme-challenge/preflight
@@ -1833,6 +2127,16 @@ struct P2ApiSession {
     csrf_token: String,
 }
 
+#[derive(Clone, Copy)]
+struct FileUploadPlanInput<'a> {
+    password: &'a str,
+    file_session_token: &'a str,
+    path: &'a str,
+    content_bytes: usize,
+    content_digest: &'a str,
+    overwrite_confirmed: bool,
+}
+
 impl P2ApiSession {
     fn login(config: &VmConfig, password: &str, timeout: Duration) -> Result<Self, String> {
         let cookie_jar = TemporarySecretFile::create("jw-agent-p2-cookie")?;
@@ -2006,6 +2310,98 @@ impl P2ApiSession {
             &self.cookie_jar.path,
             Some(&self.csrf_token),
             Some(body.as_bytes()),
+            timeout,
+        )
+    }
+
+    fn file_upload_plan_request(
+        &self,
+        config: &VmConfig,
+        input: FileUploadPlanInput<'_>,
+        timeout: Duration,
+    ) -> Result<HttpResponse, String> {
+        let body = format!(
+            "{{\"sessionToken\":{},\"path\":{},\"contentBytes\":{},\"contentDigest\":{},\"password\":{},\"nonReversibleConfirmed\":true,\"overwriteConfirmed\":{}}}",
+            json_string(input.file_session_token),
+            json_string(input.path),
+            input.content_bytes,
+            json_string(input.content_digest),
+            json_string(input.password),
+            input.overwrite_confirmed,
+        );
+        public_api_request(
+            config,
+            "POST",
+            "/api/v1/files/upload/plans",
+            &self.cookie_jar.path,
+            Some(&self.csrf_token),
+            Some(body.as_bytes()),
+            timeout,
+        )
+    }
+
+    fn create_file_upload_plan(
+        &self,
+        config: &VmConfig,
+        input: FileUploadPlanInput<'_>,
+        timeout: Duration,
+    ) -> Result<String, String> {
+        let response = self.file_upload_plan_request(config, input, timeout)?;
+        expect_http(&response, 201, "G1 file upload plan")?;
+        if response.body.contains(input.password)
+            || response.body.contains(input.file_session_token)
+            || !response.body.contains("\"level\":\"g1_verified_action\"")
+            || !response
+                .body
+                .contains("\"rollbackSupport\":\"not_guaranteed\"")
+            || !response.body.contains(input.content_digest)
+        {
+            return Err(String::from(
+                "file upload plan leaked a credential or omitted its exact G1 boundary",
+            ));
+        }
+        let token = json_string_field(&response.body, "planToken")?;
+        validate_api_secret(&token, "file upload plan token")?;
+        Ok(token)
+    }
+
+    fn apply_file_upload_with_origin(
+        &self,
+        config: &VmConfig,
+        file_session_token: &str,
+        plan_token: &str,
+        content: &[u8],
+        origin: &str,
+        timeout: Duration,
+    ) -> Result<HttpResponse, String> {
+        public_api_binary_upload_with_origin(
+            config,
+            BinaryUploadInput {
+                origin,
+                cookie_jar: &self.cookie_jar.path,
+                csrf_token: &self.csrf_token,
+                file_session_token,
+                plan_token,
+                body: content,
+            },
+            timeout,
+        )
+    }
+
+    fn apply_file_upload(
+        &self,
+        config: &VmConfig,
+        file_session_token: &str,
+        plan_token: &str,
+        content: &[u8],
+        timeout: Duration,
+    ) -> Result<HttpResponse, String> {
+        self.apply_file_upload_with_origin(
+            config,
+            file_session_token,
+            plan_token,
+            content,
+            &format!("https://{}", config.public_host),
             timeout,
         )
     }
@@ -3022,6 +3418,15 @@ struct PublicApiTarget<'a> {
     origin: &'a str,
 }
 
+struct BinaryUploadInput<'a> {
+    origin: &'a str,
+    cookie_jar: &'a Path,
+    csrf_token: &'a str,
+    file_session_token: &'a str,
+    plan_token: &'a str,
+    body: &'a [u8],
+}
+
 fn public_api_request_with_origin(
     config: &VmConfig,
     target: PublicApiTarget<'_>,
@@ -3088,6 +3493,80 @@ fn public_api_request_with_origin(
         ));
     }
     parse_http_response(&result.stdout)
+}
+
+fn public_api_binary_upload_with_origin(
+    config: &VmConfig,
+    input: BinaryUploadInput<'_>,
+    timeout: Duration,
+) -> Result<HttpResponse, String> {
+    if !input.origin.starts_with("https://") || input.origin.len() > 512 {
+        return Err(String::from("file upload rejected an invalid Origin"));
+    }
+    validate_api_secret(input.csrf_token, "CSRF token")?;
+    validate_api_secret(input.file_session_token, "file session token")?;
+    validate_api_secret(input.plan_token, "file upload plan token")?;
+    let secret_headers = TemporarySecretFile::create_with_contents(
+        "jw-agent-p2-upload-headers",
+        format!(
+            "X-CSRF-Token: {}\nX-JW-File-Session: {}\nX-JW-Upload-Plan: {}\n",
+            input.csrf_token, input.file_session_token, input.plan_token,
+        )
+        .as_bytes(),
+    )?;
+    let arguments = vec![
+        OsString::from("--silent"),
+        OsString::from("--show-error"),
+        OsString::from("--max-time"),
+        OsString::from(timeout.as_secs().min(235).to_string()),
+        OsString::from("--resolve"),
+        OsString::from(format!(
+            "{}:443:{}",
+            config.public_host, config.public_address
+        )),
+        OsString::from("--cacert"),
+        config.ca_certificate.as_os_str().to_owned(),
+        OsString::from("--output"),
+        OsString::from("-"),
+        OsString::from("--write-out"),
+        OsString::from("\n%{http_code}"),
+        OsString::from("--cookie"),
+        input.cookie_jar.as_os_str().to_owned(),
+        OsString::from("--cookie-jar"),
+        input.cookie_jar.as_os_str().to_owned(),
+        OsString::from("--header"),
+        OsString::from(format!("Origin: {}", input.origin)),
+        OsString::from("--header"),
+        OsString::from(format!("@{}", secret_headers.path.display())),
+        OsString::from("--header"),
+        OsString::from("Content-Type: application/octet-stream"),
+        OsString::from("--data-binary"),
+        OsString::from("@-"),
+        OsString::from(format!(
+            "https://{}/api/v1/files/upload",
+            config.public_host
+        )),
+    ];
+    let result = run_capture(OsStr::new("curl"), &arguments, Some(input.body), timeout)?;
+    if !result.status.success() || result.stdout_truncated || result.stderr_truncated {
+        return Err(format!(
+            "file upload transport failed with {} (response and credentials redacted)",
+            result.status
+        ));
+    }
+    parse_http_response(&result.stdout)
+}
+
+fn validate_api_secret(value: &str, label: &str) -> Result<(), String> {
+    if value.len() == 43
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+    {
+        Ok(())
+    } else {
+        Err(format!("{label} shape is invalid"))
+    }
 }
 
 fn operation_idempotency_key() -> Result<String, String> {

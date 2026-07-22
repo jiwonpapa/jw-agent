@@ -3,7 +3,7 @@
 Status: Accepted  
 Authority: Access Specification  
 Owner: Manual Access Maintainer  
-Last reviewed: 2026-07-21
+Last reviewed: 2026-07-22
 
 ## User job
 
@@ -12,7 +12,7 @@ Last reviewed: 2026-07-21
 ## Routes and protocol
 
 - `/terminal`: same-origin `WSS` terminal session
-- `/files`: REST metadata/list와 bounded streaming transfer, Monaco text edit
+- `/files`: REST metadata/list/download와 bounded atomic upload, textarea text edit
 - agentd는 loopback OpenSSH에 client로 연결하고 strict known-host fingerprint를 package/runtime authority에서 확인
 - browser는 SSH protocol, host key, private key를 처리하지 않음
 

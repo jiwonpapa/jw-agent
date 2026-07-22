@@ -2,8 +2,8 @@ use std::time::Duration;
 
 use jw_contracts::{
     FILE_MAX_DOWNLOAD_BYTES, FILE_MAX_LIST_ENTRIES, FILE_MAX_PATH_BYTES, FILE_MAX_TEXT_BYTES,
-    FileEntryView, FileKind, FileListView, FileStatView, FileTextView, sha256_digest,
-    validate_file_path,
+    FILE_MAX_UPLOAD_BYTES, FileEntryView, FileKind, FileListView, FileStatView, FileTextView,
+    FileUploadTargetState, is_reserved_upload_name, sha256_digest, validate_file_path,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::{ChildStdin, ChildStdout};
@@ -14,6 +14,9 @@ const PACKET_MAX_BYTES: usize = 256 * 1_024;
 const OPERATION_TIMEOUT: Duration = Duration::from_secs(5);
 const READ_CHUNK_BYTES: u32 = 32 * 1_024;
 const SSH_FXF_READ: u32 = 0x0000_0001;
+const SSH_FXF_WRITE: u32 = 0x0000_0002;
+const SSH_FXF_CREAT: u32 = 0x0000_0008;
+const SSH_FXF_EXCL: u32 = 0x0000_0020;
 const SSH_FILEXFER_ATTR_SIZE: u32 = 0x0000_0001;
 const SSH_FILEXFER_ATTR_UIDGID: u32 = 0x0000_0002;
 const SSH_FILEXFER_ATTR_PERMISSIONS: u32 = 0x0000_0004;
@@ -25,6 +28,9 @@ const SSH_FXP_VERSION: u8 = 2;
 const SSH_FXP_OPEN: u8 = 3;
 const SSH_FXP_CLOSE: u8 = 4;
 const SSH_FXP_READ: u8 = 5;
+const SSH_FXP_WRITE: u8 = 6;
+const SSH_FXP_LSTAT: u8 = 7;
+const SSH_FXP_REMOVE: u8 = 13;
 const SSH_FXP_OPENDIR: u8 = 11;
 const SSH_FXP_READDIR: u8 = 12;
 const SSH_FXP_REALPATH: u8 = 16;
@@ -34,6 +40,10 @@ const SSH_FXP_HANDLE: u8 = 102;
 const SSH_FXP_DATA: u8 = 103;
 const SSH_FXP_NAME: u8 = 104;
 const SSH_FXP_ATTRS: u8 = 105;
+const SSH_FXP_EXTENDED: u8 = 200;
+
+const EXTENSION_FSYNC: &str = "fsync@openssh.com";
+const EXTENSION_POSIX_RENAME: &str = "posix-rename@openssh.com";
 
 const SSH_FX_OK: u32 = 0;
 const SSH_FX_EOF: u32 = 1;
@@ -47,6 +57,22 @@ pub struct SftpProtocol {
     output: ChildStdout,
     next_request_id: u32,
     home: String,
+    supports_fsync: bool,
+    supports_posix_rename: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct UploadPrecondition {
+    pub target_state: FileUploadTargetState,
+    pub digest: Option<String>,
+    pub size_bytes: u64,
+    pub permissions: u32,
+}
+
+struct UploadInspection {
+    precondition: UploadPrecondition,
+    canonical_parent: String,
+    canonical_target: String,
 }
 
 impl SftpProtocol {
@@ -56,6 +82,8 @@ impl SftpProtocol {
             output,
             next_request_id: 1,
             home: String::new(),
+            supports_fsync: false,
+            supports_posix_rename: false,
         };
         protocol
             .send_packet(SSH_FXP_INIT, &SFTP_VERSION.to_be_bytes())
@@ -68,6 +96,23 @@ impl SftpProtocol {
         if cursor.u32()? != SFTP_VERSION {
             return Err(String::from("sftp_version_unsupported"));
         }
+        let mut extension_count = 0_u8;
+        while !cursor.remaining().is_empty() {
+            extension_count = extension_count
+                .checked_add(1)
+                .ok_or_else(|| String::from("sftp_protocol_error"))?;
+            if extension_count > 32 {
+                return Err(String::from("sftp_protocol_error"));
+            }
+            let name = cursor.string()?;
+            let _data = cursor.bytes()?;
+            if name == EXTENSION_FSYNC {
+                protocol.supports_fsync = true;
+            } else if name == EXTENSION_POSIX_RENAME {
+                protocol.supports_posix_rename = true;
+            }
+        }
+        cursor.finish()?;
         let home = protocol.realpath_raw(".").await?;
         validate_canonical_root(&home)?;
         protocol.home = home;
@@ -76,6 +121,10 @@ impl SftpProtocol {
 
     pub fn home(&self) -> &str {
         &self.home
+    }
+
+    pub fn supports_atomic_upload(&self) -> bool {
+        self.supports_fsync && self.supports_posix_rename
     }
 
     pub async fn list(&mut self, path: &str) -> Result<FileListView, String> {
@@ -132,6 +181,84 @@ impl SftpProtocol {
             .await
     }
 
+    pub async fn inspect_upload(&mut self, path: &str) -> Result<UploadPrecondition, String> {
+        if !self.supports_atomic_upload() {
+            return Err(String::from("sftp_write_extension_unavailable"));
+        }
+        self.inspect_upload_raw(path)
+            .await
+            .map(|inspection| inspection.precondition)
+    }
+
+    pub async fn atomic_upload(
+        &mut self,
+        path: &str,
+        expected: &UploadPrecondition,
+        bytes: &[u8],
+        temporary_suffix: &str,
+    ) -> Result<UploadPrecondition, String> {
+        if !self.supports_atomic_upload() {
+            return Err(String::from("sftp_write_extension_unavailable"));
+        }
+        if u64::try_from(bytes.len()).map_or(true, |size| size > FILE_MAX_UPLOAD_BYTES) {
+            return Err(String::from("upload_too_large"));
+        }
+        if temporary_suffix.len() != 32
+            || !temporary_suffix
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+        {
+            return Err(String::from("upload_temporary_invalid"));
+        }
+
+        let current = self.inspect_upload_raw(path).await?;
+        if current.precondition != *expected {
+            return Err(String::from("target_changed"));
+        }
+        let temporary = format!(
+            "{}/.jw-agent-upload-{temporary_suffix}.tmp",
+            current.canonical_parent
+        );
+        let handle = self
+            .open_write_exclusive(&temporary, expected.permissions)
+            .await?;
+        let write_result = self.write_handle(&handle, bytes).await;
+        let fsync_result = if write_result.is_ok() {
+            self.fsync_handle(&handle).await
+        } else {
+            Ok(())
+        };
+        let close_result = self.close_handle(&handle).await;
+        if let Err(reason) = write_result.and(fsync_result).and(close_result) {
+            return self.cleanup_temporary(&temporary, reason).await;
+        }
+
+        let rename_result = self
+            .posix_rename(&temporary, &current.canonical_target)
+            .await;
+        let after = self.inspect_upload_raw(path).await;
+        let expected_digest = sha256_digest(bytes);
+        let expected_size =
+            u64::try_from(bytes.len()).map_err(|_| String::from("size_overflow"))?;
+        if let Ok(inspection) = &after
+            && inspection.precondition.digest.as_deref() == Some(expected_digest.as_str())
+            && inspection.precondition.size_bytes == expected_size
+            && inspection.precondition.permissions == expected.permissions
+        {
+            return Ok(inspection.precondition.clone());
+        }
+
+        if let Err(reason) = rename_result
+            && after
+                .as_ref()
+                .is_ok_and(|inspection| inspection.precondition == current.precondition)
+        {
+            return self.cleanup_temporary(&temporary, reason).await;
+        }
+        let _cleanup = self.remove_if_present(&temporary).await;
+        Err(String::from("manual_recovery_required"))
+    }
+
     async fn read_file(
         &mut self,
         path: &str,
@@ -139,17 +266,88 @@ impl SftpProtocol {
         too_large: &str,
     ) -> Result<Vec<u8>, String> {
         let canonical = self.resolve(path).await?;
-        let attrs = self.stat_raw(&canonical).await?;
+        self.read_canonical_file(&canonical, max_bytes, too_large)
+            .await
+    }
+
+    async fn read_canonical_file(
+        &mut self,
+        canonical: &str,
+        max_bytes: u64,
+        too_large: &str,
+    ) -> Result<Vec<u8>, String> {
+        let attrs = self.stat_raw(canonical).await?;
         if kind(&attrs) != FileKind::Regular {
             return Err(String::from("not_regular_file"));
         }
         if attrs.size.is_some_and(|size| size > max_bytes) {
             return Err(too_large.to_owned());
         }
-        let handle = self.open_read(&canonical).await?;
+        let handle = self.open_read(canonical).await?;
         let result = self.read_handle(&handle, max_bytes, too_large).await;
         let _closed = self.close_handle(&handle).await;
         result
+    }
+
+    async fn inspect_upload_raw(&mut self, path: &str) -> Result<UploadInspection, String> {
+        validate_file_path(path).map_err(str::to_owned)?;
+        if path.is_empty() {
+            return Err(String::from("upload_path_invalid"));
+        }
+        let (parent, basename) = path.rsplit_once('/').map_or(("", path), |value| value);
+        validate_entry_name(basename)?;
+        if is_reserved_upload_name(basename) {
+            return Err(String::from("upload_path_invalid"));
+        }
+        let canonical_parent = self.resolve(parent).await?;
+        let parent_attrs = self.stat_raw(&canonical_parent).await?;
+        if kind(&parent_attrs) != FileKind::Directory {
+            return Err(String::from("not_directory"));
+        }
+        let canonical_target = format!("{canonical_parent}/{basename}");
+        let attrs = match self.lstat_raw(&canonical_target).await {
+            Ok(attrs) => attrs,
+            Err(reason) if reason == "not_found" => {
+                return Ok(UploadInspection {
+                    precondition: UploadPrecondition {
+                        target_state: FileUploadTargetState::Create,
+                        digest: None,
+                        size_bytes: 0,
+                        permissions: 0o600,
+                    },
+                    canonical_parent,
+                    canonical_target,
+                });
+            }
+            Err(reason) => return Err(reason),
+        };
+        match kind(&attrs) {
+            FileKind::SymbolicLink => return Err(String::from("target_symlink_denied")),
+            FileKind::Regular => {}
+            _ => return Err(String::from("target_type_unsupported")),
+        }
+        let permissions = attrs
+            .permissions
+            .map(|value| value & 0o777)
+            .ok_or_else(|| String::from("target_metadata_incomplete"))?;
+        let bytes = self
+            .read_canonical_file(
+                &canonical_target,
+                FILE_MAX_UPLOAD_BYTES,
+                "upload_target_too_large",
+            )
+            .await?;
+        let size_bytes = u64::try_from(bytes.len()).map_err(|_| String::from("size_overflow"))?;
+        Ok(UploadInspection {
+            precondition: UploadPrecondition {
+                target_state: FileUploadTargetState::Replace,
+                digest: Some(sha256_digest(&bytes)),
+                size_bytes,
+                permissions,
+            },
+            canonical_parent,
+            canonical_target,
+        })
     }
 
     async fn read_handle(
@@ -245,11 +443,19 @@ impl SftpProtocol {
     }
 
     async fn stat_raw(&mut self, canonical: &str) -> Result<Attrs, String> {
+        self.attrs_request(SSH_FXP_STAT, canonical).await
+    }
+
+    async fn lstat_raw(&mut self, canonical: &str) -> Result<Attrs, String> {
+        self.attrs_request(SSH_FXP_LSTAT, canonical).await
+    }
+
+    async fn attrs_request(&mut self, kind: u8, canonical: &str) -> Result<Attrs, String> {
         let id = self.request_id()?;
         let mut payload = Vec::new();
         payload.extend_from_slice(&id.to_be_bytes());
         push_string(&mut payload, canonical)?;
-        self.send_packet(SSH_FXP_STAT, &payload).await?;
+        self.send_packet(kind, &payload).await?;
         let packet = self.response(id).await?;
         match packet.kind {
             SSH_FXP_ATTRS => {
@@ -341,6 +547,107 @@ impl SftpProtocol {
         payload.extend_from_slice(&0_u32.to_be_bytes());
         self.send_packet(SSH_FXP_OPEN, &payload).await?;
         self.handle_response(id).await
+    }
+
+    async fn open_write_exclusive(
+        &mut self,
+        canonical: &str,
+        permissions: u32,
+    ) -> Result<Vec<u8>, String> {
+        let id = self.request_id()?;
+        let mut payload = Vec::new();
+        payload.extend_from_slice(&id.to_be_bytes());
+        push_string(&mut payload, canonical)?;
+        payload.extend_from_slice(&(SSH_FXF_WRITE | SSH_FXF_CREAT | SSH_FXF_EXCL).to_be_bytes());
+        payload.extend_from_slice(&SSH_FILEXFER_ATTR_PERMISSIONS.to_be_bytes());
+        payload.extend_from_slice(&(permissions & 0o777).to_be_bytes());
+        self.send_packet(SSH_FXP_OPEN, &payload).await?;
+        self.handle_response(id).await
+    }
+
+    async fn write_handle(&mut self, handle: &[u8], bytes: &[u8]) -> Result<(), String> {
+        let mut offset = 0_u64;
+        for chunk in bytes
+            .chunks(usize::try_from(READ_CHUNK_BYTES).map_err(|_| String::from("size_overflow"))?)
+        {
+            let id = self.request_id()?;
+            let mut payload = Vec::new();
+            payload.extend_from_slice(&id.to_be_bytes());
+            push_bytes(&mut payload, handle)?;
+            payload.extend_from_slice(&offset.to_be_bytes());
+            push_bytes(&mut payload, chunk)?;
+            self.send_packet(SSH_FXP_WRITE, &payload).await?;
+            self.require_ok_status(id, "sftp_write_failed").await?;
+            offset = offset
+                .checked_add(u64::try_from(chunk.len()).map_err(|_| String::from("size_overflow"))?)
+                .ok_or_else(|| String::from("size_overflow"))?;
+        }
+        Ok(())
+    }
+
+    async fn fsync_handle(&mut self, handle: &[u8]) -> Result<(), String> {
+        let id = self.request_id()?;
+        let mut payload = Vec::new();
+        payload.extend_from_slice(&id.to_be_bytes());
+        push_string(&mut payload, EXTENSION_FSYNC)?;
+        push_bytes(&mut payload, handle)?;
+        self.send_packet(SSH_FXP_EXTENDED, &payload).await?;
+        self.require_ok_status(id, "sftp_fsync_failed").await
+    }
+
+    async fn posix_rename(&mut self, source: &str, target: &str) -> Result<(), String> {
+        let id = self.request_id()?;
+        let mut payload = Vec::new();
+        payload.extend_from_slice(&id.to_be_bytes());
+        push_string(&mut payload, EXTENSION_POSIX_RENAME)?;
+        push_string(&mut payload, source)?;
+        push_string(&mut payload, target)?;
+        self.send_packet(SSH_FXP_EXTENDED, &payload).await?;
+        self.require_ok_status(id, "sftp_rename_failed").await
+    }
+
+    async fn remove_if_present(&mut self, canonical: &str) -> Result<(), String> {
+        let id = self.request_id()?;
+        let mut payload = Vec::new();
+        payload.extend_from_slice(&id.to_be_bytes());
+        push_string(&mut payload, canonical)?;
+        self.send_packet(SSH_FXP_REMOVE, &payload).await?;
+        let packet = self.response(id).await?;
+        if packet.kind != SSH_FXP_STATUS {
+            return Err(String::from("sftp_protocol_error"));
+        }
+        match parse_status(&packet.payload)? {
+            SSH_FX_OK | SSH_FX_NO_SUCH_FILE => Ok(()),
+            status => Err(status_error(status)),
+        }
+    }
+
+    async fn cleanup_temporary<T>(&mut self, path: &str, reason: String) -> Result<T, String> {
+        if self.remove_if_present(path).await.is_err() {
+            Err(String::from("temporary_cleanup_failed"))
+        } else {
+            Err(reason)
+        }
+    }
+
+    async fn require_ok_status(&mut self, id: u32, fallback: &str) -> Result<(), String> {
+        let packet = self.response(id).await?;
+        if packet.kind != SSH_FXP_STATUS {
+            return Err(String::from("sftp_protocol_error"));
+        }
+        let status = parse_status(&packet.payload)?;
+        if status == SSH_FX_OK {
+            Ok(())
+        } else if status == SSH_FX_OP_UNSUPPORTED {
+            Err(String::from("sftp_write_extension_unavailable"))
+        } else {
+            let mapped = status_error(status);
+            if mapped == "sftp_failure" {
+                Err(fallback.to_owned())
+            } else {
+                Err(mapped)
+            }
+        }
     }
 
     async fn handle_response(&mut self, id: u32) -> Result<Vec<u8>, String> {

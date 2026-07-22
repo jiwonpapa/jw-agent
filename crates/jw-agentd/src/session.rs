@@ -14,6 +14,7 @@ use zeroize::{Zeroize, Zeroizing};
 const MIGRATION_1: &str = include_str!("../migrations/0001_initial.sql");
 const MIGRATION_2: &str = include_str!("../migrations/0002_terminal_audit.sql");
 const MIGRATION_3: &str = include_str!("../migrations/0003_file_audit.sql");
+const MIGRATION_4: &str = include_str!("../migrations/0004_file_upload_audit.sql");
 const TOKEN_BYTES: usize = 32;
 const TOKEN_TEXT_BYTES: usize = 43;
 const PUBLIC_IDLE_MS: i64 = 15 * 60 * 1_000;
@@ -43,6 +44,17 @@ impl IssuedSession {
 pub struct ReauthClaim {
     token: Zeroizing<String>,
     pub expires_at: String,
+}
+
+pub struct FileUploadPlanAudit<'a> {
+    pub upload_id: &'a str,
+    pub session_id: &'a str,
+    pub path: &'a str,
+    pub target_state: &'a str,
+    pub before_digest: Option<&'a str>,
+    pub after_digest: &'a str,
+    pub byte_count: u64,
+    pub now_unix_ms: i64,
 }
 
 impl ReauthClaim {
@@ -340,6 +352,94 @@ impl SessionStore {
         Ok(())
     }
 
+    pub fn record_file_upload_plan(&self, audit: &FileUploadPlanAudit<'_>) -> Result<(), String> {
+        if audit.upload_id.len() != 32
+            || audit.session_id.len() != 32
+            || !matches!(audit.target_state, "create" | "replace")
+            || audit
+                .before_digest
+                .is_some_and(|value| jw_contracts::validate_digest(value).is_err())
+            || jw_contracts::validate_digest(audit.after_digest).is_err()
+        {
+            return Err(String::from("file upload audit plan is invalid"));
+        }
+        let path_digest = digest_with_domain(b"jw-agent/file-path/v1\0", audit.path.as_bytes());
+        let stored_bytes = i64::try_from(audit.byte_count)
+            .map_err(|_| String::from("file upload size overflow"))?;
+        let changed = self
+            .connection()?
+            .execute(
+                "INSERT INTO file_uploads(\
+                upload_id, session_id, path_digest, target_state, before_digest, after_digest, \
+                byte_count, state, result, planned_at_unix_ms, started_at_unix_ms, ended_at_unix_ms\
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'planned', NULL, ?8, NULL, NULL)",
+                params![
+                    audit.upload_id,
+                    audit.session_id,
+                    path_digest.as_slice(),
+                    audit.target_state,
+                    audit.before_digest,
+                    audit.after_digest,
+                    stored_bytes,
+                    audit.now_unix_ms,
+                ],
+            )
+            .map_err(|error| error.to_string())?;
+        if changed == 1 {
+            Ok(())
+        } else {
+            Err(String::from("file upload audit plan was not recorded"))
+        }
+    }
+
+    pub fn record_file_upload_start(
+        &self,
+        upload_id: &str,
+        now_unix_ms: i64,
+    ) -> Result<(), String> {
+        let changed = self
+            .connection()?
+            .execute(
+                "UPDATE file_uploads SET state = 'applying', started_at_unix_ms = ?1 \
+             WHERE upload_id = ?2 AND state = 'planned'",
+                params![now_unix_ms, upload_id],
+            )
+            .map_err(|error| error.to_string())?;
+        if changed == 1 {
+            Ok(())
+        } else {
+            Err(String::from("file upload audit start was not recorded"))
+        }
+    }
+
+    pub fn record_file_upload_finish(
+        &self,
+        upload_id: &str,
+        state: &str,
+        result: &str,
+        now_unix_ms: i64,
+    ) -> Result<(), String> {
+        if !matches!(state, "verified" | "failed" | "manual_check")
+            || result.is_empty()
+            || result.len() > 64
+        {
+            return Err(String::from("file upload audit result is invalid"));
+        }
+        let changed = self
+            .connection()?
+            .execute(
+                "UPDATE file_uploads SET state = ?1, result = ?2, ended_at_unix_ms = ?3 \
+             WHERE upload_id = ?4 AND state IN ('planned', 'applying')",
+                params![state, result, now_unix_ms, upload_id],
+            )
+            .map_err(|error| error.to_string())?;
+        if changed == 1 {
+            Ok(())
+        } else {
+            Err(String::from("file upload audit finish was not recorded"))
+        }
+    }
+
     pub fn additional_auth_policy(&self) -> Result<AdditionalAuthPolicy, String> {
         let connection = self.connection()?;
         policy_in_connection(&connection)
@@ -602,6 +702,29 @@ fn migrate(path: &Path, now_unix_ms: i64) -> Result<(), String> {
         )
         .map_err(|error| error.to_string())?;
     transaction
+        .execute_batch(MIGRATION_4)
+        .map_err(|error| error.to_string())?;
+    transaction
+        .execute(
+            "INSERT OR IGNORE INTO schema_migrations(version, applied_at_unix_ms) VALUES (4, ?1)",
+            [now_unix_ms],
+        )
+        .map_err(|error| error.to_string())?;
+    transaction
+        .execute(
+            "UPDATE file_uploads SET state = 'manual_check', result = 'interrupted_manual_check', \
+             ended_at_unix_ms = ?1 WHERE state = 'applying'",
+            [now_unix_ms],
+        )
+        .map_err(|error| error.to_string())?;
+    transaction
+        .execute(
+            "UPDATE file_uploads SET state = 'failed', result = 'daemon_restart_before_apply', \
+             ended_at_unix_ms = ?1 WHERE state = 'planned'",
+            [now_unix_ms],
+        )
+        .map_err(|error| error.to_string())?;
+    transaction
         .execute(
             "UPDATE file_sessions \
              SET ended_at_unix_ms = ?1, close_reason = 'daemon_restart', state = 'closed' \
@@ -791,7 +914,7 @@ mod tests {
 
     use jw_contracts::{AdditionalAuthPolicy, IngressChannel, ReauthPurpose, Role, Subject};
 
-    use super::{OperationClaimError, PolicyUpdateError, SessionStore};
+    use super::{FileUploadPlanAudit, OperationClaimError, PolicyUpdateError, SessionStore};
 
     fn test_path() -> Result<PathBuf, String> {
         let mut random = [0_u8; 8];
@@ -901,9 +1024,23 @@ mod tests {
             role: Role::Operator,
         };
         let session_id = "abcdef0123456789abcdef0123456789";
+        let upload_id = "fedcba9876543210fedcba9876543210";
         let sensitive_path = "private/customer-secret.txt";
         store.record_file_session_start(session_id, &subject, IngressChannel::Recovery, 2_000)?;
         store.record_file_access(session_id, "read", sensitive_path, 42, "ok", 2_001)?;
+        let before_digest = jw_contracts::sha256_digest(b"before");
+        let after_digest = jw_contracts::sha256_digest(b"after");
+        store.record_file_upload_plan(&FileUploadPlanAudit {
+            upload_id,
+            session_id,
+            path: sensitive_path,
+            target_state: "replace",
+            before_digest: Some(&before_digest),
+            after_digest: &after_digest,
+            byte_count: 5,
+            now_unix_ms: 2_002,
+        })?;
+        store.record_file_upload_start(upload_id, 2_003)?;
         drop(store);
 
         let database = fs::read(&path).map_err(|error| error.to_string())?;
@@ -935,6 +1072,31 @@ mod tests {
             )
             .map_err(|error| error.to_string())?;
         assert_eq!(forbidden_columns, 0);
+        let upload_record: (String, String) = reopened
+            .connection()?
+            .query_row(
+                "SELECT state, result FROM file_uploads WHERE upload_id = ?1",
+                [upload_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .map_err(|error| error.to_string())?;
+        assert_eq!(
+            upload_record,
+            (
+                String::from("manual_check"),
+                String::from("interrupted_manual_check")
+            )
+        );
+        let upload_forbidden_columns: i64 = reopened
+            .connection()?
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('file_uploads') \
+                 WHERE name IN ('path', 'content', 'password', 'token', 'temporary_name')",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|error| error.to_string())?;
+        assert_eq!(upload_forbidden_columns, 0);
         drop(reopened);
         cleanup_test_database(&path)
     }

@@ -38,7 +38,7 @@ Last reviewed: 2026-07-22
 - real host values and observation time
 - unsupported hides write capability
 - operation 진입 전 rollback assurance·scope를 표시
-- typed root mutation은 G1·unknown·stale assurance에 CTA 없음; G1 terminal과 G0 SFTP read는 각각 격리된 session approval UI만 허용
+- typed root mutation은 G1·unknown·stale assurance에 CTA 없음; G1 terminal, G0 SFTP read, G1 SFTP write는 각각 격리된 session/plan approval UI만 허용
 - no mutation before approval
 - plan hash/idempotency in approval
 - double click creates one operation
@@ -62,7 +62,7 @@ Last reviewed: 2026-07-22
 - tablet portrait/landscape navigation and inspector
 - terminal ticket replay·wrong-origin·idle/max lifetime·frame/output cap
 - SFTP G0 home root·traversal·external symlink·size·session binding·secret non-persistence
-- SFTP G1 stale-digest·atomic upload·transfer-interruption은 write 구현 전 필수
+- SFTP G1 exact plan, mobile 위험 고지, stale-digest·atomic upload와 secret 비저장
 - managed config syntax failure에는 service action 없음; reload/health failure에는 G2 rollback receipt
 - Certbot external G1 effect와 local attach G2 result가 분리 표시
 
@@ -80,7 +80,7 @@ Last reviewed: 2026-07-22
 - Nginx/TLS failure followed by SSH fallback public disable
 - P2 opsd no-follow/dirfd path policy, snapshot fsync, crash/disk-full reconciliation
 - OpenSSH non-root/root-denial, host-key mismatch, session revoke and normal SSH independence
-- OpenSSH SFTP home confinement, read-only wire allowlist, path/entry/transfer cap, cross-session/origin/logout denial과 metadata-only audit
+- OpenSSH SFTP home confinement, bounded G0 read와 planned G1 atomic create/replace, path/entry/transfer cap, stale/symlink/type/session/origin/replay denial과 metadata-only audit
 - Certbot staging challenge, local attach rollback and secret scan
 
 ## 환경

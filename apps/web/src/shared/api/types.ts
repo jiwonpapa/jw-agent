@@ -67,3 +67,7 @@ export type FileSessionRequest = components["schemas"]["FileSessionRequest"];
 export type FileSessionView = components["schemas"]["FileSessionView"];
 export type FileStatView = components["schemas"]["FileStatView"];
 export type FileTextView = components["schemas"]["FileTextView"];
+export type FileUploadPlanRequest = components["schemas"]["FileUploadPlanRequest"];
+export type FileUploadPlanView = components["schemas"]["FileUploadPlanView"];
+export type FileUploadResultView = components["schemas"]["FileUploadResultView"];
+export type FileUploadTargetState = components["schemas"]["FileUploadTargetState"];

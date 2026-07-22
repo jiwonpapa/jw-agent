@@ -668,6 +668,147 @@
         }
       }
     },
+    "/api/v1/files/upload": {
+      "post": {
+        "tags": [],
+        "operationId": "apply_file_upload",
+        "requestBody": {
+          "content": {
+            "application/octet-stream": {
+              "schema": {
+                "type": "array",
+                "items": {
+                  "type": "integer",
+                  "format": "int32",
+                  "minimum": 0
+                }
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Atomic upload verified by size and SHA-256",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FileUploadResultView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Content type, length, or digest rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Session or single-use plan rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Target changed or manual recovery required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Upload limit exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/files/upload/plans": {
+      "post": {
+        "tags": [],
+        "operationId": "plan_file_upload",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FileUploadPlanRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "PAM-approved single-use atomic upload plan",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FileUploadPlanView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Path, digest, size, or confirmation rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication or file session rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Subject, Origin, CSRF, or home boundary rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Target conflict or upload unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/health": {
       "get": {
         "tags": [],
@@ -2759,6 +2900,7 @@
           "username",
           "rootLabel",
           "assurance",
+          "uploadAssurance",
           "limits"
         ],
         "properties": {
@@ -2779,6 +2921,9 @@
           },
           "rootLabel": {
             "type": "string"
+          },
+          "uploadAssurance": {
+            "$ref": "#/components/schemas/AssuranceView"
           },
           "username": {
             "type": "string"
@@ -2847,6 +2992,8 @@
           "maxListEntries",
           "maxTextBytes",
           "maxDownloadBytes",
+          "maxUploadBytes",
+          "uploadPlanTtlSeconds",
           "maxSessionsPerUser"
         ],
         "properties": {
@@ -2883,6 +3030,16 @@
             "minimum": 0
           },
           "maxTextBytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "maxUploadBytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "uploadPlanTtlSeconds": {
             "type": "integer",
             "format": "int64",
             "minimum": 0
@@ -3054,6 +3211,131 @@
             "minimum": 0
           }
         }
+      },
+      "FileUploadPlanRequest": {
+        "type": "object",
+        "required": [
+          "sessionToken",
+          "path",
+          "contentBytes",
+          "contentDigest",
+          "password",
+          "nonReversibleConfirmed",
+          "overwriteConfirmed"
+        ],
+        "properties": {
+          "contentBytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "contentDigest": {
+            "type": "string"
+          },
+          "nonReversibleConfirmed": {
+            "type": "boolean"
+          },
+          "overwriteConfirmed": {
+            "type": "boolean"
+          },
+          "password": {
+            "type": "string",
+            "format": "password",
+            "maxLength": 1024
+          },
+          "path": {
+            "type": "string"
+          },
+          "sessionToken": {
+            "type": "string",
+            "format": "password"
+          }
+        },
+        "additionalProperties": false
+      },
+      "FileUploadPlanView": {
+        "type": "object",
+        "required": [
+          "planToken",
+          "expiresAt",
+          "path",
+          "targetState",
+          "afterDigest",
+          "contentBytes",
+          "assurance"
+        ],
+        "properties": {
+          "afterDigest": {
+            "type": "string"
+          },
+          "assurance": {
+            "$ref": "#/components/schemas/AssuranceView"
+          },
+          "beforeDigest": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "contentBytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "expiresAt": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "planToken": {
+            "type": "string",
+            "format": "password"
+          },
+          "targetState": {
+            "$ref": "#/components/schemas/FileUploadTargetState"
+          }
+        }
+      },
+      "FileUploadResultView": {
+        "type": "object",
+        "required": [
+          "path",
+          "targetState",
+          "digest",
+          "contentBytes",
+          "verification",
+          "assurance"
+        ],
+        "properties": {
+          "assurance": {
+            "$ref": "#/components/schemas/AssuranceView"
+          },
+          "contentBytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "digest": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "targetState": {
+            "$ref": "#/components/schemas/FileUploadTargetState"
+          },
+          "verification": {
+            "type": "string"
+          }
+        }
+      },
+      "FileUploadTargetState": {
+        "type": "string",
+        "enum": [
+          "create",
+          "replace"
+        ]
       },
       "HealthStatus": {
         "type": "string",

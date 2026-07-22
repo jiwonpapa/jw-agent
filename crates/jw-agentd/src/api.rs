@@ -6,12 +6,13 @@ use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use axum::body::Body;
+use axum::body::{Body, to_bytes};
 use axum::extract::ws::WebSocketUpgrade;
 use axum::extract::{DefaultBodyLimit, Path, State};
 use axum::http::header::{
-    CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_SECURITY_POLICY, CONTENT_TYPE, COOKIE, HOST,
-    ORIGIN, REFERRER_POLICY, SET_COOKIE, STRICT_TRANSPORT_SECURITY, X_CONTENT_TYPE_OPTIONS,
+    CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_LENGTH, CONTENT_SECURITY_POLICY, CONTENT_TYPE,
+    COOKIE, HOST, ORIGIN, REFERRER_POLICY, SET_COOKIE, STRICT_TRANSPORT_SECURITY,
+    X_CONTENT_TYPE_OPTIONS,
 };
 use axum::http::{HeaderMap, HeaderValue, Method, Request, StatusCode};
 use axum::middleware::{Next, from_fn_with_state};
@@ -28,9 +29,10 @@ use jw_contracts::{
     CertbotAttachPlanView, CertbotIssueApprovalRequest, CertbotIssuePlanInput,
     CertbotIssuePlanRequest, CertbotIssuePlanView, CertbotIssuePreflightEvidence,
     CertbotRenewTestApprovalRequest, CertbotRenewTestPlanRequest, CertbotRenewTestPlanView,
-    CertificateInventoryView, CertificateSummaryView, FILE_MAX_DOWNLOAD_BYTES, FileCapabilityView,
-    FileEntryView, FileKind, FileLimitsView, FileListView, FilePathRequest,
-    FileSessionCloseRequest, FileSessionRequest, FileSessionView, FileStatView, FileTextView,
+    CertificateInventoryView, CertificateSummaryView, FILE_MAX_DOWNLOAD_BYTES,
+    FILE_MAX_UPLOAD_BYTES, FileCapabilityView, FileEntryView, FileKind, FileLimitsView,
+    FileListView, FilePathRequest, FileSessionCloseRequest, FileSessionRequest, FileSessionView,
+    FileStatView, FileTextView, FileUploadPlanRequest, FileUploadPlanView, FileUploadResultView,
     HealthStatus, HealthView, IPC_PROTOCOL_VERSION, IngressChannel, IntegrationCatalogView,
     LoginRequest, MANAGED_CONFIG_OPERATION, ManagedConfigApprovalRequest, ManagedConfigPlanRequest,
     ManagedConfigPlanView, ManagedConfigResourceView, NGINX_SITE_STATE_OPERATION,
@@ -60,6 +62,8 @@ use crate::{AgentConfig, AuthBroker, OpsBroker, SessionStore};
 const API_BODY_MAX_BYTES: usize = 64 * 1_024;
 const CLIENT_ADDRESS_HEADER: &str = "x-jw-client-address";
 const CSRF_HEADER: &str = "x-csrf-token";
+const FILE_SESSION_HEADER: &str = "x-jw-file-session";
+const FILE_UPLOAD_PLAN_HEADER: &str = "x-jw-upload-plan";
 const AUTH_WINDOW: Duration = Duration::from_secs(60);
 const AUTH_GLOBAL_LIMIT: u32 = 60;
 const AUTH_SOURCE_LIMIT: u32 = 20;
@@ -150,6 +154,8 @@ impl AppState {
         stat_file,
         read_text_file,
         download_file,
+        plan_file_upload,
+        apply_file_upload,
     ),
     components(schemas(
         AccessSettingsView,
@@ -226,6 +232,10 @@ impl AppState {
         FileListView,
         FileStatView,
         FileTextView,
+        FileUploadPlanRequest,
+        FileUploadPlanView,
+        FileUploadResultView,
+        jw_contracts::FileUploadTargetState,
     )),
     tags((name = "jw-agent", description = "JW Agent local management API"))
 )]
@@ -252,6 +262,8 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/v1/files/stat", post(stat_file))
         .route("/api/v1/files/read", post(read_text_file))
         .route("/api/v1/files/download", post(download_file))
+        .route("/api/v1/files/upload/plans", post(plan_file_upload))
+        .route("/api/v1/files/upload", post(apply_file_upload))
         .route("/api/v1/host", get(host))
         .route("/api/v1/capabilities", get(capabilities))
         .route("/api/v1/services", get(services))
@@ -761,7 +773,8 @@ async fn file_capability(
         reason: reason.clone(),
         username: session.subject.username,
         root_label: String::from("~"),
-        assurance: file_assurance(reason),
+        assurance: file_assurance(reason.clone()),
+        upload_assurance: file_upload_assurance(reason),
         limits: FileLimitsView::default(),
     }))
 }
@@ -968,6 +981,186 @@ async fn download_file(
     Ok(response)
 }
 
+#[utoipa::path(post, path = "/api/v1/files/upload/plans", request_body = FileUploadPlanRequest, responses(
+    (status = 201, description = "PAM-approved single-use atomic upload plan", body = FileUploadPlanView),
+    (status = 400, description = "Path, digest, size, or confirmation rejected", body = ProblemDetails),
+    (status = 401, description = "Authentication or file session rejected", body = ProblemDetails),
+    (status = 403, description = "Subject, Origin, CSRF, or home boundary rejected", body = ProblemDetails),
+    (status = 409, description = "Target conflict or upload unavailable", body = ProblemDetails)
+))]
+async fn plan_file_upload(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(input): Json<FileUploadPlanRequest>,
+) -> Result<(StatusCode, Json<FileUploadPlanView>), ApiProblem> {
+    input.validate().map_err(ApiProblem::bad_request)?;
+    let now = unix_milliseconds()?;
+    let (jw_session_token, session) = current_session(&state, &headers, now)?;
+    require_csrf(&headers, jw_session_token.as_str())?;
+    let origin = require_exact_origin(&state, &headers)?;
+    if session.additional_auth_policy != AdditionalAuthPolicy::Disabled {
+        return Err(ApiProblem::new(
+            StatusCode::PRECONDITION_REQUIRED,
+            "additional_authentication_unavailable",
+        ));
+    }
+    if file_gate_reason(&state, &session).is_some() {
+        return Err(ApiProblem::new(StatusCode::CONFLICT, "files_unavailable"));
+    }
+    let source = request_source(&state, &headers)?;
+    state
+        .auth_limiter
+        .consume(&source, &session.subject.username)?;
+    let context_digest = jw_contracts::sha256_digest(
+        format!(
+            "jw-agent/file-upload-plan/v1\0{}\0{}\0{}\0{}",
+            session.subject.uid, input.path, input.content_bytes, input.content_digest
+        )
+        .as_bytes(),
+    );
+    let request_id = random_identifier()?;
+    let auth_request = AuthRequest {
+        protocol_version: IPC_PROTOCOL_VERSION,
+        request_id: request_id.clone(),
+        deadline_unix_ms: deadline(now, state.config.auth_timeout),
+        username: session.subject.username.clone(),
+        password: input.password,
+        remote_address: Some(source),
+        purpose: AuthPurpose::StepUp { context_digest },
+    };
+    let response = state
+        .auth
+        .authenticate(auth_request)
+        .await
+        .map_err(|_| ApiProblem::unavailable("authentication_unavailable"))?;
+    validate_auth_response(&response, &request_id)?;
+    let authenticated = match response.result {
+        AuthResult::Authenticated { subject, .. } => subject,
+        AuthResult::Failed { class } => return Err(auth_failure(class)),
+    };
+    if authenticated.uid == 0
+        || authenticated.uid != session.subject.uid
+        || authenticated.username != session.subject.username
+        || authenticated.role != session.subject.role
+        || authenticated.role == Role::Viewer
+    {
+        return Err(ApiProblem::forbidden("file_subject_mismatch"));
+    }
+    let lease = state
+        .files
+        .acquire(
+            input.session_token.expose(),
+            jw_session_token.as_str(),
+            state.channel,
+            &origin,
+        )
+        .map_err(map_file_session_error)?;
+    let issued = state
+        .files
+        .plan_upload(
+            &lease,
+            &input.path,
+            input.content_bytes,
+            &input.content_digest,
+            input.overwrite_confirmed,
+            now,
+        )
+        .await
+        .map_err(map_file_session_error)?;
+    Ok((
+        StatusCode::CREATED,
+        Json(FileUploadPlanView {
+            plan_token: issued.token,
+            expires_at: format_unix_ms(issued.expires_at_unix_ms)?,
+            path: issued.path,
+            target_state: issued.target_state,
+            before_digest: issued.before_digest,
+            after_digest: issued.after_digest,
+            content_bytes: issued.content_bytes,
+            assurance: file_upload_assurance(None),
+        }),
+    ))
+}
+
+#[utoipa::path(post, path = "/api/v1/files/upload", request_body(content = Vec<u8>, content_type = "application/octet-stream"), responses(
+    (status = 200, description = "Atomic upload verified by size and SHA-256", body = FileUploadResultView),
+    (status = 400, description = "Content type, length, or digest rejected", body = ProblemDetails),
+    (status = 401, description = "Session or single-use plan rejected", body = ProblemDetails),
+    (status = 409, description = "Target changed or manual recovery required", body = ProblemDetails),
+    (status = 413, description = "Upload limit exceeded", body = ProblemDetails)
+))]
+async fn apply_file_upload(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: Body,
+) -> Result<Json<FileUploadResultView>, ApiProblem> {
+    let now = unix_milliseconds()?;
+    let (jw_session_token, session) = current_session(&state, &headers, now)?;
+    require_csrf(&headers, jw_session_token.as_str())?;
+    let origin = require_exact_origin(&state, &headers)?;
+    if file_gate_reason(&state, &session).is_some() {
+        return Err(ApiProblem::new(StatusCode::CONFLICT, "files_unavailable"));
+    }
+    if headers
+        .get(CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        != Some("application/octet-stream")
+    {
+        return Err(ApiProblem::bad_request("upload_content_type"));
+    }
+    let file_session_token = secret_header(&headers, FILE_SESSION_HEADER)?;
+    let upload_plan_token = secret_header(&headers, FILE_UPLOAD_PLAN_HEADER)?;
+    let lease = state
+        .files
+        .acquire(
+            file_session_token.as_str(),
+            jw_session_token.as_str(),
+            state.channel,
+            &origin,
+        )
+        .map_err(map_file_session_error)?;
+    let upload = state
+        .files
+        .begin_upload(lease, upload_plan_token.as_str(), now)
+        .map_err(map_file_session_error)?;
+    let expected_size = upload.expected_content_bytes();
+    if let Some(length) = headers.get(CONTENT_LENGTH) {
+        let Some(length) = length
+            .to_str()
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+        else {
+            return Err(map_file_session_error(
+                upload.reject("upload_length_invalid"),
+            ));
+        };
+        if length != expected_size {
+            return Err(map_file_session_error(
+                upload.reject("upload_length_mismatch"),
+            ));
+        }
+    }
+    let limit = usize::try_from(FILE_MAX_UPLOAD_BYTES)
+        .map_err(|_| ApiProblem::internal())?
+        .saturating_add(1);
+    let bytes = match to_bytes(body, limit).await {
+        Ok(bytes) => bytes,
+        Err(_) => return Err(map_file_session_error(upload.reject("upload_too_large"))),
+    };
+    let applied = upload
+        .apply(bytes.to_vec())
+        .await
+        .map_err(map_file_session_error)?;
+    Ok(Json(FileUploadResultView {
+        path: applied.path,
+        target_state: applied.target_state,
+        digest: applied.digest,
+        content_bytes: applied.content_bytes,
+        verification: String::from("size_and_sha256_read_back"),
+        assurance: file_upload_assurance(None),
+    }))
+}
+
 fn acquire_file_lease(
     state: &AppState,
     headers: &HeaderMap,
@@ -989,6 +1182,19 @@ fn acquire_file_lease(
             &origin,
         )
         .map_err(map_file_session_error)
+}
+
+fn secret_header(headers: &HeaderMap, name: &str) -> Result<Zeroizing<String>, ApiProblem> {
+    let mut values = headers.get_all(name).iter();
+    let value = values
+        .next()
+        .and_then(|value| value.to_str().ok())
+        .filter(|value| !value.is_empty() && value.len() <= 128)
+        .ok_or_else(|| ApiProblem::unauthorized("file_upload_token_required"))?;
+    if values.next().is_some() {
+        return Err(ApiProblem::bad_request("file_upload_token_invalid"));
+    }
+    Ok(Zeroizing::new(value.to_owned()))
 }
 
 fn file_gate_reason(state: &AppState, session: &SessionView) -> Option<String> {
@@ -1026,6 +1232,29 @@ fn file_assurance(reason: Option<String>) -> AssuranceView {
     }
 }
 
+fn file_upload_assurance(reason: Option<String>) -> AssuranceView {
+    AssuranceView {
+        level: AssuranceLevel::G1VerifiedAction,
+        rollback_support: RollbackSupport::NotGuaranteed,
+        operation_available: reason.is_none(),
+        scope: vec![String::from(
+            "현재 로그인한 non-root Linux 계정 홈의 일반 파일 생성 또는 명시적 교체",
+        )],
+        excluded_effects: vec![
+            String::from("자동 백업·자동 원복과 system-owned 설정 변경"),
+            String::from("삭제·이동·chmod·chown·symlink 생성·재귀 전송"),
+        ],
+        apply_verifier: vec![
+            String::from("PAM 재인증, 기존 SHA-256 충돌 검사와 home 경계 재확인"),
+            String::from("same-directory 임시파일 fsync·원자 rename·size/SHA-256 read-back"),
+        ],
+        rollback_verifier: vec![String::from(
+            "자동 원복 없음; 결과 불명확 시 manual recovery required",
+        )],
+        reason,
+    }
+}
+
 fn map_file_session_error(error: FileSessionError) -> ApiProblem {
     match error {
         FileSessionError::Busy => ApiProblem::new(StatusCode::CONFLICT, "file_session_busy"),
@@ -1040,14 +1269,35 @@ fn map_file_session_error(error: FileSessionError) -> ApiProblem {
             _ => ApiProblem::unavailable(reason),
         },
         FileSessionError::Operation(reason) => match reason.as_str() {
-            "path_invalid" | "not_directory" | "not_regular_file" | "binary_text"
-            | "sftp_unsafe_name" => ApiProblem::bad_request(reason),
-            "path_outside_home" | "permission_denied" => ApiProblem::forbidden(reason),
-            "not_found" => ApiProblem::new(StatusCode::NOT_FOUND, reason),
-            "text_too_large" | "download_too_large" | "sftp_list_limit_exceeded" => {
-                ApiProblem::new(StatusCode::PAYLOAD_TOO_LARGE, reason)
+            "path_invalid"
+            | "not_directory"
+            | "not_regular_file"
+            | "binary_text"
+            | "sftp_unsafe_name"
+            | "upload_path_invalid"
+            | "upload_plan_invalid"
+            | "upload_digest_invalid"
+            | "upload_length_invalid"
+            | "upload_length_mismatch"
+            | "upload_digest_mismatch"
+            | "upload_content_type" => ApiProblem::bad_request(reason),
+            "path_outside_home" | "permission_denied" | "target_symlink_denied" => {
+                ApiProblem::forbidden(reason)
             }
+            "not_found" => ApiProblem::new(StatusCode::NOT_FOUND, reason),
+            "text_too_large"
+            | "download_too_large"
+            | "sftp_list_limit_exceeded"
+            | "upload_too_large"
+            | "upload_target_too_large" => ApiProblem::new(StatusCode::PAYLOAD_TOO_LARGE, reason),
             "sftp_timeout" => ApiProblem::new(StatusCode::GATEWAY_TIMEOUT, reason),
+            "overwrite_confirmation_required"
+            | "target_changed"
+            | "target_type_unsupported"
+            | "target_metadata_incomplete"
+            | "sftp_write_extension_unavailable"
+            | "temporary_cleanup_failed"
+            | "manual_recovery_required" => ApiProblem::new(StatusCode::CONFLICT, reason),
             _ => ApiProblem::new(StatusCode::BAD_GATEWAY, reason),
         },
     }

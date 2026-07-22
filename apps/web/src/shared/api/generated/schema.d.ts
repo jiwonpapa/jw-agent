@@ -228,6 +228,38 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/files/upload": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["apply_file_upload"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/files/upload/plans": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["plan_file_upload"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/health": {
         parameters: {
             query?: never;
@@ -776,6 +808,7 @@ export interface components {
             limits: components["schemas"]["FileLimitsView"];
             reason?: string | null;
             rootLabel: string;
+            uploadAssurance: components["schemas"]["AssuranceView"];
             username: string;
         };
         FileEntryView: {
@@ -805,6 +838,10 @@ export interface components {
             maxSessionsPerUser: number;
             /** Format: int64 */
             maxTextBytes: number;
+            /** Format: int64 */
+            maxUploadBytes: number;
+            /** Format: int64 */
+            uploadPlanTtlSeconds: number;
         };
         FileListView: {
             entries: components["schemas"]["FileEntryView"][];
@@ -851,6 +888,41 @@ export interface components {
             /** Format: int64 */
             sizeBytes: number;
         };
+        FileUploadPlanRequest: {
+            /** Format: int64 */
+            contentBytes: number;
+            contentDigest: string;
+            nonReversibleConfirmed: boolean;
+            overwriteConfirmed: boolean;
+            /** Format: password */
+            password: string;
+            path: string;
+            /** Format: password */
+            sessionToken: string;
+        };
+        FileUploadPlanView: {
+            afterDigest: string;
+            assurance: components["schemas"]["AssuranceView"];
+            beforeDigest?: string | null;
+            /** Format: int64 */
+            contentBytes: number;
+            expiresAt: string;
+            path: string;
+            /** Format: password */
+            planToken: string;
+            targetState: components["schemas"]["FileUploadTargetState"];
+        };
+        FileUploadResultView: {
+            assurance: components["schemas"]["AssuranceView"];
+            /** Format: int64 */
+            contentBytes: number;
+            digest: string;
+            path: string;
+            targetState: components["schemas"]["FileUploadTargetState"];
+            verification: string;
+        };
+        /** @enum {string} */
+        FileUploadTargetState: "create" | "replace";
         /** @enum {string} */
         HealthStatus: "ok" | "degraded";
         HealthView: {
@@ -1799,6 +1871,126 @@ export interface operations {
             };
             /** @description Session rejected */
             401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    apply_file_upload: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/octet-stream": number[];
+            };
+        };
+        responses: {
+            /** @description Atomic upload verified by size and SHA-256 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FileUploadResultView"];
+                };
+            };
+            /** @description Content type, length, or digest rejected */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Session or single-use plan rejected */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Target changed or manual recovery required */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Upload limit exceeded */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    plan_file_upload: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FileUploadPlanRequest"];
+            };
+        };
+        responses: {
+            /** @description PAM-approved single-use atomic upload plan */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FileUploadPlanView"];
+                };
+            };
+            /** @description Path, digest, size, or confirmation rejected */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Authentication or file session rejected */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Subject, Origin, CSRF, or home boundary rejected */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Target conflict or upload unavailable */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

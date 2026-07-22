@@ -291,6 +291,16 @@ const fileCapability = {
     rollbackVerifier: ["읽기 전용이므로 원복 대상 없음"],
     reason: null,
   },
+  uploadAssurance: {
+    level: "g1_verified_action",
+    rollbackSupport: "not_guaranteed",
+    operationAvailable: true,
+    scope: ["현재 로그인한 non-root Linux 계정 홈의 일반 파일 생성·교체"],
+    excludedEffects: ["이전 파일 자동 백업·원복", "삭제·이동·권한 변경·홈 밖 경로"],
+    applyVerifier: ["PAM 재인증", "fsync@openssh.com", "posix-rename@openssh.com", "size·SHA-256 read-back"],
+    rollbackVerifier: ["자동 원복 없음"],
+    reason: null,
+  },
   limits: {
     idleTimeoutSeconds: 120,
     maxLifetimeSeconds: 600,
@@ -299,6 +309,8 @@ const fileCapability = {
     maxListEntries: 500,
     maxTextBytes: 262144,
     maxDownloadBytes: 8388608,
+    maxUploadBytes: 8388608,
+    uploadPlanTtlSeconds: 120,
     maxSessionsPerUser: 1,
   },
 };
@@ -652,6 +664,8 @@ async function mockApi(
     terminalFixture?: Record<string, unknown>;
     onFileSession?: (body: unknown) => void;
     onFileList?: (body: unknown) => void;
+    onFileUploadPlan?: (body: unknown) => void;
+    onFileUpload?: (body: Uint8Array, headers: Record<string, string>) => void;
     fileFixture?: Record<string, unknown>;
   } = {},
 ): Promise<void> {
@@ -738,6 +752,42 @@ async function mockApi(
         status: 200,
         contentType: "application/octet-stream",
         body: "read-only evidence\n",
+      });
+    }
+    if (path === "/api/v1/files/upload/plans" && request.method() === "POST") {
+      const body = request.postDataJSON() as {
+        path: string;
+        contentBytes: number;
+        contentDigest: string;
+      };
+      operationOptions.onFileUploadPlan?.(body);
+      return route.fulfill({
+        status: 201,
+        json: {
+          planToken: "U".repeat(43),
+          expiresAt: "2026-07-21T02:12:00Z",
+          path: body.path,
+          targetState: "replace",
+          beforeDigest: `sha256:${"9".repeat(64)}`,
+          afterDigest: body.contentDigest,
+          contentBytes: body.contentBytes,
+          assurance: fileCapability.uploadAssurance,
+        },
+      });
+    }
+    if (path === "/api/v1/files/upload" && request.method() === "POST") {
+      const bytes = new Uint8Array(request.postDataBuffer() ?? []);
+      operationOptions.onFileUpload?.(bytes, request.headers());
+      return route.fulfill({
+        status: 200,
+        json: {
+          path: "notes.txt",
+          targetState: "replace",
+          contentBytes: bytes.byteLength,
+          contentDigest: `sha256:${"a".repeat(64)}`,
+          verifiedAt: "2026-07-21T02:11:00Z",
+          assurance: fileCapability.uploadAssurance,
+        },
       });
     }
     if (path === "/api/v1/certificates") {
@@ -978,11 +1028,11 @@ for (const viewport of [
     await page.goto("/files");
     await expect(page.getByRole("heading", { name: "홈 파일" })).toBeVisible();
     await expect(page.getByText("G0 · 변경 없음").first()).toBeVisible();
-    await expect(page.getByText(/업로드·편집·삭제·이동·권한 변경/).first()).toBeVisible();
+    await expect(page.getByText(/업로드·생성·편집·삭제·이동·권한 변경/).first()).toBeVisible();
     const open = page.getByRole("button", { name: "재인증 후 열기" });
     await page.getByLabel("Linux 비밀번호 재확인").fill("fixture-file-password");
     await expect(open).toBeDisabled();
-    await page.getByLabel(/홈 디렉터리 읽기만 가능하며/).check();
+    await page.getByLabel(/파일 생성·교체는 별도 G1 계획/).check();
     await open.click();
     await expect(page.getByText("notes.txt")).toBeVisible();
     await page.getByRole("button", { name: "notes.txt 텍스트 보기", exact: true }).click();
@@ -1002,6 +1052,72 @@ for (const viewport of [
     expect(hasOverflow).toBe(false);
   });
 }
+
+test("G1 text save requires an exact plan and keeps secrets out of navigation and storage", async ({ page }) => {
+  let planBody: Record<string, unknown> = {};
+  let uploadRequests = 0;
+  let uploadedBody: Uint8Array = Uint8Array.from([]);
+  let uploadHeaders: Record<string, string> = {};
+  await page.setViewportSize({ width: 320, height: 800 });
+  await mockApi(page, true, health, {
+    onFileUploadPlan: (body) => { planBody = body as Record<string, unknown>; },
+    onFileUpload: (body, headers) => {
+      uploadRequests += 1;
+      uploadedBody = body;
+      uploadHeaders = headers;
+    },
+  });
+  await page.goto("/files");
+  await page.getByLabel("Linux 비밀번호 재확인").fill("fixture-file-password");
+  await page.getByLabel(/파일 생성·교체는 별도 G1 계획/).check();
+  await page.getByRole("button", { name: "재인증 후 열기" }).click();
+  await expect(page.getByText("G1 · 자동 원복 없음")).toBeVisible();
+  await page.getByRole("button", { name: "notes.txt 텍스트 보기", exact: true }).click();
+  await page.getByRole("button", { name: "편집 준비" }).click();
+  await page.getByLabel("UTF-8 내용 편집").fill("changed evidence\n");
+
+  const planButton = page.getByRole("button", { name: "재인증 후 계획 만들기" });
+  await page.getByLabel("Linux 비밀번호 재확인").fill("fixture-upload-password");
+  await expect(planButton).toBeDisabled();
+  await page.getByLabel(/자동 원복되지 않으며 실패 시 SSH/).check();
+  await expect(planButton).toBeDisabled();
+  await page.getByLabel(/기존 파일을 교체합니다/).check();
+  await expect(planButton).toBeEnabled();
+  await planButton.click();
+
+  await expect(page.getByText("적용 직전 계획")).toBeVisible();
+  await expect(page.getByText(/적용 후 이전 파일 자동 원복은 불가능/)).toBeVisible();
+  expect(uploadRequests).toBe(0);
+  expect(planBody).toMatchObject({
+    sessionToken: "F".repeat(43),
+    path: "notes.txt",
+    contentBytes: 17,
+    password: "fixture-upload-password",
+    nonReversibleConfirmed: true,
+    overwriteConfirmed: true,
+  });
+  expect(planBody.contentDigest).toMatch(/^sha256:[0-9a-f]{64}$/);
+
+  await page.getByRole("button", { name: "계획대로 원자 업로드" }).click();
+  await expect(page.getByText(/저장 후 size와 SHA-256 read-back 검증을 통과/)).toBeVisible();
+  expect(uploadRequests).toBe(1);
+  expect(new TextDecoder().decode(uploadedBody)).toBe("changed evidence\n");
+  expect(uploadHeaders["content-type"]).toBe("application/octet-stream");
+  expect(uploadHeaders["x-jw-file-session"]).toBe("F".repeat(43));
+  expect(uploadHeaders["x-jw-upload-plan"]).toBe("U".repeat(43));
+  expect(page.url()).not.toContain("fixture-upload-password");
+  expect(page.url()).not.toContain("U".repeat(43));
+  const stored = await page.evaluate(() => JSON.stringify({
+    local: Object.values(localStorage),
+    session: Object.values(sessionStorage),
+  }));
+  expect(stored).not.toContain("fixture-upload-password");
+  expect(stored).not.toContain("U".repeat(43));
+  const hasOverflow = await page.evaluate(
+    () => document.documentElement.scrollWidth > document.documentElement.clientWidth,
+  );
+  expect(hasOverflow).toBe(false);
+});
 
 test("G2 Nginx change discloses rollback scope before exact-plan PAM approval", async ({ page }) => {
   let planRequests = 0;

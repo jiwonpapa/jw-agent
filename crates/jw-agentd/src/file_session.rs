@@ -3,14 +3,17 @@ use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use jw_contracts::{
-    FILE_IDLE_TIMEOUT_SECONDS, FILE_MAX_LIFETIME_SECONDS, FILE_SESSION_TOKEN_BYTES, FileListView,
-    FileStatView, FileTextView, IngressChannel, SecretString, Subject,
+    FILE_IDLE_TIMEOUT_SECONDS, FILE_MAX_LIFETIME_SECONDS, FILE_MAX_UPLOAD_BYTES,
+    FILE_SESSION_TOKEN_BYTES, FILE_UPLOAD_PLAN_TOKEN_BYTES, FILE_UPLOAD_PLAN_TTL_SECONDS,
+    FileListView, FileStatView, FileTextView, FileUploadTargetState, IngressChannel, SecretString,
+    Subject, sha256_digest, validate_digest,
 };
 use nix::sys::stat::Mode;
 use nix::unistd::mkfifo;
@@ -19,7 +22,8 @@ use tokio::process::{Child, Command};
 use tokio::time::timeout;
 use zeroize::{Zeroize, Zeroizing};
 
-use crate::sftp_protocol::SftpProtocol;
+use crate::session::FileUploadPlanAudit;
+use crate::sftp_protocol::{SftpProtocol, UploadPrecondition};
 use crate::{AgentConfig, SessionStore, terminal_runtime_available};
 
 const TOKEN_BYTES: usize = 32;
@@ -38,6 +42,7 @@ pub struct FileBroker {
 struct FileState {
     sessions: HashMap<[u8; 32], Arc<FileSession>>,
     opening: Vec<[u8; 32]>,
+    upload_plans: HashMap<[u8; 32], UploadPlan>,
 }
 
 pub struct FileSessionIssue<'a> {
@@ -55,6 +60,23 @@ pub struct IssuedFileSession {
     pub expires_at_unix_ms: i64,
 }
 
+pub struct IssuedUploadPlan {
+    pub token: SecretString,
+    pub expires_at_unix_ms: i64,
+    pub path: String,
+    pub target_state: FileUploadTargetState,
+    pub before_digest: Option<String>,
+    pub after_digest: String,
+    pub content_bytes: u64,
+}
+
+pub struct AppliedUpload {
+    pub path: String,
+    pub target_state: FileUploadTargetState,
+    pub digest: String,
+    pub content_bytes: u64,
+}
+
 pub struct FileLease {
     session: Arc<FileSession>,
 }
@@ -69,6 +91,26 @@ struct FileSession {
     close_reason: Mutex<String>,
     runtime: tokio::sync::Mutex<SftpRuntime>,
     store: SessionStore,
+    revoked: AtomicBool,
+}
+
+struct UploadPlan {
+    upload_id: String,
+    file_session_id: String,
+    jw_session_binding: [u8; 32],
+    path: String,
+    precondition: UploadPrecondition,
+    after_digest: String,
+    content_bytes: u64,
+    expires_at: Instant,
+    store: SessionStore,
+    audit_handed_off: bool,
+}
+
+pub struct FileUploadLease {
+    session: Arc<FileSession>,
+    plan: UploadPlan,
+    finished: bool,
 }
 
 struct SftpRuntime {
@@ -103,6 +145,33 @@ impl Drop for FileSession {
                 self.session_id
             );
         }
+    }
+}
+
+impl Drop for UploadPlan {
+    fn drop(&mut self) {
+        if self.audit_handed_off {
+            return;
+        }
+        let now = unix_milliseconds().map_or(0, std::convert::identity);
+        let _audit =
+            self.store
+                .record_file_upload_finish(&self.upload_id, "failed", "plan_abandoned", now);
+    }
+}
+
+impl Drop for FileUploadLease {
+    fn drop(&mut self) {
+        if self.finished {
+            return;
+        }
+        let now = unix_milliseconds().map_or(0, std::convert::identity);
+        let _audit = self.plan.store.record_file_upload_finish(
+            &self.plan.upload_id,
+            "manual_check",
+            "request_dropped",
+            now,
+        );
     }
 }
 
@@ -176,6 +245,7 @@ impl FileBroker {
             close_reason: Mutex::new(String::from("broker_dropped")),
             runtime: tokio::sync::Mutex::new(runtime),
             store: store.clone(),
+            revoked: AtomicBool::new(false),
         });
         {
             let mut state = self.inner.lock().map_err(|_| FileSessionError::Storage)?;
@@ -245,6 +315,145 @@ impl FileBroker {
         Ok(FileLease { session })
     }
 
+    pub async fn plan_upload(
+        &self,
+        lease: &FileLease,
+        path: &str,
+        content_bytes: u64,
+        after_digest: &str,
+        overwrite_confirmed: bool,
+        now_unix_ms: i64,
+    ) -> Result<IssuedUploadPlan, FileSessionError> {
+        lease.ensure_active()?;
+        if content_bytes > FILE_MAX_UPLOAD_BYTES || validate_digest(after_digest).is_err() {
+            return Err(FileSessionError::Operation(String::from(
+                "upload_plan_invalid",
+            )));
+        }
+        {
+            let mut state = self.inner.lock().map_err(|_| FileSessionError::Storage)?;
+            cleanup_expired(&mut state);
+            if state
+                .upload_plans
+                .values()
+                .any(|plan| plan.file_session_id == lease.session.session_id)
+            {
+                return Err(FileSessionError::Busy);
+            }
+        }
+        let precondition = {
+            let mut runtime = lease.session.runtime.lock().await;
+            runtime
+                .protocol
+                .inspect_upload(path)
+                .await
+                .map_err(FileSessionError::Operation)?
+        };
+        if precondition.target_state == FileUploadTargetState::Replace && !overwrite_confirmed {
+            return Err(FileSessionError::Operation(String::from(
+                "overwrite_confirmation_required",
+            )));
+        }
+        lease.ensure_active()?;
+        let upload_id = random_session_id().map_err(|_| FileSessionError::Storage)?;
+        let token = random_token().map_err(|_| FileSessionError::Storage)?;
+        let target_state = match precondition.target_state {
+            FileUploadTargetState::Create => "create",
+            FileUploadTargetState::Replace => "replace",
+        };
+        lease
+            .session
+            .store
+            .record_file_upload_plan(&FileUploadPlanAudit {
+                upload_id: &upload_id,
+                session_id: &lease.session.session_id,
+                path,
+                target_state,
+                before_digest: precondition.digest.as_deref(),
+                after_digest,
+                byte_count: content_bytes,
+                now_unix_ms,
+            })
+            .map_err(|_| FileSessionError::Storage)?;
+        let plan = UploadPlan {
+            upload_id,
+            file_session_id: lease.session.session_id.clone(),
+            jw_session_binding: lease.session.jw_session_binding,
+            path: path.to_owned(),
+            precondition: precondition.clone(),
+            after_digest: after_digest.to_owned(),
+            content_bytes,
+            expires_at: Instant::now() + Duration::from_secs(FILE_UPLOAD_PLAN_TTL_SECONDS),
+            store: lease.session.store.clone(),
+            audit_handed_off: false,
+        };
+        let token_digest = upload_plan_token_digest(token.as_bytes());
+        {
+            let mut state = self.inner.lock().map_err(|_| FileSessionError::Storage)?;
+            cleanup_expired(&mut state);
+            let session_is_active = state.sessions.values().any(|session| {
+                session.session_id == lease.session.session_id
+                    && !session.revoked.load(Ordering::Acquire)
+            });
+            if !session_is_active
+                || state
+                    .upload_plans
+                    .values()
+                    .any(|active| active.file_session_id == lease.session.session_id)
+            {
+                return Err(FileSessionError::Busy);
+            }
+            state.upload_plans.insert(token_digest, plan);
+        }
+        let ttl_ms = i64::try_from(FILE_UPLOAD_PLAN_TTL_SECONDS.saturating_mul(1_000))
+            .map_err(|_| FileSessionError::Storage)?;
+        Ok(IssuedUploadPlan {
+            token: SecretString::new(token.to_string()),
+            expires_at_unix_ms: now_unix_ms.saturating_add(ttl_ms),
+            path: path.to_owned(),
+            target_state: precondition.target_state,
+            before_digest: precondition.digest,
+            after_digest: after_digest.to_owned(),
+            content_bytes,
+        })
+    }
+
+    pub fn begin_upload(
+        &self,
+        lease: FileLease,
+        plan_token: &str,
+        now_unix_ms: i64,
+    ) -> Result<FileUploadLease, FileSessionError> {
+        lease.ensure_active()?;
+        if !valid_upload_plan_token_shape(plan_token) {
+            return Err(FileSessionError::Invalid);
+        }
+        let digest = upload_plan_token_digest(plan_token.as_bytes());
+        let mut plan = {
+            let mut state = self.inner.lock().map_err(|_| FileSessionError::Storage)?;
+            cleanup_expired(&mut state);
+            state
+                .upload_plans
+                .remove(&digest)
+                .ok_or(FileSessionError::Invalid)?
+        };
+        if plan.file_session_id != lease.session.session_id
+            || plan.jw_session_binding != lease.session.jw_session_binding
+            || Instant::now() >= plan.expires_at
+        {
+            return Err(FileSessionError::Invalid);
+        }
+        plan.store
+            .record_file_upload_start(&plan.upload_id, now_unix_ms)
+            .map_err(|_| FileSessionError::Storage)?;
+        plan.audit_handed_off = true;
+        Ok(FileUploadLease {
+            session: lease.session,
+            plan,
+            finished: false,
+        })
+    }
+
     pub fn close(
         &self,
         token: &str,
@@ -289,6 +498,9 @@ impl FileBroker {
                     set_close_reason(&session, "session_revoked");
                 }
             }
+            state
+                .upload_plans
+                .retain(|_, plan| plan.jw_session_binding != binding);
             state.opening.retain(|candidate| candidate != &binding);
         }
     }
@@ -299,6 +511,7 @@ impl FileBroker {
                 set_close_reason(session, "all_sessions_revoked");
             }
             state.sessions.clear();
+            state.upload_plans.clear();
             state.opening.clear();
         }
     }
@@ -336,6 +549,7 @@ impl FileLease {
     }
 
     pub async fn list(&self, path: &str) -> Result<FileListView, FileSessionError> {
+        self.ensure_active()?;
         let mut runtime = self.session.runtime.lock().await;
         let result = runtime.protocol.list(path).await;
         self.audit(
@@ -348,6 +562,7 @@ impl FileLease {
     }
 
     pub async fn stat(&self, path: &str) -> Result<FileStatView, FileSessionError> {
+        self.ensure_active()?;
         let mut runtime = self.session.runtime.lock().await;
         let result = runtime.protocol.stat(path).await;
         self.audit("stat", path, 0, &result)?;
@@ -355,6 +570,7 @@ impl FileLease {
     }
 
     pub async fn read_text(&self, path: &str) -> Result<FileTextView, FileSessionError> {
+        self.ensure_active()?;
         let mut runtime = self.session.runtime.lock().await;
         let result = runtime.protocol.read_text(path).await;
         let bytes = result.as_ref().map_or(0, |view| view.size_bytes);
@@ -363,6 +579,7 @@ impl FileLease {
     }
 
     pub async fn download(&self, path: &str) -> Result<Vec<u8>, FileSessionError> {
+        self.ensure_active()?;
         let mut runtime = self.session.runtime.lock().await;
         let result = runtime.protocol.download(path).await;
         let bytes = result.as_ref().map_or(0, |value| value.len() as u64);
@@ -394,6 +611,148 @@ impl FileLease {
                 now,
             )
             .map_err(|_| FileSessionError::Storage)
+    }
+
+    fn ensure_active(&self) -> Result<(), FileSessionError> {
+        if self.session.revoked.load(Ordering::Acquire) {
+            return Err(FileSessionError::Invalid);
+        }
+        if session_expired(&self.session) {
+            return Err(FileSessionError::Expired);
+        }
+        Ok(())
+    }
+}
+
+impl FileUploadLease {
+    pub fn expected_content_bytes(&self) -> u64 {
+        self.plan.content_bytes
+    }
+
+    pub async fn apply(mut self, bytes: Vec<u8>) -> Result<AppliedUpload, FileSessionError> {
+        if let Err(error) = self.ensure_active() {
+            return Err(self.finish_error(error, "session_rejected"));
+        }
+        let actual_size = match u64::try_from(bytes.len()) {
+            Ok(value) => value,
+            Err(_) => {
+                return Err(self.finish_error(
+                    FileSessionError::Operation(String::from("upload_too_large")),
+                    "upload_too_large",
+                ));
+            }
+        };
+        if actual_size != self.plan.content_bytes {
+            return Err(self.finish_error(
+                FileSessionError::Operation(String::from("upload_length_mismatch")),
+                "upload_length_mismatch",
+            ));
+        }
+        let actual_digest = sha256_digest(&bytes);
+        if actual_digest != self.plan.after_digest {
+            return Err(self.finish_error(
+                FileSessionError::Operation(String::from("upload_digest_mismatch")),
+                "upload_digest_mismatch",
+            ));
+        }
+        let temporary_suffix = match random_session_id() {
+            Ok(value) => value,
+            Err(_) => {
+                return Err(self.finish_error(FileSessionError::Storage, "random_unavailable"));
+            }
+        };
+        let result = {
+            let mut runtime = self.session.runtime.lock().await;
+            runtime
+                .protocol
+                .atomic_upload(
+                    &self.plan.path,
+                    &self.plan.precondition,
+                    &bytes,
+                    &temporary_suffix,
+                )
+                .await
+        };
+        match result {
+            Ok(verified) => {
+                let now = unix_milliseconds().map_or(0, std::convert::identity);
+                if self
+                    .plan
+                    .store
+                    .record_file_upload_finish(&self.plan.upload_id, "verified", "ok", now)
+                    .is_err()
+                {
+                    return Err(FileSessionError::Storage);
+                }
+                self.finished = true;
+                let digest = match verified.digest {
+                    Some(digest) => digest,
+                    None => actual_digest,
+                };
+                Ok(AppliedUpload {
+                    path: self.plan.path.clone(),
+                    target_state: self.plan.precondition.target_state,
+                    digest,
+                    content_bytes: actual_size,
+                })
+            }
+            Err(reason) => {
+                let state = if reason == "manual_recovery_required"
+                    || reason == "temporary_cleanup_failed"
+                {
+                    "manual_check"
+                } else {
+                    "failed"
+                };
+                let error = FileSessionError::Operation(reason.clone());
+                Err(self.finish_error_with_state(error, state, &reason))
+            }
+        }
+    }
+
+    pub fn reject(mut self, reason: &str) -> FileSessionError {
+        self.finish_error(
+            FileSessionError::Operation(reason.to_owned()),
+            bounded_audit_reason(reason),
+        )
+    }
+
+    fn ensure_active(&self) -> Result<(), FileSessionError> {
+        if self.session.revoked.load(Ordering::Acquire) {
+            return Err(FileSessionError::Invalid);
+        }
+        if session_expired(&self.session) {
+            return Err(FileSessionError::Expired);
+        }
+        Ok(())
+    }
+
+    fn finish_error(&mut self, error: FileSessionError, reason: &str) -> FileSessionError {
+        self.finish_error_with_state(error, "failed", reason)
+    }
+
+    fn finish_error_with_state(
+        &mut self,
+        error: FileSessionError,
+        state: &str,
+        reason: &str,
+    ) -> FileSessionError {
+        let now = unix_milliseconds().map_or(0, std::convert::identity);
+        if self
+            .plan
+            .store
+            .record_file_upload_finish(
+                &self.plan.upload_id,
+                state,
+                bounded_audit_reason(reason),
+                now,
+            )
+            .is_err()
+        {
+            return FileSessionError::Storage;
+        }
+        self.finished = true;
+        error
     }
 }
 
@@ -594,6 +953,14 @@ fn cleanup_expired(state: &mut FileState) {
             set_close_reason(&session, "session_expired");
         }
     }
+    let active_session_ids: Vec<String> = state
+        .sessions
+        .values()
+        .map(|session| session.session_id.clone())
+        .collect();
+    state.upload_plans.retain(|_, plan| {
+        Instant::now() < plan.expires_at && active_session_ids.contains(&plan.file_session_id)
+    });
 }
 
 fn session_expired(session: &FileSession) -> bool {
@@ -606,6 +973,7 @@ fn session_expired(session: &FileSession) -> bool {
 }
 
 fn set_close_reason(session: &FileSession, reason: &str) {
+    session.revoked.store(true, Ordering::Release);
     if let Ok(mut value) = session.close_reason.lock() {
         *value = reason.to_owned();
     }
@@ -647,6 +1015,10 @@ fn token_digest(token: &[u8]) -> [u8; 32] {
     digest_with_domain(b"jw-agent/file-session-token/v1\0", token)
 }
 
+fn upload_plan_token_digest(token: &[u8]) -> [u8; 32] {
+    digest_with_domain(b"jw-agent/file-upload-plan/v1\0", token)
+}
+
 fn digest_with_domain(domain: &[u8], value: &[u8]) -> [u8; 32] {
     let mut hasher = Sha256::new();
     hasher.update(domain);
@@ -659,6 +1031,21 @@ fn valid_token_shape(token: &str) -> bool {
         && token
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
+}
+
+fn valid_upload_plan_token_shape(token: &str) -> bool {
+    token.len() == FILE_UPLOAD_PLAN_TOKEN_BYTES
+        && token
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
+}
+
+fn bounded_audit_reason(reason: &str) -> &str {
+    if !reason.is_empty() && reason.len() <= 64 {
+        reason
+    } else {
+        "internal_error"
+    }
 }
 
 fn unix_milliseconds() -> Result<i64, String> {
@@ -675,13 +1062,21 @@ mod tests {
 
     use crate::AgentConfig;
 
-    use super::{session_binding, sftp_command, token_digest, valid_token_shape};
+    use super::{
+        session_binding, sftp_command, token_digest, upload_plan_token_digest, valid_token_shape,
+        valid_upload_plan_token_shape,
+    };
 
     #[test]
     fn token_domain_and_shape_are_distinct() {
         let token = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
         assert!(valid_token_shape(token));
         assert_ne!(session_binding(token), token_digest(token.as_bytes()));
+        assert_ne!(
+            upload_plan_token_digest(token.as_bytes()),
+            token_digest(token.as_bytes())
+        );
+        assert!(valid_upload_plan_token_shape(token));
         assert!(!valid_token_shape("short"));
     }
 

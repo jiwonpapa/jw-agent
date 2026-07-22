@@ -122,6 +122,7 @@ const REQUIRED_FOUNDATION_PATHS: &[&str] = &[
     "docs/90-specs/access/openssh-terminal-sftp-v1.md",
     "docs/90-specs/access/openssh-password-broker-v1.md",
     "docs/90-specs/access/openssh-sftp-readonly-v1.md",
+    "docs/90-specs/access/openssh-sftp-atomic-upload-v1.md",
     "docs/90-specs/auth/pam-login-v1.md",
     "docs/90-specs/auth/totp-step-up-v1.md",
     "docs/90-specs/ui/overview-v1.md",
@@ -186,6 +187,7 @@ const P2_REQUIRED_PATHS: &[&str] = &[
     "crates/jw-certd/src/lib.rs",
     "crates/jw-agentd/migrations/0002_terminal_audit.sql",
     "crates/jw-agentd/migrations/0003_file_audit.sql",
+    "crates/jw-agentd/migrations/0004_file_upload_audit.sql",
     "crates/jw-agentd/src/askpass.rs",
     "crates/jw-agentd/src/file_session.rs",
     "crates/jw-agentd/src/sftp_protocol.rs",
@@ -337,12 +339,12 @@ const GATES: &[Gate] = &[
     Gate {
         id: "P2-SFTP-BOUNDARY",
         owner: "Manual Access Maintainer",
-        scope: "home-scoped read-only OpenSSH SFTP protocol, path, session, and audit boundary",
-        inputs: "Accepted SFTP spec, agentd file/SFTP sources, audit migration, package policy, and opsd sources",
+        scope: "home-scoped OpenSSH SFTP read and atomic G1 upload protocol, path, session, and audit boundary",
+        inputs: "Accepted SFTP read/upload specs, agentd file/SFTP sources, audit migrations, package policy, and opsd sources",
         lanes: P2_LOCAL_LANES,
         timeout_seconds: 3,
-        evidence: "fixed OpenSSH subsystem, read-only message allowlist, canonical home confinement, memory-only session, hard limits, metadata-only fail-closed audit, and no opsd path passed",
-        failure_policy: "fail lane on write message, user argv, path/body/token persistence, unbounded transfer, root-helper file surface, or SSH dependency drift",
+        evidence: "fixed OpenSSH subsystem, bounded read allowlist, PAM-planned fsync/atomic upload, canonical home confinement, metadata-only fail-closed audit, and no opsd path passed",
+        failure_policy: "fail lane on broad write primitive, user argv, path/body/token persistence, unbounded transfer, root-helper file surface, or SSH dependency drift",
         run: gate_p2_sftp_boundary,
     },
     Gate {
@@ -608,6 +610,17 @@ const GATES: &[Gate] = &[
         evidence: "home list/stat/text/download, traversal/symlink/size denial, cross-session/origin/close/logout denial, metadata audit, and process cleanup passed",
         failure_policy: "fail lane on home escape, write surface, credential/path/body persistence, missing bound/audit, leaked process, or changed SSH policy",
         run: vm::gate_p2_openssh_sftp_readonly,
+    },
+    Gate {
+        id: "VM-P2-OPENSSH-SFTP-ATOMIC-UPLOAD",
+        owner: "Manual Access Maintainer",
+        scope: "PAM-planned home-scoped G1 file create and replace through OpenSSH atomic extensions",
+        inputs: "installed P2 package, exact bounded Nginx route, public TLS API, PAM fixture, loopback sshd, and agentd upload audit",
+        lanes: P2_VM_LANES,
+        timeout_seconds: 240,
+        evidence: "create, replace, mode and digest read-back, stale target, symlink/type/origin/digest/replay denial, metadata audit, and cleanup passed",
+        failure_policy: "fail lane on unplanned write, non-atomic fallback, stale overwrite, home escape, secret/path/body persistence, false success, or temporary-file residue",
+        run: vm::gate_p2_openssh_sftp_atomic_upload,
     },
     Gate {
         id: "VM-SECRET-SCAN",
@@ -1143,14 +1156,24 @@ fn gate_p2_sftp_boundary(root: &Path, _timeout: Duration) -> Result<(), String> 
     let agent_manifest = read_text(&root.join("crates/jw-agentd/Cargo.toml"))?;
     let package_control = read_text(&root.join("packaging/debian/control"))?;
     let spec = read_text(&root.join("docs/90-specs/access/openssh-sftp-readonly-v1.md"))?;
+    let upload_spec =
+        read_text(&root.join("docs/90-specs/access/openssh-sftp-atomic-upload-v1.md"))?;
     let session = read_text(&root.join("crates/jw-agentd/src/file_session.rs"))?;
     let protocol = read_text(&root.join("crates/jw-agentd/src/sftp_protocol.rs"))?;
     let contract = read_text(&root.join("crates/jw-contracts/src/files.rs"))?;
     let audit = read_text(&root.join("crates/jw-agentd/migrations/0003_file_audit.sql"))?;
+    let upload_audit =
+        read_text(&root.join("crates/jw-agentd/migrations/0004_file_upload_audit.sql"))?;
+    let edge = read_text(&root.join("packaging/nginx/jw-agent-management.conf.template"))?;
     let mut failures = Vec::new();
 
     for (content, needle, label) in [
         (&spec, "Status: Accepted", "Accepted SFTP spec"),
+        (
+            &upload_spec,
+            "Status: Accepted",
+            "Accepted atomic upload spec",
+        ),
         (
             &package_control,
             "openssh-client",
@@ -1170,17 +1193,36 @@ fn gate_p2_sftp_boundary(root: &Path, _timeout: Duration) -> Result<(), String> 
         (&protocol, "FILE_MAX_LIST_ENTRIES", "directory entry bound"),
         (&protocol, "FILE_MAX_TEXT_BYTES", "text bound"),
         (&protocol, "FILE_MAX_DOWNLOAD_BYTES", "download bound"),
+        (&protocol, "SSH_FXP_WRITE", "bounded SFTP write message"),
+        (
+            &protocol,
+            "open_write_exclusive",
+            "exclusive temporary create",
+        ),
+        (&protocol, "EXTENSION_FSYNC", "OpenSSH fsync extension"),
+        (
+            &protocol,
+            "EXTENSION_POSIX_RENAME",
+            "OpenSSH atomic rename extension",
+        ),
+        (&session, "plan_upload", "memory-only upload plan"),
+        (&contract, "FILE_UPLOAD_PLAN_TTL_SECONDS", "upload plan TTL"),
         (&contract, "validate_file_path", "relative path validator"),
         (&audit, "path_digest BLOB", "path digest audit"),
         (&audit, "file_access_events", "file access audit table"),
+        (&upload_audit, "file_uploads", "file upload audit table"),
+        (
+            &edge,
+            "location = /api/v1/files/upload",
+            "exact upload edge route",
+        ),
+        (&edge, "client_max_body_size 8m;", "bounded upload body"),
     ] {
         if !content.contains(needle) {
             failures.push(format!("missing {label}"));
         }
     }
     for forbidden in [
-        "SSH_FXP_WRITE",
-        "SSH_FXP_REMOVE",
         "SSH_FXP_RENAME",
         "SSH_FXP_MKDIR",
         "SSH_FXP_RMDIR",
@@ -1200,7 +1242,7 @@ fn gate_p2_sftp_boundary(root: &Path, _timeout: Duration) -> Result<(), String> 
         ));
     }
     for forbidden in ["path TEXT", "content", "password", "token", "file_body"] {
-        if audit.contains(forbidden) {
+        if audit.contains(forbidden) || upload_audit.contains(forbidden) {
             failures.push(format!(
                 "file audit schema contains forbidden {forbidden} field"
             ));

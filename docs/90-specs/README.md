@@ -14,9 +14,10 @@ Last reviewed: 2026-07-22
 
 ## Access specs
 
-- [ACCESS-OPENSSH-TERMINAL-SFTP-V1](access/openssh-terminal-sftp-v1.md) — Accepted, terminal G1 and SFTP read G0 `VM_PASS`; SFTP write pending
+- [ACCESS-OPENSSH-TERMINAL-SFTP-V1](access/openssh-terminal-sftp-v1.md) — Accepted, terminal G1 and SFTP read G0/write G1 `VM_PASS`
 - [ACCESS-OPENSSH-PASSWORD-BROKER-V1](access/openssh-password-broker-v1.md) — Accepted, memory-only one-shot credential boundary
 - [ACCESS-OPENSSH-SFTP-READONLY-V1](access/openssh-sftp-readonly-v1.md) — Accepted, home-scoped G0 `VM_PASS`
+- [ACCESS-OPENSSH-SFTP-ATOMIC-UPLOAD-V1](access/openssh-sftp-atomic-upload-v1.md) — Accepted, bounded G1 `VM_PASS`
 
 ## Authentication specs
 
