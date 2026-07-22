@@ -4,5 +4,6 @@
 /apps/web/node_modules/
 /apps/web/dist/
 /apps/web/src/styles/generated.css
+/.playwright-mcp/
 .DS_Store
 *.swp

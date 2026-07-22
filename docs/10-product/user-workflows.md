@@ -7,7 +7,7 @@ Last reviewed: 2026-07-21
 
 ## 1. 서버 상태 확인
 
-1. 사용자는 공개 HTTPS 또는 SSH tunnel 복구 URL을 엽니다.
+1. 사용자는 서버의 공개 HTTPS URL을 직접 엽니다. SSH tunnel은 공개 경로 장애 때만 복구 절차로 사용합니다.
 2. 허용된 Linux PAM ID·비밀번호로 로그인합니다.
 3. 서버 identity·관찰 시각·role·write 가능 여부를 확인합니다.
 4. Attention Queue에서 실패 unit, disk 부족, SSL 만료, 지원 불가를 우선순위대로 봅니다.

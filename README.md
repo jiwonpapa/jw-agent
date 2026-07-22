@@ -14,7 +14,7 @@ Ubuntu 24.04 LTS 서버의 **범용 서비스 설정·유지보수 작업을 안
 
 - 신규 독립 저장소·DB·프로토콜·설치·릴리스 체계
 - Ubuntu 24.04 LTS amd64 우선
-- 공개 HTTPS와 loopback·SSH 터널 복구 경로를 함께 지원
+- 일반 사용자는 공개 HTTPS URL로 직접 접속하고, loopback·SSH 터널은 장애 복구 경로로만 사용
 - 공개 경로는 Nginx+Certbot 443에서 agentd 전용 Unix socket으로 proxy
 - Linux PAM ID·비밀번호, 허용 Linux group 기반 권한
 - Rust `agentd` 비-root / `authd`·`opsd` root·networkless 분리

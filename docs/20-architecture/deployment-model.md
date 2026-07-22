@@ -13,7 +13,8 @@ Last reviewed: 2026-07-21
 - opsd는 root로 실행하고 외부 socket을 만들지 않습니다.
 - 기본 설치는 loopback만 활성화하고 사용자가 public profile을 명시적으로 활성화합니다.
 - public profile은 valid TLS의 Nginx+Certbot 443에서 agentd 전용 UDS로 proxy합니다.
-- 사용자는 공개 HTTPS 또는 OpenSSH local port forwarding 복구 경로로 접속합니다.
+- 일반 사용자의 기본 진입점은 공개 HTTPS URL입니다.
+- OpenSSH local port forwarding은 공개 경로 장애·오설정 때만 사용하는 복구 진입점이며 정상 접속 절차로 안내하지 않습니다.
 - 제거해도 Nginx·OpenSSH·사용자 데이터가 제품에 종속되지 않습니다.
 
 ## 파일 소유
