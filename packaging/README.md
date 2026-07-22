@@ -4,6 +4,10 @@ This directory owns the Ubuntu 24.04 `.deb` assembly inputs. P2 package proof
 is accepted only after the disposable VM lane passes; source presence alone is
 not installation proof.
 
+Development packages compile the web assets natively and the Rust binaries with
+the Mac mini's Linux/amd64 GNU cross toolchain. The disposable Ubuntu VM only
+installs and verifies the immutable artifact; it does not compile release source.
+
 - `debian/`: package metadata and artifact mapping
 - `systemd/`: least-privilege service and socket units
 - `pam/`: product-specific local PAM policy

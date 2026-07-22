@@ -13,6 +13,7 @@ use crate::process::{Captured, run_capture, safe_output};
 
 const RECOVERY_HOST: &str = "127.0.0.1:8787";
 const RECOVERY_ORIGIN: &str = "http://127.0.0.1:8787";
+const RESTART_AGENTD_READY: &str = "sudo systemctl restart jw-agentd && sleep 1";
 const TERMINAL_WS_PROBE: &str = r#"
 import base64
 import hashlib
@@ -426,8 +427,7 @@ test "$(find /proc -maxdepth 2 -name comm -readable -exec grep -l '^jw-certd$' {
 pub fn gate_pam_matrix(_root: &Path, timeout: Duration) -> Result<(), String> {
     let config = VmConfig::load()?;
     let password = read_secret(&config.password_file)?;
-
-    let reset = config.ssh("sudo systemctl restart jw-agentd", None, timeout)?;
+    let reset = config.ssh(RESTART_AGENTD_READY, None, timeout)?;
     require_success(&reset, "authentication limiter reset", false)?;
     let account_before = config.ssh(
         &format!("sudo passwd -S -- {}", config.admin_user),
@@ -464,7 +464,7 @@ pub fn gate_pam_matrix(_root: &Path, timeout: Duration) -> Result<(), String> {
     }
     let ssh_after_limit = config.ssh("true", None, timeout)?;
     require_success(&ssh_after_limit, "OpenSSH after PAM limiter", false)?;
-    let reset = config.ssh("sudo systemctl restart jw-agentd", None, timeout)?;
+    let reset = config.ssh(RESTART_AGENTD_READY, None, timeout)?;
     require_success(&reset, "authentication limiter cleanup", false)?;
 
     let admin = recovery_login(&config, &config.admin_user, &password, timeout)?;

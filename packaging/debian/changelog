@@ -1,3 +1,12 @@
+jw-agent (0.2.0~p2.11) noble; urgency=medium
+
+  * Clear command environments and bound operation output.
+  * Reap timed-out process groups and preserve full-stream evidence digests.
+  * Centralize OpenSSH terminal and SFTP command profiles.
+  * Extend durable-stage restart and SFTP protocol regression coverage.
+
+ -- JW Agent Maintainers <maintainers@example.invalid>  Wed, 22 Jul 2026 10:36:29 +0900
+
 jw-agent (0.2.0~p2.10) noble; urgency=medium
 
   * Add PAM-planned home-scoped G1 file creation and explicit replacement.

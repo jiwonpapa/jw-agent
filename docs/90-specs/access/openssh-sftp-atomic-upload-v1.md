@@ -86,7 +86,7 @@ SFTP v3 handshake가 두 OpenSSH extension을 광고하지 않으면 write capab
 - `p2-local`의 contract, Rust policy, OpenAPI drift, clippy/test/build gate 통과
 - Playwright 320px flow에서 G1 범위·원복 불가·두 확인·PAM plan·최종 apply와 browser secret 비저장 통과
 - Ubuntu 24.04 `VM-P2-OPENSSH-SFTP-ATOMIC-UPLOAD`에서 create/replace, mode·digest read-back, stale target, symlink·directory·traversal·digest·wrong-Origin·replay denial, metadata-only audit와 temp cleanup 통과
-- VM package `jw-agent_0.2.0~p2.10_amd64.deb`, SHA-256 `4916eba6d93a81148eb4768141ac8b7815e86461a1d57f7c1fa9a55fa0ae64cd`, Lintian clean
+- VM package `jw-agent_0.2.0~p2.11_amd64.deb`, SHA-256 `f1f4719ccd0d73071f7a46cdf1c3dd2d373028a0b463ae054798c7b4c39f5186`, Lintian clean
 
 ## Excluded
 

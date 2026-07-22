@@ -25,17 +25,17 @@ JW_VM_PUBLIC_ADDRESS=192.168.0.142
 JW_VM_CA_CERT=/path/to/test-ca.crt
 JW_VM_ADMIN_USER=jwvmadmin
 JW_VM_PASSWORD_FILE=/path/to/mode-0600-fixture-password
-JW_VM_REMOTE_PACKAGE=/home/neojins/jw-agent_0.2.0~p2.10_amd64.deb
-JW_VM_EXPECTED_PACKAGE_SHA256=4916eba6d93a81148eb4768141ac8b7815e86461a1d57f7c1fa9a55fa0ae64cd
-JW_VM_EXPECTED_VERSION=0.2.0~p2.10
+JW_VM_REMOTE_PACKAGE=/home/neojins/jw-agent_0.2.0~p2.11_amd64.deb
+JW_VM_EXPECTED_PACKAGE_SHA256=f1f4719ccd0d73071f7a46cdf1c3dd2d373028a0b463ae054798c7b4c39f5186
+JW_VM_EXPECTED_VERSION=0.2.0~p2.11
 cargo xtask verify p2-vm
 ```
 
 ## Current VM evidence
 
 - domain: `jw-agent-p1`, Ubuntu 24.04.4 LTS, kernel `6.8.0-136-generic`
-- package: `jw-agent 0.2.0~p2.10`, SHA-256 `4916eba6d93a81148eb4768141ac8b7815e86461a1d57f7c1fa9a55fa0ae64cd`, Lintian clean
-- lanes: `p2-local` 21 PASS, `p2-browser` 8 PASS with 31 browser scenarios, `p2-vm` 23 PASS
+- package: `jw-agent 0.2.0~p2.11`, SHA-256 `f1f4719ccd0d73071f7a46cdf1c3dd2d373028a0b463ae054798c7b4c39f5186`, Lintian clean
+- lanes: `p2-local` 22 PASS, `p2-browser` 8 PASS with 31 browser scenarios, `p2-vm` 23 PASS
 - automated VM scenarios: installed PAM fixture equality, no `pam_faillock`, `jw-authd → libpam.so.0`, `jw-agentd → libsqlite3.so.0`, repeated product-login failures followed by unchanged Linux password state and working OpenSSH key recovery
 - automated P2 faults: success, verified no-op, syntax failure rollback, injected reload failure rollback, 1 MiB snapshot filesystem cancellation before apply, deleted checkpoint lockdown and restoration
 - automated P2B config faults: >16 KiB active save/no-op, exact syntax/reload rollback, external drift preservation, inactive denial, private proposal cleanup, internal temp discovery exclusion and startup cleanup
