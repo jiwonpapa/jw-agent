@@ -22,6 +22,7 @@ Compatibility spike 기준선은 2026-07-22의 `jw-agentd` clean debug build 11.
 - PTY는 existing exact-pinned `nix`의 `term` feature, process lifecycle은 existing exact-pinned Tokio의 `process` feature, WSS는 existing exact-pinned Axum의 `ws` feature만 확장합니다.
 - 브라우저 terminal은 exact-pinned `@xterm/xterm`과 `@xterm/addon-fit`만 추가합니다.
 - SFTP는 같은 `/usr/bin/ssh`의 fixed `-s 127.0.0.1 sftp` subsystem을 사용하고, agentd가 SFTP v3의 bounded message allowlist를 직접 encode/decode합니다.
+- terminal과 SFTP의 password-only·strict host-key·loopback·forwarding 차단 argv는 `agentd::openssh` 한 모듈이 소유하며 두 세션 구현이 같은 정책을 소비합니다.
 - G0 조회는 `REALPATH`, `STAT`, `OPENDIR`, `READDIR`, `OPEN(read)`, `READ`, `CLOSE`만 허용합니다. G1 원자 업로드는 같은 디렉터리 exclusive 임시파일에 한정한 `OPEN(create/write)`, `WRITE`와 서버가 광고한 `fsync@openssh.com`, `posix-rename@openssh.com`만 추가합니다. remove/mkdir/rmdir/setstat/symlink와 임의 rename API는 제공하지 않습니다.
 - wire packet, request timeout, entry count, text, download, path component와 전체 path를 고정 상한으로 제한합니다.
 - SFTP canonical home root와 기존 target 또는 신규 target parent의 `REALPATH` 경계를 매 요청 검사하고 symlink·비정규 target을 차단하며 TOCTOU 잔여 위험을 공개합니다.

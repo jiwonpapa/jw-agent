@@ -1,15 +1,19 @@
 #![forbid(unsafe_code)]
 
+mod process;
+mod source_policy;
 mod vm;
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::env;
 use std::ffi::{OsStr, OsString};
 use std::fs;
+use std::io::{self, Write};
 use std::path::{Component, Path, PathBuf};
-use std::process::{Command, ExitCode, Stdio};
-use std::thread;
-use std::time::{Duration, Instant};
+use std::process::ExitCode;
+use std::time::Duration;
+
+use process::run_capture_in;
 
 type GateRunner = fn(&Path, Duration) -> Result<(), String>;
 
@@ -190,6 +194,7 @@ const P2_REQUIRED_PATHS: &[&str] = &[
     "crates/jw-agentd/migrations/0004_file_upload_audit.sql",
     "crates/jw-agentd/src/askpass.rs",
     "crates/jw-agentd/src/file_session.rs",
+    "crates/jw-agentd/src/openssh.rs",
     "crates/jw-agentd/src/sftp_protocol.rs",
     "crates/jw-agentd/src/terminal.rs",
     "crates/jw-agentd/src/terminal_session.rs",
@@ -324,6 +329,17 @@ const GATES: &[Gate] = &[
         evidence: "forbidden failure shortcuts and unsafe leakage absent",
         failure_policy: "fail lane on forbidden source pattern",
         run: gate_rust_source_policy,
+    },
+    Gate {
+        id: "SOURCE-SIZE-RATCHET",
+        owner: "Architecture Maintainer",
+        scope: "authored Rust and web source growth",
+        inputs: "crates, xtask/src, apps/web/src, and apps/web/tests source files",
+        lanes: LOCAL_LANES,
+        timeout_seconds: 3,
+        evidence: "new source stayed within 1250 lines and legacy hotspots did not grow",
+        failure_policy: "fail lane when a hotspot grows without an in-owner split",
+        run: source_policy::gate_source_size_ratchet,
     },
     Gate {
         id: "P2-TERMINAL-BOUNDARY",
@@ -654,13 +670,16 @@ fn execute() -> Result<(), String> {
             let selected = Lane::parse(lane).ok_or_else(usage)?;
             verify_lane(&root, selected)
         }
+        (Some("verify-gate"), Some(gate_id)) if arguments.next().is_none() => {
+            verify_gate(&root, gate_id)
+        }
         _ => Err(usage()),
     }
 }
 
 fn usage() -> String {
     String::from(
-        "usage: cargo xtask list | cargo xtask verify governance|p1-local|p2-local|p1-browser|p2-browser|p1-vm|p2-vm",
+        "usage: cargo xtask list | cargo xtask verify-gate GATE-ID | cargo xtask verify governance|p1-local|p2-local|p1-browser|p2-browser|p1-vm|p2-vm",
     )
 }
 
@@ -726,6 +745,25 @@ fn verify_lane(root: &Path, lane: Lane) -> Result<(), String> {
             failures.len(),
             failures.join(" | ")
         ))
+    }
+}
+
+fn verify_gate(root: &Path, gate_id: &str) -> Result<(), String> {
+    let gate = GATES
+        .iter()
+        .find(|gate| gate.id == gate_id)
+        .ok_or_else(|| format!("unknown GateId {gate_id}"))?;
+    let timeout = Duration::from_secs(gate.timeout_seconds);
+    match (gate.run)(root, timeout) {
+        Ok(()) => {
+            println!("PASS {} — {}", gate.id, gate.evidence);
+            println!("verify-gate: PASS (1 unique gate)");
+            Ok(())
+        }
+        Err(error) => {
+            println!("FAIL {} — {}", gate.id, error);
+            Err(format!("{}: {error}", gate.id))
+        }
     }
 }
 
@@ -1065,6 +1103,7 @@ fn gate_p2_terminal_boundary(root: &Path, _timeout: Duration) -> Result<(), Stri
     let tmpfiles = read_text(&root.join("packaging/tmpfiles/jw-agent.conf"))?;
     let proxy = read_text(&root.join("packaging/nginx/proxy-common.conf"))?;
     let terminal = read_text(&root.join("crates/jw-agentd/src/terminal_session.rs"))?;
+    let openssh = read_text(&root.join("crates/jw-agentd/src/openssh.rs"))?;
     let askpass = read_text(&root.join("crates/jw-agentd/src/askpass.rs"))?;
     let audit = read_text(&root.join("crates/jw-agentd/migrations/0002_terminal_audit.sql"))?;
     let mut failures = Vec::new();
@@ -1098,12 +1137,12 @@ fn gate_p2_terminal_boundary(root: &Path, _timeout: Duration) -> Result<(), Stri
             "proxy_set_header Upgrade $http_upgrade;",
             "WebSocket upgrade proxy",
         ),
-        (&terminal, "StrictHostKeyChecking=yes", "strict host key"),
-        (&terminal, "EscapeChar=none", "local SSH escape denial"),
+        (&openssh, "StrictHostKeyChecking=yes", "strict host key"),
+        (&openssh, "EscapeChar=none", "local SSH escape denial"),
         (&terminal, ".arg(\"--ctty\")", "controlling PTY wrapper"),
         (
-            &terminal,
-            ".arg(LOOPBACK_HOST)",
+            &openssh,
+            "OsString::from(LOOPBACK_HOST)",
             "fixed loopback destination",
         ),
         (&askpass, "file_type().is_fifo()", "FIFO type validation"),
@@ -1159,6 +1198,7 @@ fn gate_p2_sftp_boundary(root: &Path, _timeout: Duration) -> Result<(), String> 
     let upload_spec =
         read_text(&root.join("docs/90-specs/access/openssh-sftp-atomic-upload-v1.md"))?;
     let session = read_text(&root.join("crates/jw-agentd/src/file_session.rs"))?;
+    let openssh = read_text(&root.join("crates/jw-agentd/src/openssh.rs"))?;
     let protocol = read_text(&root.join("crates/jw-agentd/src/sftp_protocol.rs"))?;
     let contract = read_text(&root.join("crates/jw-contracts/src/files.rs"))?;
     let audit = read_text(&root.join("crates/jw-agentd/migrations/0003_file_audit.sql"))?;
@@ -1179,13 +1219,17 @@ fn gate_p2_sftp_boundary(root: &Path, _timeout: Duration) -> Result<(), String> 
             "openssh-client",
             "OpenSSH package dependency",
         ),
-        (&session, ".arg(\"-s\")", "fixed SSH subsystem mode"),
-        (&session, ".arg(\"sftp\")", "fixed SFTP subsystem"),
-        (&session, "RequestTTY=no", "PTY denial"),
-        (&session, "StrictHostKeyChecking=yes", "strict host key"),
         (
-            &session,
-            ".arg(LOOPBACK_HOST)",
+            &openssh,
+            "OsString::from(\"-s\")",
+            "fixed SSH subsystem mode",
+        ),
+        (&openssh, "OsString::from(\"sftp\")", "fixed SFTP subsystem"),
+        (&openssh, "RequestTTY=no", "PTY denial"),
+        (&openssh, "StrictHostKeyChecking=yes", "strict host key"),
+        (
+            &openssh,
+            "OsString::from(LOOPBACK_HOST)",
             "fixed loopback destination",
         ),
         (&session, "FILE_IDLE_TIMEOUT_SECONDS", "idle session bound"),
@@ -1282,6 +1326,7 @@ fn gate_rust_clippy(root: &Path, timeout: Duration) -> Result<(), String> {
             "clippy",
             "--workspace",
             "--all-targets",
+            "--locked",
             "--",
             "-D",
             "warnings",
@@ -1291,7 +1336,7 @@ fn gate_rust_clippy(root: &Path, timeout: Duration) -> Result<(), String> {
 }
 
 fn gate_rust_test(root: &Path, timeout: Duration) -> Result<(), String> {
-    run_command(root, "cargo", ["test", "--workspace"], timeout)
+    run_command(root, "cargo", ["test", "--workspace", "--locked"], timeout)
 }
 
 fn gate_openapi_drift(root: &Path, timeout: Duration) -> Result<(), String> {
@@ -1331,6 +1376,7 @@ fn generate_and_compare_contracts(
         OsStr::new("cargo"),
         &[
             OsString::from("run"),
+            OsString::from("--locked"),
             OsString::from("--quiet"),
             OsString::from("-p"),
             OsString::from("jw-agentd"),
@@ -1460,43 +1506,27 @@ fn run_command_os(
     arguments: &[OsString],
     timeout: Duration,
 ) -> Result<(), String> {
-    let mut child = Command::new(program)
-        .args(arguments)
-        .current_dir(working_directory)
-        .stdin(Stdio::null())
-        .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit())
-        .spawn()
-        .map_err(|error| format!("cannot start {}: {error}", program.to_string_lossy()))?;
-    let started = Instant::now();
-    loop {
-        match child
-            .try_wait()
-            .map_err(|error| format!("cannot wait for {}: {error}", program.to_string_lossy()))?
-        {
-            Some(status) if status.success() => return Ok(()),
-            Some(status) => {
-                return Err(format!(
-                    "{} exited with {}",
-                    program.to_string_lossy(),
-                    status
-                ));
-            }
-            None if started.elapsed() >= timeout => {
-                child
-                    .kill()
-                    .map_err(|error| format!("cannot stop timed-out process: {error}"))?;
-                let _status = child
-                    .wait()
-                    .map_err(|error| format!("cannot reap timed-out process: {error}"))?;
-                return Err(format!(
-                    "{} exceeded {} seconds",
-                    program.to_string_lossy(),
-                    timeout.as_secs()
-                ));
-            }
-            None => thread::sleep(Duration::from_millis(50)),
-        }
+    let captured = run_capture_in(Some(working_directory), program, arguments, None, timeout)?;
+    io::stdout()
+        .write_all(&captured.stdout)
+        .map_err(|error| format!("cannot replay child stdout: {error}"))?;
+    io::stderr()
+        .write_all(&captured.stderr)
+        .map_err(|error| format!("cannot replay child stderr: {error}"))?;
+    if captured.stdout_truncated || captured.stderr_truncated {
+        return Err(format!(
+            "{} output exceeded the 128 KiB capture limit",
+            program.to_string_lossy()
+        ));
+    }
+    if captured.status.success() {
+        Ok(())
+    } else {
+        Err(format!(
+            "{} exited with {}",
+            program.to_string_lossy(),
+            captured.status
+        ))
     }
 }
 

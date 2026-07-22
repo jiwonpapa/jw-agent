@@ -19,13 +19,12 @@ use tokio::io::unix::AsyncFd;
 use tokio::process::{Child, Command};
 use tokio::time::{MissedTickBehavior, timeout};
 
+use crate::openssh::{self, OpenSshMode};
 use crate::{AgentConfig, SessionStore, TerminalLease};
 
 const SSH_AUTH_TIMEOUT: Duration = Duration::from_secs(8);
 const SSH_AUTH_SETTLE_TIME: Duration = Duration::from_millis(250);
 const PROCESS_EXIT_TIMEOUT: Duration = Duration::from_secs(2);
-const LOOPBACK_HOST: &str = "127.0.0.1";
-const LOOPBACK_HOST_ALIAS: &str = "jw-agent-loopback";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TerminalRunSummary {
@@ -244,80 +243,21 @@ fn ssh_command(
         .arg("--ctty")
         .arg("--wait")
         .arg(&config.ssh_executable)
-        .arg("-F")
-        .arg("/dev/null")
-        .arg("-o")
-        .arg("BatchMode=no")
-        .arg("-o")
-        .arg("NumberOfPasswordPrompts=1")
-        .arg("-o")
-        .arg("PreferredAuthentications=password")
-        .arg("-o")
-        .arg("PasswordAuthentication=yes")
-        .arg("-o")
-        .arg("PubkeyAuthentication=no")
-        .arg("-o")
-        .arg("KbdInteractiveAuthentication=no")
-        .arg("-o")
-        .arg("GSSAPIAuthentication=no")
-        .arg("-o")
-        .arg("IdentitiesOnly=yes")
-        .arg("-o")
-        .arg("StrictHostKeyChecking=yes")
-        .arg("-o")
-        .arg(format!(
-            "UserKnownHostsFile={}",
-            config.ssh_known_hosts.to_string_lossy()
+        .args(openssh::arguments(
+            &config.ssh_known_hosts,
+            &lease.subject.username,
+            OpenSshMode::Terminal,
         ))
-        .arg("-o")
-        .arg("GlobalKnownHostsFile=/dev/null")
-        .arg("-o")
-        .arg(format!("HostKeyAlias={LOOPBACK_HOST_ALIAS}"))
-        .arg("-o")
-        .arg("CheckHostIP=no")
-        .arg("-o")
-        .arg("ConnectTimeout=5")
-        .arg("-o")
-        .arg("ConnectionAttempts=1")
-        .arg("-o")
-        .arg("ServerAliveInterval=15")
-        .arg("-o")
-        .arg("ServerAliveCountMax=2")
-        .arg("-o")
-        .arg("ClearAllForwardings=yes")
-        .arg("-o")
-        .arg("ForwardAgent=no")
-        .arg("-o")
-        .arg("PermitLocalCommand=no")
-        .arg("-o")
-        .arg("LocalCommand=none")
-        .arg("-o")
-        .arg("ControlMaster=no")
-        .arg("-o")
-        .arg("ControlPath=none")
-        .arg("-o")
-        .arg("EscapeChar=none")
-        .arg("-o")
-        .arg("LogLevel=ERROR")
-        .arg("-o")
-        .arg("RequestTTY=force")
-        .arg("-p")
-        .arg("22")
-        .arg("-l")
-        .arg(&lease.subject.username)
-        .arg(LOOPBACK_HOST)
-        .env_clear()
-        .env("DISPLAY", "jw-agent:0")
-        .env("LANG", "C.UTF-8")
-        .env("TERM", "xterm-256color")
-        .env("SSH_ASKPASS", &config.askpass_executable)
-        .env("SSH_ASKPASS_REQUIRE", "force")
-        .env("JW_AGENT_ASKPASS_MODE", "1")
-        .env("JW_AGENT_ASKPASS_FIFO", fifo_path)
         .stdin(stdin)
         .stdout(stdout)
         .stderr(stderr)
         .kill_on_drop(true);
+    openssh::configure_askpass(
+        &mut command,
+        &config.askpass_executable,
+        fifo_path,
+        OpenSshMode::Terminal,
+    );
     Ok(command)
 }
 

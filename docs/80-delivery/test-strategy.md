@@ -20,6 +20,8 @@ Last reviewed: 2026-07-22
 
 `RUST-TEST`는 `jw-opsd`가 normative Nginx fixture를 직접 읽어 site ID·content digest·enabled-state digest drift를 검증하는 단일 owner입니다. 별도 script나 중복 fixture gate를 만들지 않습니다.
 
+같은 gate의 runner test는 fixed executable·argv, environment clear, stdout·stderr cap, full-stream digest와 timeout 판정을 소유합니다. Linux process-group과 pipe 회수는 disposable Ubuntu source checkout에서 추가 실행할 수 있지만 package daemon fault matrix와 같은 증거로 승격하지 않습니다.
+
 `p1-browser`는 mock API로 UI route·세션 비밀 비저장·viewport·접근성을 검증합니다. 실제 agentd API·PAM과 결합된 browser flow는 Ubuntu VM gate에서 검증되었습니다. 이 증거는 P2 mutation·terminal·SFTP까지 자동 확장되지 않으며 각 기능은 별도 browser+VM gate를 가져야 합니다.
 
 ## Operation fault injection

@@ -22,14 +22,13 @@ use tokio::process::{Child, Command};
 use tokio::time::timeout;
 use zeroize::{Zeroize, Zeroizing};
 
+use crate::openssh::{self, OpenSshMode};
 use crate::session::FileUploadPlanAudit;
 use crate::sftp_protocol::{SftpProtocol, UploadPrecondition};
 use crate::{AgentConfig, SessionStore, terminal_runtime_available};
 
 const TOKEN_BYTES: usize = 32;
 const MAX_GLOBAL_SESSIONS: usize = 8;
-const LOOPBACK_HOST: &str = "127.0.0.1";
-const LOOPBACK_HOST_ALIAS: &str = "jw-agent-loopback";
 const AUTH_TIMEOUT: Duration = Duration::from_secs(8);
 const PROCESS_EXIT_TIMEOUT: Duration = Duration::from_secs(2);
 
@@ -831,79 +830,21 @@ async fn prepare_sftp(
 fn sftp_command(config: &AgentConfig, username: &str, fifo_path: &Path) -> Command {
     let mut command = Command::new(&config.ssh_executable);
     command
-        .arg("-F")
-        .arg("/dev/null")
-        .arg("-o")
-        .arg("BatchMode=no")
-        .arg("-o")
-        .arg("NumberOfPasswordPrompts=1")
-        .arg("-o")
-        .arg("PreferredAuthentications=password")
-        .arg("-o")
-        .arg("PasswordAuthentication=yes")
-        .arg("-o")
-        .arg("PubkeyAuthentication=no")
-        .arg("-o")
-        .arg("KbdInteractiveAuthentication=no")
-        .arg("-o")
-        .arg("GSSAPIAuthentication=no")
-        .arg("-o")
-        .arg("IdentitiesOnly=yes")
-        .arg("-o")
-        .arg("StrictHostKeyChecking=yes")
-        .arg("-o")
-        .arg(format!(
-            "UserKnownHostsFile={}",
-            config.ssh_known_hosts.to_string_lossy()
+        .args(openssh::arguments(
+            &config.ssh_known_hosts,
+            username,
+            OpenSshMode::Sftp,
         ))
-        .arg("-o")
-        .arg("GlobalKnownHostsFile=/dev/null")
-        .arg("-o")
-        .arg(format!("HostKeyAlias={LOOPBACK_HOST_ALIAS}"))
-        .arg("-o")
-        .arg("CheckHostIP=no")
-        .arg("-o")
-        .arg("ConnectTimeout=5")
-        .arg("-o")
-        .arg("ConnectionAttempts=1")
-        .arg("-o")
-        .arg("ServerAliveInterval=15")
-        .arg("-o")
-        .arg("ServerAliveCountMax=2")
-        .arg("-o")
-        .arg("ClearAllForwardings=yes")
-        .arg("-o")
-        .arg("ForwardAgent=no")
-        .arg("-o")
-        .arg("PermitLocalCommand=no")
-        .arg("-o")
-        .arg("LocalCommand=none")
-        .arg("-o")
-        .arg("ControlMaster=no")
-        .arg("-o")
-        .arg("ControlPath=none")
-        .arg("-o")
-        .arg("RequestTTY=no")
-        .arg("-o")
-        .arg("LogLevel=ERROR")
-        .arg("-s")
-        .arg("-p")
-        .arg("22")
-        .arg("-l")
-        .arg(username)
-        .arg(LOOPBACK_HOST)
-        .arg("sftp")
-        .env_clear()
-        .env("DISPLAY", "jw-agent:0")
-        .env("LANG", "C.UTF-8")
-        .env("SSH_ASKPASS", &config.askpass_executable)
-        .env("SSH_ASKPASS_REQUIRE", "force")
-        .env("JW_AGENT_ASKPASS_MODE", "1")
-        .env("JW_AGENT_ASKPASS_FIFO", fifo_path)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .kill_on_drop(true);
+    openssh::configure_askpass(
+        &mut command,
+        &config.askpass_executable,
+        fifo_path,
+        OpenSshMode::Sftp,
+    );
     command
 }
 
@@ -1063,8 +1004,8 @@ mod tests {
     use crate::AgentConfig;
 
     use super::{
-        session_binding, sftp_command, token_digest, upload_plan_token_digest, valid_token_shape,
-        valid_upload_plan_token_shape,
+        askpass_path, bounded_audit_reason, connection_close_reason, session_binding, sftp_command,
+        token_digest, upload_plan_token_digest, valid_token_shape, valid_upload_plan_token_shape,
     };
 
     #[test]
@@ -1078,6 +1019,12 @@ mod tests {
         );
         assert!(valid_upload_plan_token_shape(token));
         assert!(!valid_token_shape("short"));
+        assert!(!valid_token_shape(
+            "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA+"
+        ));
+        assert!(!valid_upload_plan_token_shape(
+            "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA/"
+        ));
     }
 
     #[test]
@@ -1113,6 +1060,26 @@ mod tests {
         );
         assert!(arguments.iter().any(|value| value == "RequestTTY=no"));
         assert!(!arguments.iter().any(|value| value.contains("secret")));
+        Ok(())
+    }
+
+    #[test]
+    fn askpass_path_and_audit_reason_are_bounded() -> Result<(), String> {
+        let config = test_config()?;
+        let valid = askpass_path(&config, "0123456789abcdef0123456789abcdef")?;
+        assert_eq!(
+            valid,
+            PathBuf::from("/run/jw-agent/askpass/askpass-0123456789abcdef0123456789abcdef.fifo")
+        );
+        assert!(askpass_path(&config, "../outside").is_err());
+        assert!(askpass_path(&config, "0123456789ABCDEF0123456789ABCDEF").is_err());
+        assert_eq!(bounded_audit_reason("target_changed"), "target_changed");
+        assert_eq!(bounded_audit_reason(""), "internal_error");
+        assert_eq!(bounded_audit_reason(&"x".repeat(65)), "internal_error");
+        assert_eq!(
+            connection_close_reason(&"x".repeat(65)),
+            "openssh_connection_failed"
+        );
         Ok(())
     }
 

@@ -22,7 +22,7 @@ Last reviewed: 2026-07-22
 | Recovery browser | loopback through SSH tunnel | Required fallback |
 | Responsive web | 320px mobile through desktop | Supported |
 | Web terminal | existing OpenSSH, non-root Linux user | P2 `G1 VM_PASS`; loopback password auth required |
-| SFTP | existing OpenSSH subsystem, non-root Linux user home | G0 list/stat/text-read/download `VM_PASS`; G1 write pending |
+| SFTP | existing OpenSSH subsystem, non-root Linux user home | G0 list/stat/text-read/download `VM_PASS`; planned regular-file create/replace `G1 VM_PASS` |
 | Managed config | adapter allowlisted resource | Nginx active profile `VM_PASS`; others after gate |
 | Direct agentd Internet bind | any TCP port | Unsupported |
 
@@ -36,7 +36,7 @@ Last reviewed: 2026-07-22
 - `nginx.site_state.set/v1`과 활성 standard-layout 리소스의 `service.config_file.set/v1`은 `SUPPORTED + VM_PASS + G2`입니다.
 - 비활성 site, 24 KiB 초과, UTF-8이 아닌 파일, NUL·보호 marker, 비표준 owner/mode·symlink·hardlink는 설정 편집 `UNSUPPORTED`입니다.
 - terminal은 OpenSSH 발견, non-root account, same-origin WSS와 session policy가 모두 충족될 때만 capability를 반환합니다. package는 기존 sshd 인증 정책을 자동 변경하지 않습니다.
-- SFTP G0는 terminal 증거를 재사용하지 않고 별도 VM gate에서 canonical home, traversal·absolute path·외부 symlink·size·session 격리·logout와 metadata-only audit를 검증했습니다. upload·edit·delete·move·chmod는 `UNIMPLEMENTED`입니다.
+- SFTP G0는 terminal 증거를 재사용하지 않고 별도 VM gate에서 canonical home, traversal·absolute path·외부 symlink·size·session 격리·logout와 metadata-only audit를 검증했습니다. G1은 같은 홈 경계 안의 일반 파일 create/replace만 exact plan·PAM 재인증·fsync·원자 교체·mode/size/digest read-back으로 검증했습니다. delete·move·chmod·mkdir와 root/system path 쓰기는 `UNIMPLEMENTED`입니다.
 - 관찰 실패, 미설치, 지원 불가, 권한 부족을 서로 다른 상태로 표시합니다.
 - 지원표는 구현 단계에서 capability registry로 이전하고 문서를 생성합니다.
 

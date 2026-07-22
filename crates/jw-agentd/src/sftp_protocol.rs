@@ -75,6 +75,12 @@ struct UploadInspection {
     canonical_target: String,
 }
 
+#[derive(Default)]
+struct ServerExtensions {
+    supports_fsync: bool,
+    supports_posix_rename: bool,
+}
+
 impl SftpProtocol {
     pub async fn initialize(input: ChildStdin, output: ChildStdout) -> Result<Self, String> {
         let mut protocol = Self {
@@ -92,27 +98,9 @@ impl SftpProtocol {
         if packet.kind != SSH_FXP_VERSION {
             return Err(String::from("sftp_protocol_error"));
         }
-        let mut cursor = Cursor::new(&packet.payload);
-        if cursor.u32()? != SFTP_VERSION {
-            return Err(String::from("sftp_version_unsupported"));
-        }
-        let mut extension_count = 0_u8;
-        while !cursor.remaining().is_empty() {
-            extension_count = extension_count
-                .checked_add(1)
-                .ok_or_else(|| String::from("sftp_protocol_error"))?;
-            if extension_count > 32 {
-                return Err(String::from("sftp_protocol_error"));
-            }
-            let name = cursor.string()?;
-            let _data = cursor.bytes()?;
-            if name == EXTENSION_FSYNC {
-                protocol.supports_fsync = true;
-            } else if name == EXTENSION_POSIX_RENAME {
-                protocol.supports_posix_rename = true;
-            }
-        }
-        cursor.finish()?;
+        let extensions = parse_server_version(&packet.payload)?;
+        protocol.supports_fsync = extensions.supports_fsync;
+        protocol.supports_posix_rename = extensions.supports_posix_rename;
         let home = protocol.realpath_raw(".").await?;
         validate_canonical_root(&home)?;
         protocol.home = home;
@@ -203,13 +191,7 @@ impl SftpProtocol {
         if u64::try_from(bytes.len()).map_or(true, |size| size > FILE_MAX_UPLOAD_BYTES) {
             return Err(String::from("upload_too_large"));
         }
-        if temporary_suffix.len() != 32
-            || !temporary_suffix
-                .bytes()
-                .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
-        {
-            return Err(String::from("upload_temporary_invalid"));
-        }
+        validate_temporary_suffix(temporary_suffix)?;
 
         let current = self.inspect_upload_raw(path).await?;
         if current.precondition != *expected {
@@ -845,6 +827,32 @@ fn parse_names(payload: &[u8]) -> Result<Vec<NameEntry>, String> {
     Ok(names)
 }
 
+fn parse_server_version(payload: &[u8]) -> Result<ServerExtensions, String> {
+    let mut cursor = Cursor::new(payload);
+    if cursor.u32()? != SFTP_VERSION {
+        return Err(String::from("sftp_version_unsupported"));
+    }
+    let mut extensions = ServerExtensions::default();
+    let mut extension_count = 0_u8;
+    while !cursor.remaining().is_empty() {
+        extension_count = extension_count
+            .checked_add(1)
+            .ok_or_else(|| String::from("sftp_protocol_error"))?;
+        if extension_count > 32 {
+            return Err(String::from("sftp_protocol_error"));
+        }
+        let name = cursor.string()?;
+        let _data = cursor.bytes()?;
+        if name == EXTENSION_FSYNC {
+            extensions.supports_fsync = true;
+        } else if name == EXTENSION_POSIX_RENAME {
+            extensions.supports_posix_rename = true;
+        }
+    }
+    cursor.finish()?;
+    Ok(extensions)
+}
+
 fn parse_attrs(cursor: &mut Cursor<'_>) -> Result<Attrs, String> {
     let flags = cursor.u32()?;
     let known_flags = SSH_FILEXFER_ATTR_SIZE
@@ -949,6 +957,18 @@ fn validate_entry_name(name: &str) -> Result<(), String> {
     Ok(())
 }
 
+fn validate_temporary_suffix(suffix: &str) -> Result<(), String> {
+    if suffix.len() == 32
+        && suffix
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+    {
+        Ok(())
+    } else {
+        Err(String::from("upload_temporary_invalid"))
+    }
+}
+
 fn push_string(output: &mut Vec<u8>, value: &str) -> Result<(), String> {
     push_bytes(output, value.as_bytes())
 }
@@ -962,7 +982,12 @@ fn push_bytes(output: &mut Vec<u8>, value: &[u8]) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Cursor, kind, parse_attrs, validate_canonical_root, validate_entry_name};
+    use super::{
+        Cursor, EXTENSION_FSYNC, EXTENSION_POSIX_RENAME, SFTP_VERSION, SSH_FILEXFER_ATTR_EXTENDED,
+        SSH_FX_BAD_MESSAGE, SSH_FX_NO_SUCH_FILE, SSH_FX_PERMISSION_DENIED, kind, parse_attrs,
+        parse_names, parse_server_version, parse_status, push_bytes, status_error,
+        validate_canonical_root, validate_entry_name, validate_temporary_suffix,
+    };
     use jw_contracts::FileKind;
 
     #[test]
@@ -988,5 +1013,73 @@ mod tests {
         assert!(validate_entry_name("report.txt").is_ok());
         assert!(validate_entry_name("../outside").is_err());
         assert!(validate_entry_name("bad\nname").is_err());
+    }
+
+    #[test]
+    fn version_parser_accepts_only_bounded_v3_extensions() -> Result<(), String> {
+        let mut payload = SFTP_VERSION.to_be_bytes().to_vec();
+        push_bytes(&mut payload, EXTENSION_FSYNC.as_bytes())?;
+        push_bytes(&mut payload, b"1")?;
+        push_bytes(&mut payload, b"ignored@example.test")?;
+        push_bytes(&mut payload, b"anything")?;
+        push_bytes(&mut payload, EXTENSION_POSIX_RENAME.as_bytes())?;
+        push_bytes(&mut payload, b"1")?;
+
+        let parsed = parse_server_version(&payload)?;
+        assert!(parsed.supports_fsync);
+        assert!(parsed.supports_posix_rename);
+
+        assert_eq!(
+            parse_server_version(&4_u32.to_be_bytes()).err().as_deref(),
+            Some("sftp_version_unsupported")
+        );
+        let mut truncated = SFTP_VERSION.to_be_bytes().to_vec();
+        truncated.extend_from_slice(&4_u32.to_be_bytes());
+        truncated.extend_from_slice(b"ab");
+        assert!(parse_server_version(&truncated).is_err());
+
+        let mut excessive = SFTP_VERSION.to_be_bytes().to_vec();
+        for _ in 0..33 {
+            push_bytes(&mut excessive, b"x")?;
+            push_bytes(&mut excessive, b"")?;
+        }
+        assert!(parse_server_version(&excessive).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn status_parser_rejects_trailing_or_truncated_packets() -> Result<(), String> {
+        let mut payload = SSH_FX_NO_SUCH_FILE.to_be_bytes().to_vec();
+        push_bytes(&mut payload, b"missing")?;
+        push_bytes(&mut payload, b"en")?;
+        assert_eq!(parse_status(&payload)?, SSH_FX_NO_SUCH_FILE);
+        assert_eq!(status_error(SSH_FX_NO_SUCH_FILE), "not_found");
+        assert_eq!(status_error(SSH_FX_PERMISSION_DENIED), "permission_denied");
+        assert_eq!(status_error(SSH_FX_BAD_MESSAGE), "sftp_bad_message");
+        payload.push(0);
+        assert!(parse_status(&payload).is_err());
+        assert!(parse_status(&SSH_FX_NO_SUCH_FILE.to_be_bytes()).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn names_and_extended_attributes_are_bounded() {
+        let excessive = u32::MAX.to_be_bytes();
+        assert!(parse_names(&excessive).is_err());
+
+        let mut attrs = SSH_FILEXFER_ATTR_EXTENDED.to_be_bytes().to_vec();
+        attrs.extend_from_slice(&33_u32.to_be_bytes());
+        assert!(parse_attrs(&mut Cursor::new(&attrs)).is_err());
+
+        let unknown_flag = 0x4000_0000_u32.to_be_bytes();
+        assert!(parse_attrs(&mut Cursor::new(&unknown_flag)).is_err());
+    }
+
+    #[test]
+    fn upload_temporary_suffix_is_lowercase_hex_only() {
+        assert!(validate_temporary_suffix("0123456789abcdef0123456789abcdef").is_ok());
+        assert!(validate_temporary_suffix("0123456789ABCDEF0123456789ABCDEF").is_err());
+        assert!(validate_temporary_suffix("../23456789abcdef0123456789abcdef").is_err());
+        assert!(validate_temporary_suffix("short").is_err());
     }
 }

@@ -3,30 +3,33 @@
 Status: Accepted  
 Authority: Data  
 Owner: Data Maintainer  
-Last reviewed: 2026-07-21
+Last reviewed: 2026-07-22
 
 ## agentd SQLite WAL
 
-예정 aggregate:
+구현 aggregate:
 
 - schema migration state
-- host observation snapshot and freshness
-- discovered service inventory projection
 - opaque server-side session digest, canonical Linux UID·username·role, auth/expiry times
-- opsd receipt cursor and UI projection
-- local UI preferences excluding secrets
+- exact-plan reauthentication claim
+- additional-auth settings excluding secrets
+- terminal·file session과 path-digest 기반 access/upload audit metadata
+
+host observation·service inventory와 opsd receipt는 현재 OS·opsd에서 읽어 응답하며 agentd DB의 권위 상태로 복제하지 않습니다.
 
 PAM password, PAM handle, raw authentication token, plaintext session ID는 저장하지 않습니다. Linux identity와 role은 PAM/NSS가 권위 원본이며 session은 제한된 snapshot입니다.
 
 ## opsd SQLite WAL
 
-예정 aggregate:
+구현 aggregate:
 
 - operation and immutable plan
 - resource lock and idempotency claim
 - lifecycle event sequence
 - snapshot metadata and digest
 - recovery marker and forensic checkpoint
+
+operation별 snapshot body와 ledger checkpoint는 DB 밖 root-owned 파일이며 SQLite에는 digest·metadata·relative locator만 저장합니다.
 
 ## 설계 규칙
 

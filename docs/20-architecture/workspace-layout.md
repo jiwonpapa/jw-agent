@@ -3,7 +3,7 @@
 Status: Accepted  
 Authority: Architecture  
 Owner: Architecture Maintainer  
-Last reviewed: 2026-07-21
+Last reviewed: 2026-07-22
 
 ## 목표 구조
 
@@ -23,7 +23,7 @@ tests/vm/         # disposable Ubuntu scenarios and fixtures
 docs/
 ```
 
-P1 workspace member는 `jw-contracts`, `jw-agentd`, `jw-authd`, `ffi-pam`, `jw-opsd`, `xtask`입니다. Web은 `apps/web`의 독립 Bun package이며 Rust build graph에 포함하지 않습니다.
+현재 workspace member는 `jw-contracts`, `jw-agentd`, `jw-authd`, `jw-certd`, `ffi-pam`, `jw-opsd`, `xtask`입니다. Web은 `apps/web`의 독립 Bun package이며 Rust build graph에 포함하지 않습니다.
 
 ## 의존 방향
 

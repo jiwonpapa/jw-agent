@@ -3,15 +3,14 @@
 use std::env;
 use std::ffi::{OsStr, OsString};
 use std::fs::{self, OpenOptions};
-use std::io::{Read, Write};
 use std::net::IpAddr;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, ExitStatus, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
-const OUTPUT_LIMIT_BYTES: usize = 128 * 1_024;
+use crate::process::{Captured, run_capture, safe_output};
+
 const RECOVERY_HOST: &str = "127.0.0.1:8787";
 const RECOVERY_ORIGIN: &str = "http://127.0.0.1:8787";
 const TERMINAL_WS_PROBE: &str = r#"
@@ -3947,110 +3946,6 @@ struct HttpResponse {
     body: String,
 }
 
-struct Captured {
-    status: ExitStatus,
-    stdout: Vec<u8>,
-    stderr: Vec<u8>,
-    stdout_truncated: bool,
-    stderr_truncated: bool,
-}
-
-fn run_capture(
-    program: &OsStr,
-    arguments: &[OsString],
-    input: Option<&[u8]>,
-    timeout: Duration,
-) -> Result<Captured, String> {
-    let mut child = Command::new(program)
-        .args(arguments)
-        .stdin(if input.is_some() {
-            Stdio::piped()
-        } else {
-            Stdio::null()
-        })
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|error| format!("cannot start {}: {error}", program.to_string_lossy()))?;
-
-    if let Some(bytes) = input {
-        let Some(mut stdin) = child.stdin.take() else {
-            return Err(String::from("child stdin is unavailable"));
-        };
-        stdin
-            .write_all(bytes)
-            .map_err(|error| format!("cannot write child stdin: {error}"))?;
-    }
-
-    let Some(stdout) = child.stdout.take() else {
-        return Err(String::from("child stdout is unavailable"));
-    };
-    let Some(stderr) = child.stderr.take() else {
-        return Err(String::from("child stderr is unavailable"));
-    };
-    let stdout_reader = thread::spawn(move || read_capped(stdout));
-    let stderr_reader = thread::spawn(move || read_capped(stderr));
-
-    let started = Instant::now();
-    let status = loop {
-        match child
-            .try_wait()
-            .map_err(|error| format!("cannot wait for {}: {error}", program.to_string_lossy()))?
-        {
-            Some(status) => break status,
-            None if started.elapsed() >= timeout => {
-                child
-                    .kill()
-                    .map_err(|error| format!("cannot stop timed-out process: {error}"))?;
-                let status = child
-                    .wait()
-                    .map_err(|error| format!("cannot reap timed-out process: {error}"))?;
-                let _stdout = stdout_reader.join();
-                let _stderr = stderr_reader.join();
-                return Err(format!(
-                    "{} exceeded {} seconds and exited with {status}",
-                    program.to_string_lossy(),
-                    timeout.as_secs()
-                ));
-            }
-            None => thread::sleep(Duration::from_millis(25)),
-        }
-    };
-    let (stdout, stdout_truncated) = stdout_reader
-        .join()
-        .map_err(|_| String::from("stdout reader failed"))??;
-    let (stderr, stderr_truncated) = stderr_reader
-        .join()
-        .map_err(|_| String::from("stderr reader failed"))??;
-    Ok(Captured {
-        status,
-        stdout,
-        stderr,
-        stdout_truncated,
-        stderr_truncated,
-    })
-}
-
-fn read_capped<R: Read>(mut reader: R) -> Result<(Vec<u8>, bool), String> {
-    let mut kept = Vec::new();
-    let mut buffer = [0_u8; 8 * 1_024];
-    let mut truncated = false;
-    loop {
-        let count = reader
-            .read(&mut buffer)
-            .map_err(|error| format!("cannot read child output: {error}"))?;
-        if count == 0 {
-            return Ok((kept, truncated));
-        }
-        let remaining = OUTPUT_LIMIT_BYTES.saturating_sub(kept.len());
-        let take = remaining.min(count);
-        kept.extend_from_slice(&buffer[..take]);
-        if take < count {
-            truncated = true;
-        }
-    }
-}
-
 fn require_success(result: &Captured, label: &str, sensitive: bool) -> Result<(), String> {
     if result.status.success() && !result.stdout_truncated && !result.stderr_truncated {
         return Ok(());
@@ -4068,18 +3963,6 @@ fn require_success(result: &Captured, label: &str, sensitive: bool) -> Result<()
             safe_output(&result.stderr, result.stderr_truncated)
         ))
     }
-}
-
-fn safe_output(bytes: &[u8], truncated: bool) -> String {
-    let mut value = String::from_utf8_lossy(bytes).trim().to_owned();
-    if value.len() > 2_048 {
-        value.truncate(2_048);
-        value.push_str("...[display capped]");
-    }
-    if truncated {
-        value.push_str("...[capture capped]");
-    }
-    value
 }
 
 fn text(bytes: &[u8]) -> Result<&str, String> {

@@ -13,11 +13,11 @@ use tokio::sync::watch;
 use zeroize::{Zeroize, Zeroizing};
 
 use crate::AgentConfig;
+use crate::openssh::LOOPBACK_HOST_ALIAS;
 
 const TOKEN_BYTES: usize = 32;
 const TOKEN_TEXT_BYTES: usize = 43;
 const MAX_GLOBAL_SESSIONS: usize = 8;
-const LOOPBACK_HOST_ALIAS: &str = "jw-agent-loopback";
 
 #[derive(Clone, Default)]
 pub struct TerminalBroker {

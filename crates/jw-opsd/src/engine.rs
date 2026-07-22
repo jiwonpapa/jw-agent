@@ -3214,244 +3214,36 @@ fn random_id(prefix: &str) -> Result<String, OpsError> {
 }
 
 #[cfg(test)]
+#[path = "engine_test_fakes.rs"]
+mod test_fakes;
+
+#[cfg(test)]
 mod tests {
-    use std::collections::VecDeque;
     use std::fs;
     use std::process::Command;
-    use std::sync::{Arc, Mutex};
+    use std::sync::Arc;
 
     use jw_contracts::{
         AssuranceLevel, CERTBOT_ATTACH_OPERATION, CERTBOT_ISSUE_OPERATION,
-        CERTBOT_RENEW_TEST_OPERATION, CertbotAttachPlanRequest, CertbotCommand,
-        CertbotCommandClass, CertbotCommandEvidence, CertbotIssuePlanInput,
+        CERTBOT_RENEW_TEST_OPERATION, CertbotAttachPlanRequest, CertbotIssuePlanInput,
         CertbotIssuePlanRequest, CertbotIssuePreflightEvidence, CertbotRenewTestPlanRequest,
         CertificateEnvironment, IPC_PROTOCOL_VERSION, MANAGED_CONFIG_OPERATION,
         ManagedConfigApprovalIntent, ManagedConfigPlanRequest, NGINX_CONFIG_ADAPTER_ID,
         NGINX_LAYOUT_ID, NGINX_MANAGEMENT_MARKER, NGINX_SITE_STATE_OPERATION, NginxSiteState,
-        NginxSiteStatePlanRequest, OpsRequest, OpsRequestBody, OpsResponseBody, Role,
-        ServiceAction, Subject, nginx_config_resource_id,
+        NginxSiteStatePlanRequest, OperationStage, OpsRequest, OpsRequestBody, OpsResponseBody,
+        Role, ServiceAction, Subject, nginx_config_resource_id,
         nginx_enabled_state_digest as enabled_state_digest, nginx_site_id as site_id,
         sha256_digest,
     };
 
     use crate::certbot_runner::CertbotRunner;
     use crate::config::{OpsPaths, OpsPolicy};
-    use crate::error::OpsError;
-    use crate::runner::{CommandClass, CommandEvidence, OperationRunner, StreamEvidence};
+    use crate::ledger::{Ledger, Transition};
+    use crate::runner::OperationRunner;
+    use crate::snapshot::{NginxLinkSnapshot, write_nginx_snapshot};
 
     use super::OpsService;
-
-    #[derive(Debug)]
-    struct FakeRunner {
-        results: Mutex<VecDeque<(CommandClass, bool)>>,
-    }
-
-    impl FakeRunner {
-        fn all_success() -> Self {
-            Self {
-                results: Mutex::new(VecDeque::from([
-                    (CommandClass::NginxConfigTest, true),
-                    (CommandClass::NginxReload, true),
-                    (CommandClass::NginxActive, true),
-                ])),
-            }
-        }
-
-        fn syntax_failure_then_rollback() -> Self {
-            Self {
-                results: Mutex::new(VecDeque::from([
-                    (CommandClass::NginxConfigTest, false),
-                    (CommandClass::NginxConfigTest, true),
-                    (CommandClass::NginxReload, true),
-                    (CommandClass::NginxActive, true),
-                ])),
-            }
-        }
-
-        fn reload_failure_then_rollback() -> Self {
-            Self {
-                results: Mutex::new(VecDeque::from([
-                    (CommandClass::NginxConfigTest, true),
-                    (CommandClass::NginxReload, false),
-                    (CommandClass::NginxConfigTest, true),
-                    (CommandClass::NginxReload, true),
-                    (CommandClass::NginxActive, true),
-                ])),
-            }
-        }
-
-        fn syntax_and_rollback_validation_fail() -> Self {
-            Self {
-                results: Mutex::new(VecDeque::from([
-                    (CommandClass::NginxConfigTest, false),
-                    (CommandClass::NginxConfigTest, false),
-                ])),
-            }
-        }
-
-        fn noop_success() -> Self {
-            Self {
-                results: Mutex::new(VecDeque::from([
-                    (CommandClass::NginxConfigTest, true),
-                    (CommandClass::NginxActive, true),
-                ])),
-            }
-        }
-
-        fn certbot_timer_success(count: usize) -> Self {
-            let mut results = VecDeque::new();
-            for _ in 0..count {
-                results.push_back((CommandClass::CertbotTimerEnabled, true));
-                results.push_back((CommandClass::CertbotTimerActive, true));
-            }
-            Self {
-                results: Mutex::new(results),
-            }
-        }
-
-        fn certbot_issue_staging_and_production_plan() -> Self {
-            Self {
-                results: Mutex::new(VecDeque::from([
-                    (CommandClass::CertbotTimerEnabled, true),
-                    (CommandClass::CertbotTimerActive, true),
-                    (CommandClass::CertbotTimerEnabled, true),
-                    (CommandClass::CertbotTimerActive, true),
-                    (CommandClass::NginxConfigTest, true),
-                    (CommandClass::NginxActive, true),
-                    (CommandClass::CertbotTimerEnabled, true),
-                    (CommandClass::CertbotTimerActive, true),
-                    (CommandClass::CertbotTimerEnabled, true),
-                    (CommandClass::CertbotTimerActive, true),
-                    (CommandClass::CertbotTimerEnabled, true),
-                    (CommandClass::CertbotTimerActive, true),
-                    (CommandClass::CertbotTimerEnabled, true),
-                    (CommandClass::CertbotTimerActive, true),
-                    (CommandClass::NginxConfigTest, true),
-                    (CommandClass::NginxActive, true),
-                ])),
-            }
-        }
-
-        fn certbot_attach_success() -> Self {
-            Self {
-                results: Mutex::new(Self::certbot_attach_results()),
-            }
-        }
-
-        fn certbot_attach_tls_failure_then_rollback() -> Self {
-            let mut values = Self::certbot_attach_results();
-            values.extend([
-                (CommandClass::NginxConfigTest, true),
-                (CommandClass::NginxReload, true),
-                (CommandClass::NginxActive, true),
-            ]);
-            Self {
-                results: Mutex::new(values),
-            }
-        }
-
-        fn certbot_attach_results() -> VecDeque<(CommandClass, bool)> {
-            VecDeque::from([
-                (CommandClass::CertbotTimerEnabled, true),
-                (CommandClass::CertbotTimerActive, true),
-                (CommandClass::CertbotTimerEnabled, true),
-                (CommandClass::CertbotTimerActive, true),
-                (CommandClass::NginxConfigTest, true),
-                (CommandClass::NginxActive, true),
-                (CommandClass::CertbotTimerEnabled, true),
-                (CommandClass::CertbotTimerActive, true),
-                (CommandClass::NginxConfigTest, true),
-                (CommandClass::NginxReload, true),
-                (CommandClass::NginxActive, true),
-                (CommandClass::CertbotTimerEnabled, true),
-                (CommandClass::CertbotTimerActive, true),
-            ])
-        }
-    }
-
-    impl OperationRunner for FakeRunner {
-        fn run(&self, class: CommandClass) -> Result<CommandEvidence, OpsError> {
-            let mut results = self
-                .results
-                .lock()
-                .map_err(|_| OpsError::Command(String::from("fake runner poisoned")))?;
-            let Some((expected, success)) = results.pop_front() else {
-                return Err(OpsError::Command(String::from("unexpected command")));
-            };
-            if expected != class {
-                return Err(OpsError::Command(String::from("command order mismatch")));
-            }
-            let empty = sha256_digest(b"");
-            Ok(CommandEvidence {
-                class,
-                success,
-                exit_code: Some(if success { 0 } else { 1 }),
-                timed_out: false,
-                stdout: StreamEvidence {
-                    digest: empty.clone(),
-                    captured: Vec::new(),
-                    truncated: false,
-                },
-                stderr: StreamEvidence {
-                    digest: empty,
-                    captured: Vec::new(),
-                    truncated: false,
-                },
-            })
-        }
-    }
-
-    #[derive(Debug)]
-    struct FakeCertbotRunner {
-        success: bool,
-        calls: Mutex<u32>,
-    }
-
-    impl FakeCertbotRunner {
-        fn new(success: bool) -> Self {
-            Self {
-                success,
-                calls: Mutex::new(0),
-            }
-        }
-    }
-
-    impl CertbotRunner for FakeCertbotRunner {
-        fn run(
-            &self,
-            command: CertbotCommand,
-            _now_ms: i64,
-        ) -> Result<CertbotCommandEvidence, OpsError> {
-            let command_class = match command {
-                CertbotCommand::RenewDryRun => CertbotCommandClass::RenewDryRun,
-                CertbotCommand::Issue { environment, .. } => match environment {
-                    jw_contracts::CertificateEnvironment::Staging => {
-                        CertbotCommandClass::IssueStaging
-                    }
-                    jw_contracts::CertificateEnvironment::Production => {
-                        CertbotCommandClass::IssueProduction
-                    }
-                },
-                CertbotCommand::VerifyLocalTls { .. } => CertbotCommandClass::VerifyLocalTls,
-            };
-            let mut calls = self
-                .calls
-                .lock()
-                .map_err(|_| OpsError::Command(String::from("fake certbot runner poisoned")))?;
-            *calls = calls.saturating_add(1);
-            let digest = sha256_digest(b"redacted certbot stream");
-            Ok(CertbotCommandEvidence {
-                command_class,
-                success: self.success,
-                exit_code: Some(if self.success { 0 } else { 1 }),
-                timed_out: false,
-                stdout_digest: digest.clone(),
-                stdout_truncated: false,
-                stderr_digest: digest,
-                stderr_truncated: false,
-            })
-        }
-    }
+    use super::test_fakes::{FakeCertbotRunner, FakeRunner};
 
     #[test]
     fn certbot_staging_issue_is_non_persistent_and_unlocks_production_plan() -> Result<(), String> {
@@ -3943,6 +3735,98 @@ mod tests {
         fs::remove_dir_all(root).map_err(|error| error.to_string())
     }
 
+    #[test]
+    fn restart_recovery_covers_every_durable_nginx_stage() -> Result<(), String> {
+        for stage in [
+            OperationStage::Approved,
+            OperationStage::Snapshotted,
+            OperationStage::Applying,
+            OperationStage::Validating,
+            OperationStage::Reloading,
+            OperationStage::Verifying,
+            OperationStage::RollingBack,
+        ] {
+            assert_restart_recovery(stage)?;
+        }
+        Ok(())
+    }
+
+    fn assert_restart_recovery(interrupted_stage: OperationStage) -> Result<(), String> {
+        let root = test_root(interrupted_stage.as_storage_value())?;
+        let service = fixture_service(&root, Arc::new(FakeRunner::all_success()))?;
+        let plan = plan(&service, 1_000)?;
+        let accepted = approve_only(&service, &plan, 1_001, "0123456789abcdef")?;
+        assert_eq!(accepted.terminal_state, OperationStage::Approved);
+
+        let paths = OpsPaths::for_test(&root);
+        let policy = OpsPolicy::default();
+        if interrupted_stage != OperationStage::Approved {
+            let snapshot = NginxLinkSnapshot {
+                schema_version: 1,
+                site_id: plan.site_id.clone(),
+                basename: String::from("example.com"),
+                enabled: false,
+                available_digest: plan.available_digest.clone(),
+                enabled_state_digest: plan.enabled_state_digest.clone(),
+            };
+            let record = write_nginx_snapshot(&paths, &policy, &accepted.operation_id, &snapshot)
+                .map_err(|error| error.to_string())?;
+            let mut ledger = Ledger::open(&paths).map_err(|error| error.to_string())?;
+            ledger
+                .attach_snapshot(&accepted.operation_id, &record, 1_002)
+                .map_err(|error| error.to_string())?;
+            let mut current = OperationStage::Snapshotted;
+            for next in [
+                OperationStage::Applying,
+                OperationStage::Validating,
+                OperationStage::Reloading,
+                OperationStage::Verifying,
+                OperationStage::RollingBack,
+            ] {
+                if current == interrupted_stage {
+                    break;
+                }
+                ledger
+                    .transition(
+                        &accepted.operation_id,
+                        Transition {
+                            expected: &[current],
+                            next,
+                            result_code: "restart_fixture_stage",
+                            evidence_digest: &sha256_digest(next.as_storage_value().as_bytes()),
+                            after_digest: None,
+                            rollback_result: None,
+                            now_ms: 1_003,
+                        },
+                    )
+                    .map_err(|error| error.to_string())?;
+                current = next;
+            }
+            assert_eq!(current, interrupted_stage);
+        }
+        drop(service);
+
+        let restarted = OpsService::new(paths.clone(), policy, Arc::new(FakeRunner::all_success()));
+        restarted
+            .initialize(2_000)
+            .map_err(|error| error.to_string())?;
+        let ledger = Ledger::open(&paths).map_err(|error| error.to_string())?;
+        let receipt = ledger
+            .receipt(&accepted.operation_id)
+            .map_err(|error| error.to_string())?;
+        let expected = if matches!(
+            interrupted_stage,
+            OperationStage::Approved | OperationStage::Snapshotted
+        ) {
+            OperationStage::CancelledBeforeApply
+        } else {
+            OperationStage::RolledBack
+        };
+        assert_eq!(receipt.terminal_state, expected);
+        assert!(!paths.nginx_enabled.join("example.com").exists());
+        fs::remove_dir_all(root).map_err(|error| error.to_string())
+    }
+
     fn fixture_service(
         root: &std::path::Path,
         runner: Arc<dyn OperationRunner>,
@@ -4369,6 +4253,29 @@ mod tests {
         now_ms: i64,
         idempotency_key: &str,
     ) -> Result<jw_contracts::OperationReceiptView, String> {
+        let accepted = approve_only(service, plan, now_ms, idempotency_key)?;
+        let execute = OpsRequest {
+            protocol_version: IPC_PROTOCOL_VERSION,
+            request_id: String::from("request-execute"),
+            deadline_unix_ms: now_ms.saturating_add(1_000),
+            body: OpsRequestBody::ExecuteOperation {
+                actor: actor(),
+                operation_id: accepted.operation_id,
+            },
+        };
+        let response = service.response_for(&execute, now_ms);
+        let OpsResponseBody::OperationReceipt(receipt) = response.body else {
+            return Err(String::from("execution response rejected"));
+        };
+        Ok(receipt)
+    }
+
+    fn approve_only(
+        service: &OpsService,
+        plan: &jw_contracts::NginxSiteStatePlanView,
+        now_ms: i64,
+        idempotency_key: &str,
+    ) -> Result<jw_contracts::OperationReceiptView, String> {
         let request = OpsRequest {
             protocol_version: IPC_PROTOCOL_VERSION,
             request_id: String::from("request-approve"),
@@ -4384,20 +4291,7 @@ mod tests {
         let OpsResponseBody::OperationReceipt(accepted) = response.body else {
             return Err(String::from("approval response rejected"));
         };
-        let execute = OpsRequest {
-            protocol_version: IPC_PROTOCOL_VERSION,
-            request_id: String::from("request-execute"),
-            deadline_unix_ms: now_ms.saturating_add(1_000),
-            body: OpsRequestBody::ExecuteOperation {
-                actor: actor(),
-                operation_id: accepted.operation_id,
-            },
-        };
-        let response = service.response_for(&execute, now_ms);
-        let OpsResponseBody::OperationReceipt(receipt) = response.body else {
-            return Err(String::from("execution response rejected"));
-        };
-        Ok(receipt)
+        Ok(accepted)
     }
 
     fn managed_plan(

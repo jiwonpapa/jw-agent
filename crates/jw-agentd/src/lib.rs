@@ -7,6 +7,7 @@ pub mod config;
 pub mod file_session;
 pub mod integration_catalog;
 pub mod observation;
+mod openssh;
 pub mod ops_client;
 pub mod session;
 pub mod sftp_protocol;
