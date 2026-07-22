@@ -28,6 +28,10 @@ import { cn } from "../../shared/ui/cn";
 import { CodeEditor, type EditorLanguage } from "../../shared/ui/code-editor";
 import { Input } from "../../shared/ui/input";
 import { Skeleton } from "../../shared/ui/skeleton";
+import {
+  AdditionalAuthCodeField,
+  useAdditionalAuthRequired,
+} from "../../shared/ui/additional-auth-code";
 
 const CodeDiff = lazy(async () => {
   const module = await import("../../shared/ui/code-diff");
@@ -73,7 +77,7 @@ interface ManagedConfigEditorProps {
   onDraftChange: (value: string) => void;
   onBack: () => void;
   onCreatePlan: () => void;
-  onApprove: (password: string) => Promise<void>;
+  onApprove: (password: string, additionalAuthCode: string) => Promise<void>;
   onRevise: (line: number | null) => void;
 }
 
@@ -197,9 +201,11 @@ function ManagedConfigOperationPlan({
   modified: string;
   executing: boolean;
   errorMessage: string | null;
-  onApprove: (password: string) => Promise<void>;
+  onApprove: (password: string, additionalAuthCode: string) => Promise<void>;
 }) {
   const [password, setPassword] = useState("");
+  const [additionalAuthCode, setAdditionalAuthCode] = useState("");
+  const additionalAuthRequired = useAdditionalAuthRequired();
   const [validationConfirmed, setValidationConfirmed] = useState(false);
   const [serviceActionConfirmed, setServiceActionConfirmed] = useState(false);
 
@@ -207,8 +213,10 @@ function ManagedConfigOperationPlan({
     event.preventDefault();
     if (!validationConfirmed || !serviceActionConfirmed) return;
     const submittedPassword = password;
+    const submittedCode = additionalAuthCode;
     setPassword("");
-    await onApprove(submittedPassword);
+    setAdditionalAuthCode("");
+    await onApprove(submittedPassword, submittedCode);
   }
 
   return (
@@ -248,7 +256,8 @@ function ManagedConfigOperationPlan({
         <Confirm className="mt-3" checked={serviceActionConfirmed} onChange={setServiceActionConfirmed}>{`이 계획이 ${profile.serviceLabel} reload를 수행할 수 있음을 확인했습니다.`}</Confirm>
         <label htmlFor="config-operation-password" className="mt-5 block text-sm font-medium text-text">Linux 계정 비밀번호로 exact plan 승인</label>
         <Input id="config-operation-password" type="password" autoComplete="current-password" maxLength={1024} required disabled={executing} value={password} onChange={(event) => setPassword(event.currentTarget.value)} />
-        <Button className="mt-4 w-full" type="submit" disabled={executing || password.length === 0 || !validationConfirmed || !serviceActionConfirmed}>
+        <AdditionalAuthCodeField id="config-operation-totp" value={additionalAuthCode} onChange={setAdditionalAuthCode} disabled={executing} />
+        <Button className="mt-4 w-full" type="submit" disabled={executing || password.length === 0 || (additionalAuthRequired && additionalAuthCode.length !== 6) || !validationConfirmed || !serviceActionConfirmed}>
           {executing ? <LoaderCircle aria-hidden="true" className="size-4 animate-spin" /> : <KeyRound aria-hidden="true" className="size-4" />}
           {executing ? "적용·검증·원복 판단 중" : "재인증 후 설정 적용"}
         </Button>

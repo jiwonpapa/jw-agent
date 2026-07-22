@@ -3,7 +3,7 @@
 Status: Accepted  
 Authority: Governance  
 Owner: Verification Maintainer  
-Last reviewed: 2026-07-21
+Last reviewed: 2026-07-22
 
 | Level | 뜻 | 허용 주장 |
 |---|---|---|
@@ -14,4 +14,4 @@ Last reviewed: 2026-07-21
 
 Evidence에는 spec ID, commit, dirty 여부, toolchain, lockfile, 실행 환경, gate result, 시작·종료시각, artifact hash를 포함합니다.
 
-현재 문서·Rust·계약·웹 unit/build와 mock browser 범위는 `LOCAL_PASS`를, 전용 Ubuntu 24.04 VM의 PAM·systemd·Nginx·PHP 8.3 FPM·TLS·`.deb` 설치·typed managed-config·Certbot 갱신과 발급 실패 안전성은 `VM_PASS`를 획득했습니다. 이 증거는 private-LAN `.test` 호스트와 unsigned local package에 한정되며, 공인 DNS·공인 CA 발급 성공·서명 release 또는 운영 안전을 주장하지 않습니다.
+현재 문서·Rust·계약·웹 unit/build와 mock browser 범위는 `LOCAL_PASS`를, 전용 Ubuntu 24.04 VM의 PAM·TOTP·systemd·Nginx·PHP 8.3 FPM·TLS·`.deb` 설치·typed managed-config·Certbot 갱신과 발급 실패 안전성은 `VM_PASS`를 획득했습니다. 이 증거는 private-LAN `.test` 호스트와 unsigned local package에 한정되며, 공인 DNS·공인 CA 발급 성공·서명 release 또는 운영 안전을 주장하지 않습니다.

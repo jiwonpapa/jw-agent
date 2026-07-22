@@ -222,6 +222,64 @@
         }
       }
     },
+    "/api/v1/auth/totp/verify": {
+      "post": {
+        "tags": [],
+        "operationId": "verify_totp",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TotpVerificationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Plan-bound single-use additional-auth claim",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TotpVerificationView"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Generic TOTP or claim rejection",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "TOTP rate limited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "TOTP provider unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/capabilities": {
       "get": {
         "tags": [],
@@ -2025,6 +2083,153 @@
         }
       }
     },
+    "/api/v1/settings/access/totp/enrollment": {
+      "post": {
+        "tags": [],
+        "operationId": "begin_totp_enrollment",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TotpEnrollmentStartRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "One-time TOTP enrollment material",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TotpEnrollmentStartView"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Recovery ingress, admin role, CSRF, or PAM claim rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Provider already configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Wrapping key unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/settings/access/totp/enrollment/confirm": {
+      "post": {
+        "tags": [],
+        "operationId": "confirm_totp_enrollment",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TotpEnrollmentConfirmRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Enrollment confirmation progress",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TotpEnrollmentConfirmView"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Generic confirmation rejection",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "TOTP rate limited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/settings/access/totp/reset": {
+      "post": {
+        "tags": [],
+        "operationId": "reset_totp",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TotpRecoveryResetRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "TOTP enrollment removed and subject sessions revoked"
+          },
+          "403": {
+            "description": "Recovery ingress, PAM claim, or recovery code rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "TOTP rate limited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/terminal": {
       "get": {
         "tags": [],
@@ -2184,7 +2389,8 @@
         "enum": [
           "not_implemented",
           "not_configured",
-          "ready"
+          "ready",
+          "unavailable"
         ]
       },
       "AssuranceLevel": {
@@ -3290,6 +3496,15 @@
           "overwriteConfirmed"
         ],
         "properties": {
+          "additionalAuthCode": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "password",
+            "maxLength": 6,
+            "minLength": 6
+          },
           "contentBytes": {
             "type": "integer",
             "format": "int64",
@@ -4593,6 +4808,34 @@
                 "$ref": "#/components/schemas/AdditionalAuthPolicy"
               }
             }
+          },
+          {
+            "type": "object",
+            "required": [
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "totp_enrollment"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "totp_recovery_reset"
+                ]
+              }
+            }
           }
         ]
       },
@@ -4936,6 +5179,15 @@
           "riskConfirmed"
         ],
         "properties": {
+          "additionalAuthCode": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "password",
+            "maxLength": 6,
+            "minLength": 6
+          },
           "cols": {
             "type": "integer",
             "format": "int32",
@@ -4981,6 +5233,159 @@
             "format": "password"
           },
           "websocketPath": {
+            "type": "string"
+          }
+        }
+      },
+      "TotpEnrollmentConfirmRequest": {
+        "type": "object",
+        "required": [
+          "enrollmentId",
+          "code"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "format": "password",
+            "maxLength": 6,
+            "minLength": 6
+          },
+          "enrollmentId": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "TotpEnrollmentConfirmView": {
+        "type": "object",
+        "required": [
+          "state",
+          "providerId"
+        ],
+        "properties": {
+          "providerId": {
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/components/schemas/TotpEnrollmentState"
+          }
+        }
+      },
+      "TotpEnrollmentStartRequest": {
+        "type": "object",
+        "required": [
+          "reauthToken"
+        ],
+        "properties": {
+          "reauthToken": {
+            "type": "string",
+            "format": "password",
+            "maxLength": 256
+          }
+        },
+        "additionalProperties": false
+      },
+      "TotpEnrollmentStartView": {
+        "type": "object",
+        "required": [
+          "enrollmentId",
+          "providerId",
+          "manualKey",
+          "otpauthUri",
+          "recoveryCodes",
+          "expiresAt"
+        ],
+        "properties": {
+          "enrollmentId": {
+            "type": "string"
+          },
+          "expiresAt": {
+            "type": "string"
+          },
+          "manualKey": {
+            "type": "string",
+            "format": "password"
+          },
+          "otpauthUri": {
+            "type": "string",
+            "format": "password"
+          },
+          "providerId": {
+            "type": "string"
+          },
+          "recoveryCodes": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "password"
+            }
+          }
+        }
+      },
+      "TotpEnrollmentState": {
+        "type": "string",
+        "enum": [
+          "awaiting_next_code",
+          "ready"
+        ]
+      },
+      "TotpRecoveryResetRequest": {
+        "type": "object",
+        "required": [
+          "reauthToken",
+          "recoveryCode"
+        ],
+        "properties": {
+          "reauthToken": {
+            "type": "string",
+            "format": "password",
+            "maxLength": 256
+          },
+          "recoveryCode": {
+            "type": "string",
+            "format": "password",
+            "maxLength": 31
+          }
+        },
+        "additionalProperties": false
+      },
+      "TotpVerificationRequest": {
+        "type": "object",
+        "required": [
+          "reauthToken",
+          "planHash",
+          "code"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "format": "password",
+            "maxLength": 6,
+            "minLength": 6
+          },
+          "planHash": {
+            "type": "string"
+          },
+          "reauthToken": {
+            "type": "string",
+            "format": "password",
+            "maxLength": 256
+          }
+        },
+        "additionalProperties": false
+      },
+      "TotpVerificationView": {
+        "type": "object",
+        "required": [
+          "additionalAuthClaim",
+          "expiresAt"
+        ],
+        "properties": {
+          "additionalAuthClaim": {
+            "type": "string",
+            "format": "password"
+          },
+          "expiresAt": {
             "type": "string"
           }
         }

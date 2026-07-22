@@ -18,6 +18,8 @@ pub const TERMINAL_MAX_COLS: u16 = 300;
 pub struct TerminalTicketRequest {
     #[schema(value_type = String, format = Password, max_length = 1024)]
     pub password: SecretString,
+    #[schema(value_type = Option<String>, format = Password, min_length = 6, max_length = 6)]
+    pub additional_auth_code: Option<SecretString>,
     pub rows: u16,
     pub cols: u16,
     pub risk_confirmed: bool,
@@ -41,6 +43,9 @@ impl TerminalTicketRequest {
         validate_terminal_size(self.rows, self.cols)?;
         if !self.risk_confirmed {
             return Err("terminal_risk_confirmation_required");
+        }
+        if let Some(code) = &self.additional_auth_code {
+            crate::validate_totp_code(code.expose())?;
         }
         Ok(())
     }
@@ -118,6 +123,7 @@ mod tests {
     fn ticket_request_requires_explicit_risk_and_bounded_terminal() {
         let valid = TerminalTicketRequest {
             password: SecretString::new(String::from("secret")),
+            additional_auth_code: None,
             rows: 24,
             cols: 80,
             risk_confirmed: true,
@@ -126,6 +132,7 @@ mod tests {
 
         let rejected = TerminalTicketRequest {
             password: SecretString::new(String::from("secret")),
+            additional_auth_code: None,
             rows: 2,
             cols: 4,
             risk_confirmed: false,

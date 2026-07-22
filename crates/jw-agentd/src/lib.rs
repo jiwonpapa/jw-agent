@@ -12,9 +12,13 @@ pub mod ops_client;
 pub mod php_fpm;
 pub mod service_inventory;
 pub mod session;
+#[cfg(test)]
+#[path = "session_additional_auth_tests.rs"]
+mod session_additional_auth_tests;
 pub mod sftp_protocol;
 pub mod terminal;
 pub mod terminal_session;
+pub mod totp;
 
 pub use api::{ApiDoc, AppState, build_router};
 pub use auth_client::{AuthBroker, UdsAuthBroker};

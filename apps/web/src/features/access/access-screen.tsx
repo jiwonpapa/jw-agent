@@ -22,6 +22,7 @@ import { Skeleton } from "../../shared/ui/skeleton";
 import { StatusMark } from "../../shared/ui/status-mark";
 import { SurfaceState } from "../../shared/ui/surface-state";
 import { WorkspaceHeader } from "../../shared/ui/workspace-header";
+import { TotpEnrollment } from "./totp-enrollment";
 
 const policyOrder: AdditionalAuthPolicy[] = ["disabled", "risky_operations", "all_mutations"];
 
@@ -141,6 +142,7 @@ export function AccessScreen() {
                     name="additional-auth-policy"
                     value={policy}
                     checked={effectiveSelectedPolicy === policy}
+                    disabled={policy !== "disabled" && !providerReady}
                     className="mt-1 size-4 accent-action"
                     onChange={() => setSelectedPolicy(policy)}
                   />
@@ -178,13 +180,14 @@ export function AccessScreen() {
         </div>
 
         <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:items-center">
-          <Button disabled={!isAdmin || !changed} onClick={() => void savePolicy()}>
+          <Button disabled={!isAdmin || !changed || (effectiveSelectedPolicy !== "disabled" && !providerReady)} onClick={() => void savePolicy()}>
             <KeyRound aria-hidden="true" className="size-4" />
             재인증 후 저장
           </Button>
           <p className="text-xs leading-5 text-muted">화면 제어와 관계없이 서버 role·capability 검사가 적용됩니다.</p>
         </div>
       </section>
+      <TotpEnrollment settings={settings} session={session} />
     </div>
   );
 }

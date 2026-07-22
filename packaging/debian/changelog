@@ -1,3 +1,14 @@
+jw-agent (0.2.0~p2.16) noble; urgency=medium
+
+  * Add recovery-only TOTP enrollment with two consecutive codes.
+  * Encrypt TOTP seeds with a database-adjacent mode-0600 wrapping key.
+  * Add one-time recovery codes, replay-resistant time steps, and recovery reset.
+  * Bind TOTP claims to the exact typed-operation plan and PAM claim.
+  * Add responsive security settings, QR enrollment, and operation step-up UI.
+  * Verify enrollment, one-shot approval, replay denial, reset, and storage on Ubuntu.
+
+ -- JW Agent Maintainers <maintainers@example.invalid>  Wed, 22 Jul 2026 23:20:00 +0900
+
 jw-agent (0.2.0~p2.15) noble; urgency=medium
 
   * Add a fixed Ubuntu PHP 8.3 FPM runtime and extension inventory.

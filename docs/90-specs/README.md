@@ -22,7 +22,7 @@ Last reviewed: 2026-07-22
 ## Authentication specs
 
 - [AUTH-PAM-LOGIN-V1](auth/pam-login-v1.md) — Accepted
-- [AUTH-TOTP-STEP-UP-V1](auth/totp-step-up-v1.md) — Accepted, implementation follows safety kernel and secret-storage gate
+- [AUTH-TOTP-STEP-UP-V1](auth/totp-step-up-v1.md) — Accepted, p2.16 Ubuntu VM evidence
 
 ## Observability specs
 
@@ -52,6 +52,8 @@ Last reviewed: 2026-07-22
 - [ADR-0012 One-shot loopback TLS verifier](adr/0012-loopback-tls-verifier.md) — Accepted
 - [ADR-0013 System OpenSSH client](adr/0013-system-openssh-client.md) — Accepted
 - [ADR-0014 CodeMirror managed config editor](adr/0014-codemirror-config-editor.md) — Accepted
+- [ADR-0015 PHP-FPM managed config envelope](adr/0015-php-fpm-managed-config-envelope.md) — Accepted
+- [ADR-0016 TOTP crypto and enrollment boundary](adr/0016-totp-crypto-and-enrollment-boundary.md) — Accepted
 
 ## Spec template requirements
 

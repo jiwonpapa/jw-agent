@@ -180,6 +180,8 @@ pub struct FileUploadPlanRequest {
     pub content_digest: String,
     #[schema(value_type = String, format = Password, max_length = 1024)]
     pub password: SecretString,
+    #[schema(value_type = Option<String>, format = Password, min_length = 6, max_length = 6)]
+    pub additional_auth_code: Option<SecretString>,
     pub non_reversible_confirmed: bool,
     pub overwrite_confirmed: bool,
 }
@@ -215,6 +217,9 @@ impl FileUploadPlanRequest {
         }
         if !self.non_reversible_confirmed {
             return Err("upload_non_reversible_confirmation_required");
+        }
+        if let Some(code) = &self.additional_auth_code {
+            crate::validate_totp_code(code.expose())?;
         }
         Ok(())
     }
@@ -298,6 +303,7 @@ mod tests {
                 "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
             ),
             password: SecretString::new(String::from("secret")),
+            additional_auth_code: None,
             non_reversible_confirmed: true,
             overwrite_confirmed: false,
         };

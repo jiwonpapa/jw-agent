@@ -42,6 +42,7 @@ pub enum AdditionalAuthProviderStatus {
     NotImplemented,
     NotConfigured,
     Ready,
+    Unavailable,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, ToSchema)]

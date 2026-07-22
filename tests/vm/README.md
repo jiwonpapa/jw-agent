@@ -25,9 +25,9 @@ JW_VM_PUBLIC_ADDRESS=192.168.0.142
 JW_VM_CA_CERT=/path/to/test-ca.crt
 JW_VM_ADMIN_USER=jwvmadmin
 JW_VM_PASSWORD_FILE=/path/to/mode-0600-fixture-password
-JW_VM_REMOTE_PACKAGE=/home/neojins/jw-agent_0.2.0~p2.15_amd64.deb
-JW_VM_EXPECTED_PACKAGE_SHA256=3684319fa35e2be9af9f7ec475923d41cc041285a67d0f12831ba07dee06b51e
-JW_VM_EXPECTED_VERSION=0.2.0~p2.15
+JW_VM_REMOTE_PACKAGE=/home/neojins/jw-agent_0.2.0~p2.16_amd64.deb
+JW_VM_EXPECTED_PACKAGE_SHA256=318568c89db7d5e17f5abac54f1f8ee7551a301fccc4afaa9fa39198313939fa
+JW_VM_EXPECTED_VERSION=0.2.0~p2.16
 cargo xtask verify p2-vm
 ```
 
@@ -41,8 +41,8 @@ certificate를 VM management edge에 설치합니다.
 ## Current VM evidence
 
 - domain: `jw-agent-p1`, Ubuntu 24.04.4 LTS, kernel `6.8.0-136-generic`
-- package: `jw-agent 0.2.0~p2.15`, SHA-256 `3684319fa35e2be9af9f7ec475923d41cc041285a67d0f12831ba07dee06b51e`, package/runtime gate clean
-- lanes: `p2-local` 22 PASS, `p2-browser` 8 PASS with 38 browser scenarios, `p2-vm` 24 PASS
+- package: `jw-agent 0.2.0~p2.16`, SHA-256 `318568c89db7d5e17f5abac54f1f8ee7551a301fccc4afaa9fa39198313939fa`, package/runtime gate clean
+- lanes: `p2-local` 22 PASS, `p2-browser` 8 PASS with 39 browser scenarios, `p2-vm` 25 PASS
 - service inventory: real Nginx and JW Agent internal classification plus a disposable failed custom unit surfaced as discovered read-only
 - automated VM scenarios: installed PAM fixture equality, no `pam_faillock`, `jw-authd → libpam.so.0`, `jw-agentd → libsqlite3.so.0`, repeated product-login failures followed by unchanged Linux password state and working OpenSSH key recovery
 - automated P2 faults: success, verified no-op, syntax failure rollback, injected reload failure rollback, 1 MiB snapshot filesystem cancellation before apply, deleted checkpoint lockdown and restoration
@@ -56,9 +56,10 @@ certificate를 VM management edge에 설치합니다.
 - automated P2D terminal: loopback-only password policy, non-root OpenSSH command I/O, PTY resize, ticket replay and wrong-Origin denial, logout revoke, metadata-only audit, process/FIFO cleanup
 - automated P2D SFTP G0: home list/stat/text/download, traversal·absolute path·external symlink·size denial, cross-session·wrong-Origin·close·logout denial, path-digest audit, process/FIFO cleanup
 - automated P2D SFTP G1: PAM-planned create/replace, `0600` create and existing-mode preservation, fsync/atomic rename, size/SHA-256 read-back, stale target·symlink·directory·traversal·digest·wrong-Origin·replay denial, metadata-only audit and temp cleanup
+- automated TOTP step-up: recovery-only admin enrollment, two consecutive codes, `risky_operations`, exact-plan PAM+TOTP approval, replay denial, one-time recovery reset, session revoke, mode-0600 wrapping key and encrypted-state cleanup
 - package runtime: opsd private network namespace, exact `CAP_NET_BIND_SERVICE`, ephemeral Nginx test logs, no listening IP socket, root-owned `0600` ledger, bounded UDS
 - local console: grouped navigation, explicit non-root Linux identity, responsive resource meters and service-family cards, current-subject typed-operation history
-- real browser: p2.15 public HTTPS Nginx·PHP INI CodeMirror editor, line numbers, adapter별 24/128 KiB counter, planned-only warning and G2 scope/exclusions; authenticated PHP-FPM screen console error 0
+- real browser: p2.16 public HTTPS access-security screen, recovery-only enrollment boundary, TOTP provider state and policy prerequisite; authenticated screen console error 0
 
 This is a private-LAN `.test` host with a dedicated management-edge test CA.
 The Certbot runner boundary, read-only inventory, renewal dry-run, guided issue
@@ -80,6 +81,7 @@ signed release distribution, delete/move/chmod SFTP operations, or production op
 | OpenSSH terminal | loopback-only password policy, fixed client, replay/origin/revoke, bounded PTY and metadata audit |
 | OpenSSH SFTP G0 | fixed read-only subsystem, canonical home, traversal/symlink/size/session negatives and path-digest audit |
 | OpenSSH SFTP G1 | PAM plan, atomic create/replace, mode/size/digest read-back, stale/symlink/type/origin/digest/replay denial and metadata audit |
+| TOTP step-up | recovery-only enrollment/reset, consecutive codes, exact-plan PAM+TOTP, replay denial, encrypted seed and recovery cleanup |
 | failure recovery | Nginx/TLS failure leaves SSH recovery available and public profile removable |
 | PHP-FPM managed config | standard PHP 8.3 observation, valid save, syntax line detection, no failed reload, exact rollback, active continuity |
 | secret scan | password/session tokens absent from journal, DB, process arguments, package logs and evidence |

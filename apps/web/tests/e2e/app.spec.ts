@@ -980,6 +980,7 @@ test("access screen states provider limitation without false protection claim", 
   expect(accessibility.violations.filter((violation) => ["critical", "serious"].includes(violation.impact ?? ""))).toEqual([]);
 });
 
+
 for (const viewport of [{ width: 320, height: 800 }, { width: 768, height: 1024 }, { width: 1440, height: 900 }]) {
   test(
     `terminal keeps G1 approval visible at ${String(viewport.width)}x${String(viewport.height)}`,

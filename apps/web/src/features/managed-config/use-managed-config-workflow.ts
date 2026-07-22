@@ -120,13 +120,17 @@ export function useManagedConfigWorkflow(refreshQueryKey: readonly unknown[]) {
     }
   }
 
-  async function approve(password: string): Promise<void> {
+  async function approve(password: string, additionalAuthCode: string): Promise<void> {
     if (requestInFlight.current || plan === null || approvalKey.current === null) return;
     requestInFlight.current = true;
     setExecuting(true);
     setErrorMessage(null);
     try {
-      const reauth = await reauthenticateForOperation({ password, planHash: plan.planHash });
+      const reauth = await reauthenticateForOperation({
+        password,
+        planHash: plan.planHash,
+        additionalAuthCode,
+      });
       queryClient.setQueryData(queryKeys.session, reauth.session);
       setAccepted(await approveManagedConfig({
         schemaVersion: plan.schemaVersion,
@@ -134,6 +138,7 @@ export function useManagedConfigWorkflow(refreshQueryKey: readonly unknown[]) {
         planHash: plan.planHash,
         idempotencyKey: approvalKey.current,
         reauthToken: reauth.reauthToken,
+        additionalAuthClaim: reauth.additionalAuthClaim ?? null,
         approvalIntent: {
           validationConfirmed: true,
           serviceActionConfirmed: true,

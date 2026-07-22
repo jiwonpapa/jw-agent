@@ -19,7 +19,7 @@ interface TerminalSessionController {
   state: TerminalSessionState;
   message: string | null;
   active: boolean;
-  connect: (password: string, riskConfirmed: boolean) => Promise<boolean>;
+  connect: (password: string, riskConfirmed: boolean, additionalAuthCode: string) => Promise<boolean>;
   disconnect: () => void;
   attach: (host: HTMLDivElement) => () => void;
 }
@@ -182,13 +182,19 @@ export function TerminalSessionProvider({ children }: { children: ReactNode }) {
     });
   }, [ensureTerminal, resetTerminal]);
 
-  const connect = useCallback(async (password: string, riskConfirmed: boolean): Promise<boolean> => {
+  const connect = useCallback(async (password: string, riskConfirmed: boolean, additionalAuthCode: string): Promise<boolean> => {
     if (!riskConfirmed || password.length === 0 || socketRef.current !== null) return false;
     setState("connecting");
     setMessage(null);
     terminalReadyRef.current = false;
     try {
-      const issued = await issueTerminalTicket({ password, rows: 24, cols: 80, riskConfirmed: true });
+      const issued = await issueTerminalTicket({
+        password,
+        ...(additionalAuthCode.length === 0 ? {} : { additionalAuthCode }),
+        rows: 24,
+        cols: 80,
+        riskConfirmed: true,
+      });
       const socket = openTerminalSocket(issued.websocketPath, issued.ticket);
       socket.binaryType = "arraybuffer";
       socketRef.current = socket;

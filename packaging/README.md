@@ -37,6 +37,13 @@ transfer, system paths, and root SFTP remain absent. The exact binary upload rou
 has an 8 MiB edge limit. The managed-config exception above does not widen PAM,
 terminal, SFTP control, or other JSON endpoints.
 
+P2.16 adds recovery-only TOTP enrollment and reset. TOTP seeds are encrypted
+with a database-adjacent mode-0600 key; one-time recovery material is shown
+only in the enrollment response and stored as digests. Enabling a non-disabled
+policy requires a ready provider, and typed-operation approval consumes the PAM
+and exact-plan TOTP claims atomically. The package does not modify PAM or SSH
+MFA configuration.
+
 The public proxy socket uses the dedicated `jw-agent-proxy` group and
 `/run/jw-agent-proxy`. Nginx is never added to the privileged `jw-agent` group
 that owns the `opsd` boundary.

@@ -12,6 +12,7 @@ mod php_fpm;
 mod problem;
 mod settings;
 mod terminal;
+mod totp;
 
 pub use assurance::{AssuranceLevel, AssuranceView, RollbackSupport};
 pub use auth::{
@@ -81,6 +82,12 @@ pub use terminal::{
     TERMINAL_MIN_COLS, TERMINAL_MIN_ROWS, TERMINAL_TICKET_TTL_SECONDS, TerminalCapabilityView,
     TerminalClientMessage, TerminalLimitsView, TerminalTicketRequest, TerminalTicketView,
     validate_terminal_size,
+};
+pub use totp::{
+    TOTP_CODE_BYTES, TOTP_PROVIDER_ID, TOTP_RECOVERY_CODE_BYTES, TotpEnrollmentConfirmRequest,
+    TotpEnrollmentConfirmView, TotpEnrollmentStartRequest, TotpEnrollmentStartView,
+    TotpEnrollmentState, TotpRecoveryResetRequest, TotpVerificationRequest, TotpVerificationView,
+    validate_enrollment_id, validate_totp_code,
 };
 
 pub const API_VERSION: &str = "v1";

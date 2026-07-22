@@ -43,7 +43,9 @@ use jw_contracts::{
     ServiceRuntimeState, ServiceSummary, ServiceSupport, ServiceVisibility, ServicesView,
     SessionView, Subject, TERMINAL_MAX_FRAME_BYTES, TERMINAL_MAX_OUTPUT_BUFFER_BYTES,
     TerminalCapabilityView, TerminalLimitsView, TerminalTicketRequest, TerminalTicketView,
-    UpdateAdditionalAuthRequest,
+    TotpEnrollmentConfirmRequest, TotpEnrollmentConfirmView, TotpEnrollmentStartRequest,
+    TotpEnrollmentStartView, TotpRecoveryResetRequest, TotpVerificationRequest,
+    TotpVerificationView, UpdateAdditionalAuthRequest,
 };
 use sha2::{Digest, Sha256};
 use tower_http::services::{ServeDir, ServeFile};
@@ -64,9 +66,18 @@ use crate::{AgentConfig, AuthBroker, OpsBroker, SessionStore};
 
 mod activity;
 use activity::{__path_recent_operations, recent_operations};
+#[path = "api/additional_auth.rs"]
+mod additional_auth_api;
+use additional_auth_api::{access_view, consume_operation_authorization};
 #[path = "api/php_fpm.rs"]
 mod php_fpm_api;
 use php_fpm_api::{__path_php_fpm, php_fpm};
+#[path = "api/totp.rs"]
+mod totp_api;
+use totp_api::{
+    __path_begin_totp_enrollment, __path_confirm_totp_enrollment, __path_reset_totp,
+    __path_verify_totp, begin_totp_enrollment, confirm_totp_enrollment, reset_totp, verify_totp,
+};
 
 const API_BODY_MAX_BYTES: usize = 64 * 1_024;
 const MANAGED_CONFIG_API_BODY_MAX_BYTES: usize = 256 * 1_024;
@@ -90,6 +101,7 @@ pub struct AppState {
     pub terminal: TerminalBroker,
     pub files: FileBroker,
     auth_limiter: AuthLimiter,
+    totp_limiter: AuthLimiter,
 }
 
 impl AppState {
@@ -110,6 +122,7 @@ impl AppState {
             terminal: TerminalBroker::default(),
             files: FileBroker::default(),
             auth_limiter: AuthLimiter::default(),
+            totp_limiter: AuthLimiter::default(),
         }
     }
 
@@ -149,6 +162,10 @@ impl AppState {
         integrations,
         access_settings,
         update_additional_auth,
+        begin_totp_enrollment,
+        confirm_totp_enrollment,
+        verify_totp,
+        reset_totp,
         plan_nginx_site_state,
         approve_nginx_site_state,
         managed_config_resource,
@@ -236,6 +253,14 @@ impl AppState {
         SessionView,
         jw_contracts::Subject,
         UpdateAdditionalAuthRequest,
+        TotpEnrollmentStartRequest,
+        TotpEnrollmentStartView,
+        TotpEnrollmentConfirmRequest,
+        TotpEnrollmentConfirmView,
+        jw_contracts::TotpEnrollmentState,
+        TotpVerificationRequest,
+        TotpVerificationView,
+        TotpRecoveryResetRequest,
         TerminalCapabilityView,
         TerminalLimitsView,
         TerminalTicketRequest,
@@ -346,6 +371,16 @@ pub fn build_router(state: AppState) -> Router {
             "/api/v1/settings/access/additional-auth",
             put(update_additional_auth),
         )
+        .route(
+            "/api/v1/settings/access/totp/enrollment",
+            post(begin_totp_enrollment),
+        )
+        .route(
+            "/api/v1/settings/access/totp/enrollment/confirm",
+            post(confirm_totp_enrollment),
+        )
+        .route("/api/v1/auth/totp/verify", post(verify_totp))
+        .route("/api/v1/settings/access/totp/reset", post(reset_totp))
         .fallback_service(static_files)
         .layer(DefaultBodyLimit::max(API_BODY_MAX_BYTES))
         .layer(from_fn_with_state(state.clone(), request_guard))
@@ -579,12 +614,6 @@ async fn issue_terminal_ticket(
     let (session_token, session) = current_session(&state, &headers, now)?;
     require_csrf(&headers, session_token.as_str())?;
     let origin = require_exact_origin(&state, &headers)?;
-    if session.additional_auth_policy != AdditionalAuthPolicy::Disabled {
-        return Err(ApiProblem::new(
-            StatusCode::PRECONDITION_REQUIRED,
-            "additional_authentication_unavailable",
-        ));
-    }
     if terminal_gate_reason(&state, &session).is_some() {
         return Err(ApiProblem::new(
             StatusCode::CONFLICT,
@@ -626,6 +655,19 @@ async fn issue_terminal_ticket(
         || authenticated.role == Role::Viewer
     {
         return Err(ApiProblem::forbidden("terminal_subject_mismatch"));
+    }
+    if session.additional_auth_policy != AdditionalAuthPolicy::Disabled {
+        let code = input.additional_auth_code.as_ref().ok_or_else(|| {
+            ApiProblem::new(
+                StatusCode::PRECONDITION_REQUIRED,
+                "additional_authentication_required",
+            )
+        })?;
+        state
+            .store
+            .totp()
+            .verify_direct_context(&authenticated, "terminal", code.expose(), now)
+            .map_err(totp_api::map_totp_error)?;
     }
 
     let issued = state
@@ -700,7 +742,13 @@ fn terminal_gate_reason(state: &AppState, session: &SessionView) -> Option<Strin
     if session.subject.uid == 0 || session.subject.role == Role::Viewer {
         return Some(String::from("현재 계정은 터미널 세션을 열 수 없습니다."));
     }
-    if session.additional_auth_policy != AdditionalAuthPolicy::Disabled {
+    if session.additional_auth_policy != AdditionalAuthPolicy::Disabled
+        && state
+            .store
+            .totp()
+            .provider_status(session.subject.uid)
+            .map_or(true, |status| status != AdditionalAuthProviderStatus::Ready)
+    {
         return Some(String::from(
             "설정된 추가 인증 provider가 아직 없어 터미널이 차단되었습니다.",
         ));
@@ -790,13 +838,14 @@ async fn file_capability(
 ) -> Result<Json<FileCapabilityView>, ApiProblem> {
     let (_, session) = current_session(&state, &headers, unix_milliseconds()?)?;
     let reason = file_gate_reason(&state, &session);
+    let upload_reason = file_upload_gate_reason(&state, &session);
     Ok(Json(FileCapabilityView {
         available: reason.is_none(),
         reason: reason.clone(),
         username: session.subject.username,
         root_label: String::from("~"),
         assurance: file_assurance(reason.clone()),
-        upload_assurance: file_upload_assurance(reason),
+        upload_assurance: file_upload_assurance(upload_reason),
         limits: FileLimitsView::default(),
     }))
 }
@@ -818,12 +867,6 @@ async fn create_file_session(
     let (jw_session_token, session) = current_session(&state, &headers, now)?;
     require_csrf(&headers, jw_session_token.as_str())?;
     let origin = require_exact_origin(&state, &headers)?;
-    if session.additional_auth_policy != AdditionalAuthPolicy::Disabled {
-        return Err(ApiProblem::new(
-            StatusCode::PRECONDITION_REQUIRED,
-            "additional_authentication_unavailable",
-        ));
-    }
     if file_gate_reason(&state, &session).is_some() {
         return Err(ApiProblem::new(StatusCode::CONFLICT, "files_unavailable"));
     }
@@ -1020,14 +1063,19 @@ async fn plan_file_upload(
     let (jw_session_token, session) = current_session(&state, &headers, now)?;
     require_csrf(&headers, jw_session_token.as_str())?;
     let origin = require_exact_origin(&state, &headers)?;
-    if session.additional_auth_policy != AdditionalAuthPolicy::Disabled {
+    if file_upload_gate_reason(&state, &session).is_some() {
         return Err(ApiProblem::new(
             StatusCode::PRECONDITION_REQUIRED,
             "additional_authentication_unavailable",
         ));
     }
-    if file_gate_reason(&state, &session).is_some() {
-        return Err(ApiProblem::new(StatusCode::CONFLICT, "files_unavailable"));
+    if session.additional_auth_policy != AdditionalAuthPolicy::Disabled
+        && input.additional_auth_code.is_none()
+    {
+        return Err(ApiProblem::new(
+            StatusCode::PRECONDITION_REQUIRED,
+            "additional_authentication_required",
+        ));
     }
     let source = request_source(&state, &headers)?;
     state
@@ -1048,7 +1096,9 @@ async fn plan_file_upload(
         username: session.subject.username.clone(),
         password: input.password,
         remote_address: Some(source),
-        purpose: AuthPurpose::StepUp { context_digest },
+        purpose: AuthPurpose::StepUp {
+            context_digest: context_digest.clone(),
+        },
     };
     let response = state
         .auth
@@ -1067,6 +1117,19 @@ async fn plan_file_upload(
         || authenticated.role == Role::Viewer
     {
         return Err(ApiProblem::forbidden("file_subject_mismatch"));
+    }
+    if session.additional_auth_policy != AdditionalAuthPolicy::Disabled {
+        let code = input.additional_auth_code.as_ref().ok_or_else(|| {
+            ApiProblem::new(
+                StatusCode::PRECONDITION_REQUIRED,
+                "additional_authentication_required",
+            )
+        })?;
+        state
+            .store
+            .totp()
+            .verify_direct_context(&authenticated, &context_digest, code.expose(), now)
+            .map_err(totp_api::map_totp_error)?;
     }
     let lease = state
         .files
@@ -1223,14 +1286,27 @@ fn file_gate_reason(state: &AppState, session: &SessionView) -> Option<String> {
     if session.subject.uid == 0 || session.subject.role == Role::Viewer {
         return Some(String::from("현재 계정은 파일 세션을 열 수 없습니다."));
     }
-    if session.additional_auth_policy != AdditionalAuthPolicy::Disabled {
-        return Some(String::from(
-            "설정된 추가 인증 provider가 아직 없어 파일 세션이 차단되었습니다.",
-        ));
-    }
     terminal_runtime_available(&state.config)
         .err()
         .map(str::to_owned)
+}
+
+fn file_upload_gate_reason(state: &AppState, session: &SessionView) -> Option<String> {
+    if let Some(reason) = file_gate_reason(state, session) {
+        return Some(reason);
+    }
+    if session.additional_auth_policy != AdditionalAuthPolicy::Disabled
+        && state
+            .store
+            .totp()
+            .provider_status(session.subject.uid)
+            .map_or(true, |status| status != AdditionalAuthProviderStatus::Ready)
+    {
+        return Some(String::from(
+            "설정된 추가 인증 provider를 사용할 수 없어 파일 쓰기가 차단되었습니다.",
+        ));
+    }
+    None
 }
 
 fn file_assurance(reason: Option<String>) -> AssuranceView {
@@ -1546,27 +1622,15 @@ async fn approve_certbot_issue(
     let now = unix_milliseconds()?;
     let (token, session) = current_session(&state, &headers, now)?;
     require_csrf(&headers, token.as_str())?;
-    if session.additional_auth_policy != AdditionalAuthPolicy::Disabled {
-        return Err(ApiProblem::new(
-            StatusCode::PRECONDITION_REQUIRED,
-            "additional_authentication_unavailable",
-        ));
-    }
-    if input.additional_auth_claim.is_some() {
-        return Err(ApiProblem::bad_request(
-            "additional_authentication_claim_unexpected",
-        ));
-    }
-    state
-        .store
-        .consume_operation_claim(
-            token.as_str(),
-            &session.subject,
-            &input.plan_hash,
-            &input.reauth_token,
-            now,
-        )
-        .map_err(map_operation_claim_error)?;
+    consume_operation_authorization(
+        &state,
+        token.as_str(),
+        &session,
+        &input.plan_hash,
+        &input.reauth_token,
+        input.additional_auth_claim.as_deref(),
+        now,
+    )?;
     let actor = session.subject;
     let receipt = state
         .ops
@@ -1650,27 +1714,15 @@ async fn approve_certbot_attach(
     let now = unix_milliseconds()?;
     let (token, session) = current_session(&state, &headers, now)?;
     require_csrf(&headers, token.as_str())?;
-    if session.additional_auth_policy != AdditionalAuthPolicy::Disabled {
-        return Err(ApiProblem::new(
-            StatusCode::PRECONDITION_REQUIRED,
-            "additional_authentication_unavailable",
-        ));
-    }
-    if input.additional_auth_claim.is_some() {
-        return Err(ApiProblem::bad_request(
-            "additional_authentication_claim_unexpected",
-        ));
-    }
-    state
-        .store
-        .consume_operation_claim(
-            token.as_str(),
-            &session.subject,
-            &input.plan_hash,
-            &input.reauth_token,
-            now,
-        )
-        .map_err(map_operation_claim_error)?;
+    consume_operation_authorization(
+        &state,
+        token.as_str(),
+        &session,
+        &input.plan_hash,
+        &input.reauth_token,
+        input.additional_auth_claim.as_deref(),
+        now,
+    )?;
     let actor = session.subject;
     let receipt = state
         .ops
@@ -1767,7 +1819,10 @@ async fn certbot_mutation_gate_reason(
     if !matches!(subject.role, Role::Admin | Role::Operator) {
         return Some(String::from("현재 계정은 인증서 작업 권한이 없습니다."));
     }
-    if additional_auth_policy != AdditionalAuthPolicy::Disabled {
+    if additional_auth_policy != AdditionalAuthPolicy::Disabled
+        && state.store.totp().provider_status(subject.uid).ok()
+            != Some(AdditionalAuthProviderStatus::Ready)
+    {
         return Some(String::from(
             "설정된 추가 인증 수단이 아직 준비되지 않아 인증서 작업이 차단되었습니다.",
         ));
@@ -1837,27 +1892,15 @@ async fn approve_certbot_renew_test(
     let now = unix_milliseconds()?;
     let (token, session) = current_session(&state, &headers, now)?;
     require_csrf(&headers, token.as_str())?;
-    if session.additional_auth_policy != AdditionalAuthPolicy::Disabled {
-        return Err(ApiProblem::new(
-            StatusCode::PRECONDITION_REQUIRED,
-            "additional_authentication_unavailable",
-        ));
-    }
-    if input.additional_auth_claim.is_some() {
-        return Err(ApiProblem::bad_request(
-            "additional_authentication_claim_unexpected",
-        ));
-    }
-    state
-        .store
-        .consume_operation_claim(
-            token.as_str(),
-            &session.subject,
-            &input.plan_hash,
-            &input.reauth_token,
-            now,
-        )
-        .map_err(map_operation_claim_error)?;
+    consume_operation_authorization(
+        &state,
+        token.as_str(),
+        &session,
+        &input.plan_hash,
+        &input.reauth_token,
+        input.additional_auth_claim.as_deref(),
+        now,
+    )?;
     let actor = session.subject;
     let receipt = state
         .ops
@@ -1899,7 +1942,10 @@ async fn nginx_mutation_gate_reason(
     if !matches!(subject.role, Role::Admin | Role::Operator) {
         return Some(String::from("현재 계정은 Nginx 변경 권한이 없습니다."));
     }
-    if additional_auth_policy != AdditionalAuthPolicy::Disabled {
+    if additional_auth_policy != AdditionalAuthPolicy::Disabled
+        && state.store.totp().provider_status(subject.uid).ok()
+            != Some(AdditionalAuthProviderStatus::Ready)
+    {
         return Some(String::from(
             "설정된 추가 인증 수단이 아직 준비되지 않아 변경이 차단되었습니다.",
         ));
@@ -1969,27 +2015,15 @@ async fn approve_nginx_site_state(
     let now = unix_milliseconds()?;
     let (token, session) = current_session(&state, &headers, now)?;
     require_csrf(&headers, token.as_str())?;
-    if session.additional_auth_policy != AdditionalAuthPolicy::Disabled {
-        return Err(ApiProblem::new(
-            StatusCode::PRECONDITION_REQUIRED,
-            "additional_authentication_unavailable",
-        ));
-    }
-    if input.additional_auth_claim.is_some() {
-        return Err(ApiProblem::bad_request(
-            "additional_authentication_claim_unexpected",
-        ));
-    }
-    state
-        .store
-        .consume_operation_claim(
-            token.as_str(),
-            &session.subject,
-            &input.plan_hash,
-            &input.reauth_token,
-            now,
-        )
-        .map_err(map_operation_claim_error)?;
+    consume_operation_authorization(
+        &state,
+        token.as_str(),
+        &session,
+        &input.plan_hash,
+        &input.reauth_token,
+        input.additional_auth_claim.as_deref(),
+        now,
+    )?;
     let actor = session.subject;
     let receipt = state
         .ops
@@ -2086,27 +2120,15 @@ async fn approve_managed_config(
     let now = unix_milliseconds()?;
     let (token, session) = current_session(&state, &headers, now)?;
     require_csrf(&headers, token.as_str())?;
-    if session.additional_auth_policy != AdditionalAuthPolicy::Disabled {
-        return Err(ApiProblem::new(
-            StatusCode::PRECONDITION_REQUIRED,
-            "additional_authentication_unavailable",
-        ));
-    }
-    if input.additional_auth_claim.is_some() {
-        return Err(ApiProblem::bad_request(
-            "additional_authentication_claim_unexpected",
-        ));
-    }
-    state
-        .store
-        .consume_operation_claim(
-            token.as_str(),
-            &session.subject,
-            &input.plan_hash,
-            &input.reauth_token,
-            now,
-        )
-        .map_err(map_operation_claim_error)?;
+    consume_operation_authorization(
+        &state,
+        token.as_str(),
+        &session,
+        &input.plan_hash,
+        &input.reauth_token,
+        input.additional_auth_claim.as_deref(),
+        now,
+    )?;
     let actor = session.subject;
     let receipt = state
         .ops
@@ -2370,8 +2392,8 @@ async fn access_settings(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<Json<AccessSettingsView>, ApiProblem> {
-    let _session = current_session(&state, &headers, unix_milliseconds()?)?;
-    Ok(Json(access_view(&state)?))
+    let (_, session) = current_session(&state, &headers, unix_milliseconds()?)?;
+    Ok(Json(access_view(&state, &session.subject)?))
 }
 
 #[utoipa::path(put, path = "/api/v1/settings/access/additional-auth", request_body = UpdateAdditionalAuthRequest, responses(
@@ -2397,7 +2419,7 @@ async fn update_additional_auth(
             now,
         )
         .map_err(map_policy_error)?;
-    Ok(Json(access_view(&state)?))
+    Ok(Json(access_view(&state, &session.subject)?))
 }
 
 async fn request_guard(
@@ -2578,43 +2600,13 @@ fn request_source(state: &AppState, headers: &HeaderMap) -> Result<String, ApiPr
     Ok(source.to_owned())
 }
 
-fn access_view(state: &AppState) -> Result<AccessSettingsView, ApiProblem> {
-    let policy = state
-        .store
-        .additional_auth_policy()
-        .map_err(|_| ApiProblem::internal())?;
-    Ok(AccessSettingsView {
-        ingress: state.channel,
-        public_host: state.config.public_host.clone(),
-        recovery_origin: state.config.recovery_origin.clone(),
-        additional_auth_policy: policy,
-        additional_auth_provider: AdditionalAuthProviderStatus::NotImplemented,
-        mutation_approval_available: policy == AdditionalAuthPolicy::Disabled,
-        assurance: AssuranceView {
-            level: AssuranceLevel::G2ReversibleConfig,
-            rollback_support: RollbackSupport::AutomaticBounded,
-            operation_available: true,
-            scope: vec![String::from("JW Agent 추가 인증 정책 값")],
-            excluded_effects: vec![String::from(
-                "외부 추가 인증 provider의 등록·복구·credential",
-            )],
-            apply_verifier: vec![String::from(
-                "SQLite transaction commit 후 canonical read-back",
-            )],
-            rollback_verifier: vec![String::from(
-                "저장 실패 시 transaction abort로 이전 정책 유지",
-            )],
-            reason: None,
-        },
-    })
-}
-
 fn reauth_context(purpose: &ReauthPurpose) -> String {
     match purpose {
         ReauthPurpose::Operation { plan_hash } => plan_hash.clone(),
         ReauthPurpose::SecurityPolicyChange { target_policy } => {
             target_policy.as_storage_value().to_owned()
         }
+        ReauthPurpose::TotpEnrollment | ReauthPurpose::TotpRecoveryReset => String::from("totp/v1"),
     }
 }
 
@@ -2648,6 +2640,10 @@ fn map_policy_error(error: PolicyUpdateError) -> ApiProblem {
             "reauthentication_required",
         ),
         PolicyUpdateError::InvalidReauth => ApiProblem::forbidden("reauthentication_rejected"),
+        PolicyUpdateError::ProviderUnavailable => ApiProblem::new(
+            StatusCode::PRECONDITION_REQUIRED,
+            "additional_authentication_unavailable",
+        ),
         PolicyUpdateError::Storage(_) => ApiProblem::internal(),
     }
 }
@@ -2655,6 +2651,9 @@ fn map_policy_error(error: PolicyUpdateError) -> ApiProblem {
 fn map_operation_claim_error(error: OperationClaimError) -> ApiProblem {
     match error {
         OperationClaimError::Invalid => ApiProblem::forbidden("reauthentication_rejected"),
+        OperationClaimError::InvalidAdditional => {
+            ApiProblem::forbidden("additional_authentication_rejected")
+        }
         OperationClaimError::Storage(_) => ApiProblem::internal(),
     }
 }

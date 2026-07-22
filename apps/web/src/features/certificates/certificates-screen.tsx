@@ -44,8 +44,13 @@ import type {
 } from "../../shared/api/types";
 import { formatDateTime } from "../../shared/domain/format";
 import { AssuranceDetails, AssuranceMark } from "../../shared/ui/assurance";
+import {
+  AdditionalAuthCodeField,
+  useAdditionalAuthRequired,
+} from "../../shared/ui/additional-auth-code";
 import { Button } from "../../shared/ui/button";
 import { Input } from "../../shared/ui/input";
+import { BulletList, isTerminalStage } from "../../shared/ui/operation-details";
 import { Sheet } from "../../shared/ui/sheet";
 import { Skeleton } from "../../shared/ui/skeleton";
 import { StatusMark } from "../../shared/ui/status-mark";
@@ -146,13 +151,13 @@ export function CertificatesScreen() {
     }
   }
 
-  async function approveRenewPlan(password: string): Promise<void> {
+  async function approveRenewPlan(password: string, additionalAuthCode: string): Promise<void> {
     if (requestInFlight.current || renewPlan === null || approvalKey.current === null) return;
     requestInFlight.current = true;
     setExecuting(true);
     setErrorMessage(null);
     try {
-      const reauth = await reauthenticateForOperation({ password, planHash: renewPlan.planHash });
+      const reauth = await reauthenticateForOperation({ password, planHash: renewPlan.planHash, additionalAuthCode });
       queryClient.setQueryData(queryKeys.session, reauth.session);
       const operation = await approveCertbotRenewTest({
         schemaVersion: renewPlan.schemaVersion,
@@ -160,6 +165,7 @@ export function CertificatesScreen() {
         planHash: renewPlan.planHash,
         idempotencyKey: approvalKey.current,
         reauthToken: reauth.reauthToken,
+        additionalAuthClaim: reauth.additionalAuthClaim ?? null,
         externalEffectConfirmed: true,
       });
       setAccepted(operation);
@@ -231,13 +237,13 @@ export function CertificatesScreen() {
     }
   }
 
-  async function approveIssuePlan(password: string): Promise<void> {
+  async function approveIssuePlan(password: string, additionalAuthCode: string): Promise<void> {
     if (requestInFlight.current || issuePlan === null || approvalKey.current === null) return;
     requestInFlight.current = true;
     setExecuting(true);
     setErrorMessage(null);
     try {
-      const reauth = await reauthenticateForOperation({ password, planHash: issuePlan.planHash });
+      const reauth = await reauthenticateForOperation({ password, planHash: issuePlan.planHash, additionalAuthCode });
       queryClient.setQueryData(queryKeys.session, reauth.session);
       const operation = await approveCertbotIssue({
         schemaVersion: issuePlan.schemaVersion,
@@ -245,6 +251,7 @@ export function CertificatesScreen() {
         planHash: issuePlan.planHash,
         idempotencyKey: approvalKey.current,
         reauthToken: reauth.reauthToken,
+        additionalAuthClaim: reauth.additionalAuthClaim ?? null,
         externalEffectConfirmed: true,
         localAttachDeferredConfirmed: true,
       });
@@ -311,13 +318,13 @@ export function CertificatesScreen() {
     }
   }
 
-  async function approveAttachPlan(password: string): Promise<void> {
+  async function approveAttachPlan(password: string, additionalAuthCode: string): Promise<void> {
     if (requestInFlight.current || attachPlan === null || approvalKey.current === null) return;
     requestInFlight.current = true;
     setExecuting(true);
     setErrorMessage(null);
     try {
-      const reauth = await reauthenticateForOperation({ password, planHash: attachPlan.planHash });
+      const reauth = await reauthenticateForOperation({ password, planHash: attachPlan.planHash, additionalAuthCode });
       queryClient.setQueryData(queryKeys.session, reauth.session);
       const operation = await approveCertbotAttach({
         schemaVersion: attachPlan.schemaVersion,
@@ -325,6 +332,7 @@ export function CertificatesScreen() {
         planHash: attachPlan.planHash,
         idempotencyKey: approvalKey.current,
         reauthToken: reauth.reauthToken,
+        additionalAuthClaim: reauth.additionalAuthClaim ?? null,
         configReplaceConfirmed: true,
         serviceReloadConfirmed: true,
       });
@@ -811,9 +819,11 @@ function AttachInspector({
   receipt: OperationReceiptView | null;
   executing: boolean;
   errorMessage: string | null;
-  onApprove: (password: string) => Promise<void>;
+  onApprove: (password: string, additionalAuthCode: string) => Promise<void>;
 }) {
   const [password, setPassword] = useState("");
+  const [additionalAuthCode, setAdditionalAuthCode] = useState("");
+  const additionalAuthRequired = useAdditionalAuthRequired();
   const [replaceConfirmed, setReplaceConfirmed] = useState(false);
   const [reloadConfirmed, setReloadConfirmed] = useState(false);
 
@@ -821,8 +831,10 @@ function AttachInspector({
     event.preventDefault();
     if (!replaceConfirmed || !reloadConfirmed) return;
     const submittedPassword = password;
+    const submittedCode = additionalAuthCode;
     setPassword("");
-    await onApprove(submittedPassword);
+    setAdditionalAuthCode("");
+    await onApprove(submittedPassword, submittedCode);
   }
 
   if (receipt !== null) return <AttachResult receipt={receipt} />;
@@ -942,10 +954,11 @@ function AttachInspector({
           value={password}
           onChange={(event) => setPassword(event.currentTarget.value)}
         />
+        <AdditionalAuthCodeField id="certbot-attach-totp" value={additionalAuthCode} onChange={setAdditionalAuthCode} disabled={executing} />
         <Button
           className="mt-4 w-full"
           type="submit"
-          disabled={executing || password.length === 0 || !replaceConfirmed || !reloadConfirmed}
+          disabled={executing || password.length === 0 || (additionalAuthRequired && additionalAuthCode.length !== 6) || !replaceConfirmed || !reloadConfirmed}
         >
           {executing ? <LoaderCircle aria-hidden="true" className="size-4 animate-spin" /> : <KeyRound aria-hidden="true" className="size-4" />}
           {executing ? "승인·실행 요청 중" : "재인증 후 TLS 연결"}
@@ -1011,9 +1024,11 @@ function IssueInspector({
   receipt: OperationReceiptView | null;
   executing: boolean;
   errorMessage: string | null;
-  onApprove: (password: string) => Promise<void>;
+  onApprove: (password: string, additionalAuthCode: string) => Promise<void>;
 }) {
   const [password, setPassword] = useState("");
+  const [additionalAuthCode, setAdditionalAuthCode] = useState("");
+  const additionalAuthRequired = useAdditionalAuthRequired();
   const [externalEffectConfirmed, setExternalEffectConfirmed] = useState(false);
   const [attachDeferredConfirmed, setAttachDeferredConfirmed] = useState(false);
 
@@ -1021,8 +1036,10 @@ function IssueInspector({
     event.preventDefault();
     if (!externalEffectConfirmed || !attachDeferredConfirmed) return;
     const submittedPassword = password;
+    const submittedCode = additionalAuthCode;
     setPassword("");
-    await onApprove(submittedPassword);
+    setAdditionalAuthCode("");
+    await onApprove(submittedPassword, submittedCode);
   }
 
   if (receipt !== null) return <IssueResult receipt={receipt} />;
@@ -1150,12 +1167,14 @@ function IssueInspector({
           value={password}
           onChange={(event) => setPassword(event.currentTarget.value)}
         />
+        <AdditionalAuthCodeField id="certbot-issue-totp" value={additionalAuthCode} onChange={setAdditionalAuthCode} disabled={executing} />
         <Button
           className="mt-4 w-full"
           type="submit"
           disabled={
             executing ||
             password.length === 0 ||
+            (additionalAuthRequired && additionalAuthCode.length !== 6) ||
             !externalEffectConfirmed ||
             !attachDeferredConfirmed ||
             (plan.environment === "production" && !plan.stagingEvidenceValid)
@@ -1237,17 +1256,21 @@ function RenewTestInspector({
   receipt: OperationReceiptView | null;
   executing: boolean;
   errorMessage: string | null;
-  onApprove: (password: string) => Promise<void>;
+  onApprove: (password: string, additionalAuthCode: string) => Promise<void>;
 }) {
   const [password, setPassword] = useState("");
+  const [additionalAuthCode, setAdditionalAuthCode] = useState("");
+  const additionalAuthRequired = useAdditionalAuthRequired();
   const [externalEffectConfirmed, setExternalEffectConfirmed] = useState(false);
 
   async function submit(event: SyntheticEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
     if (!externalEffectConfirmed) return;
     const submittedPassword = password;
+    const submittedCode = additionalAuthCode;
     setPassword("");
-    await onApprove(submittedPassword);
+    setAdditionalAuthCode("");
+    await onApprove(submittedPassword, submittedCode);
   }
 
   if (receipt !== null) return <RenewTestResult receipt={receipt} />;
@@ -1366,10 +1389,11 @@ function RenewTestInspector({
           value={password}
           onChange={(event) => setPassword(event.currentTarget.value)}
         />
+        <AdditionalAuthCodeField id="certbot-renew-totp" value={additionalAuthCode} onChange={setAdditionalAuthCode} disabled={executing} />
         <Button
           className="mt-4 w-full"
           type="submit"
-          disabled={executing || password.length === 0 || !externalEffectConfirmed}
+          disabled={executing || password.length === 0 || (additionalAuthRequired && additionalAuthCode.length !== 6) || !externalEffectConfirmed}
         >
           {executing ? (
             <LoaderCircle aria-hidden="true" className="size-4 animate-spin" />
@@ -1431,30 +1455,6 @@ function RenewTestResult({ receipt }: { receipt: OperationReceiptView }) {
       </div>
     </div>
   );
-}
-
-function BulletList({ values }: { values: string[] }) {
-  return (
-    <ul className="mt-2 space-y-1 text-sm leading-6 text-muted">
-      {values.map((value) => (
-        <li key={value} className="flex gap-2">
-          <span aria-hidden="true">·</span>
-          <span>{value}</span>
-        </li>
-      ))}
-    </ul>
-  );
-}
-
-function isTerminalStage(stage: OperationStage): boolean {
-  return [
-    "SUCCEEDED",
-    "ROLLED_BACK",
-    "RECOVERY_REQUIRED",
-    "REJECTED",
-    "EXPIRED",
-    "CANCELLED_BEFORE_APPLY",
-  ].includes(stage);
 }
 
 function operationErrorCopy(error: unknown, fallback: string): string {

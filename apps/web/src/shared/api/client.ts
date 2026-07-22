@@ -49,6 +49,9 @@ import type {
   TerminalCapabilityView,
   TerminalTicketRequest,
   TerminalTicketView,
+  TotpEnrollmentConfirmView,
+  TotpEnrollmentStartView,
+  TotpVerificationView,
 } from "./types";
 
 const api = createClient<paths>({
@@ -316,7 +319,8 @@ export async function approveManagedConfig(
 export async function reauthenticateForOperation(input: {
   password: string;
   planHash: string;
-}): Promise<ReauthView> {
+  additionalAuthCode?: string;
+}): Promise<ReauthView & { additionalAuthClaim?: string }> {
   const { data, error, response } = await api.POST("/api/v1/auth/reauth", {
     body: {
       password: input.password,
@@ -329,7 +333,87 @@ export async function reauthenticateForOperation(input: {
   });
   if (data !== undefined) {
     rememberSession(data.session);
+    if (input.additionalAuthCode === undefined || input.additionalAuthCode.length === 0) {
+      return data;
+    }
+    const verified = await verifyTotpForOperation({
+      reauthToken: data.reauthToken,
+      planHash: input.planHash,
+      code: input.additionalAuthCode,
+    });
+    return { ...data, additionalAuthClaim: verified.additionalAuthClaim };
+  }
+  throw new ApiError(error, response);
+}
+
+export async function reauthenticateForTotpEnrollment(password: string): Promise<ReauthView> {
+  return reauthenticateForTotpPurpose(password, "totp_enrollment");
+}
+
+export async function reauthenticateForTotpReset(password: string): Promise<ReauthView> {
+  return reauthenticateForTotpPurpose(password, "totp_recovery_reset");
+}
+
+async function reauthenticateForTotpPurpose(
+  password: string,
+  kind: "totp_enrollment" | "totp_recovery_reset",
+): Promise<ReauthView> {
+  const { data, error, response } = await api.POST("/api/v1/auth/reauth", {
+    body: { password, purpose: { kind } },
+    headers: mutationHeaders(),
+  });
+  if (data !== undefined) {
+    rememberSession(data.session);
     return data;
+  }
+  throw new ApiError(error, response);
+}
+
+export async function beginTotpEnrollment(reauthToken: string): Promise<TotpEnrollmentStartView> {
+  const { data, error, response } = await api.POST("/api/v1/settings/access/totp/enrollment", {
+    body: { reauthToken },
+    headers: mutationHeaders(),
+  });
+  if (data !== undefined) return data;
+  throw new ApiError(error, response);
+}
+
+export async function confirmTotpEnrollment(input: {
+  enrollmentId: string;
+  code: string;
+}): Promise<TotpEnrollmentConfirmView> {
+  const { data, error, response } = await api.POST(
+    "/api/v1/settings/access/totp/enrollment/confirm",
+    { body: input, headers: mutationHeaders() },
+  );
+  if (data !== undefined) return data;
+  throw new ApiError(error, response);
+}
+
+export async function verifyTotpForOperation(input: {
+  reauthToken: string;
+  planHash: string;
+  code: string;
+}): Promise<TotpVerificationView> {
+  const { data, error, response } = await api.POST("/api/v1/auth/totp/verify", {
+    body: input,
+    headers: mutationHeaders(),
+  });
+  if (data !== undefined) return data;
+  throw new ApiError(error, response);
+}
+
+export async function resetTotp(input: {
+  reauthToken: string;
+  recoveryCode: string;
+}): Promise<void> {
+  const { error, response } = await api.POST("/api/v1/settings/access/totp/reset", {
+    body: input,
+    headers: mutationHeaders(),
+  });
+  if (response.ok) {
+    forgetSession();
+    return;
   }
   throw new ApiError(error, response);
 }

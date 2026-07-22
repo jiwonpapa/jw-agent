@@ -111,4 +111,5 @@ export const POLICY_PROVIDER_LABELS = {
   not_implemented: "추가 인증 제공자가 아직 구현되지 않았습니다.",
   not_configured: "추가 인증 제공자가 설정되지 않았습니다.",
   ready: "추가 인증 제공자를 사용할 수 있습니다.",
+  unavailable: "등록된 추가 인증 제공자를 현재 사용할 수 없습니다.",
 } as const;

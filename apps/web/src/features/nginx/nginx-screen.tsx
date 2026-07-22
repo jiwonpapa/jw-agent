@@ -44,9 +44,14 @@ import {
   operationResultLabel,
 } from "../../shared/domain/managed-config-diagnostic";
 import { AssuranceDetails, AssuranceMark } from "../../shared/ui/assurance";
+import {
+  AdditionalAuthCodeField,
+  useAdditionalAuthRequired,
+} from "../../shared/ui/additional-auth-code";
 import { Button } from "../../shared/ui/button";
 import { CodeEditor } from "../../shared/ui/code-editor";
 import { Input } from "../../shared/ui/input";
+import { BulletList, isTerminalStage } from "../../shared/ui/operation-details";
 import { Sheet } from "../../shared/ui/sheet";
 import { Skeleton } from "../../shared/ui/skeleton";
 import { StatusMark } from "../../shared/ui/status-mark";
@@ -258,7 +263,7 @@ export function NginxScreen() {
     }
   }
 
-  async function approveConfigPlan(password: string): Promise<void> {
+  async function approveConfigPlan(password: string, additionalAuthCode: string): Promise<void> {
     if (requestInFlight.current || configPlan === null || approvalKey.current === null) return;
     requestInFlight.current = true;
     setExecuting(true);
@@ -267,6 +272,7 @@ export function NginxScreen() {
       const reauth = await reauthenticateForOperation({
         password,
         planHash: configPlan.planHash,
+        additionalAuthCode,
       });
       queryClient.setQueryData(queryKeys.session, reauth.session);
       const operation = await approveManagedConfig({
@@ -275,6 +281,7 @@ export function NginxScreen() {
         planHash: configPlan.planHash,
         idempotencyKey: approvalKey.current,
         reauthToken: reauth.reauthToken,
+        additionalAuthClaim: reauth.additionalAuthClaim ?? null,
         approvalIntent: {
           validationConfirmed: true,
           serviceActionConfirmed: true,
@@ -318,13 +325,17 @@ export function NginxScreen() {
     }
   }
 
-  async function approvePlan(password: string): Promise<void> {
+  async function approvePlan(password: string, additionalAuthCode: string): Promise<void> {
     if (requestInFlight.current || plan === null || approvalKey.current === null) return;
     requestInFlight.current = true;
     setExecuting(true);
     setErrorMessage(null);
     try {
-      const reauth = await reauthenticateForOperation({ password, planHash: plan.planHash });
+      const reauth = await reauthenticateForOperation({
+        password,
+        planHash: plan.planHash,
+        additionalAuthCode,
+      });
       queryClient.setQueryData(queryKeys.session, reauth.session);
       const operation = await approveNginxSiteState({
         schemaVersion: plan.schemaVersion,
@@ -332,6 +343,7 @@ export function NginxScreen() {
         planHash: plan.planHash,
         idempotencyKey: approvalKey.current,
         reauthToken: reauth.reauthToken,
+        additionalAuthClaim: reauth.additionalAuthClaim ?? null,
       });
       setAccepted(operation);
     } catch (error) {
@@ -481,7 +493,7 @@ export function NginxScreen() {
             executing={executing}
             errorMessage={errorMessage}
             onCreatePlan={() => void createPlan(selected)}
-            onApprove={(password) => approvePlan(password)}
+            onApprove={approvePlan}
             loadingConfig={loadingConfig}
             onEditConfig={() => void openConfigEditor(selected)}
           />
@@ -601,7 +613,7 @@ function SiteInspector({
   executing: boolean;
   errorMessage: string | null;
   onCreatePlan: () => void;
-  onApprove: (password: string) => Promise<void>;
+  onApprove: (password: string, additionalAuthCode: string) => Promise<void>;
   loadingConfig: boolean;
   onEditConfig: () => void;
 }) {
@@ -700,7 +712,7 @@ function ManagedConfigEditor({
   onDraftChange: (value: string) => void;
   onBack: () => void;
   onCreatePlan: () => void;
-  onApprove: (password: string) => Promise<void>;
+  onApprove: (password: string, additionalAuthCode: string) => Promise<void>;
   onRevise: (line: number | null) => void;
 }) {
   if (receipt !== null) {
@@ -826,9 +838,11 @@ function ManagedConfigOperationPlan({
   modified: string;
   executing: boolean;
   errorMessage: string | null;
-  onApprove: (password: string) => Promise<void>;
+  onApprove: (password: string, additionalAuthCode: string) => Promise<void>;
 }) {
   const [password, setPassword] = useState("");
+  const [additionalAuthCode, setAdditionalAuthCode] = useState("");
+  const additionalAuthRequired = useAdditionalAuthRequired();
   const [validationConfirmed, setValidationConfirmed] = useState(false);
   const [serviceActionConfirmed, setServiceActionConfirmed] = useState(false);
 
@@ -836,8 +850,10 @@ function ManagedConfigOperationPlan({
     event.preventDefault();
     if (!validationConfirmed || !serviceActionConfirmed) return;
     const submittedPassword = password;
+    const submittedCode = additionalAuthCode;
     setPassword("");
-    await onApprove(submittedPassword);
+    setAdditionalAuthCode("");
+    await onApprove(submittedPassword, submittedCode);
   }
 
   return (
@@ -943,12 +959,14 @@ function ManagedConfigOperationPlan({
           value={password}
           onChange={(event) => setPassword(event.currentTarget.value)}
         />
+        <AdditionalAuthCodeField id="nginx-config-operation-totp" value={additionalAuthCode} onChange={setAdditionalAuthCode} disabled={executing} />
         <Button
           className="mt-4 w-full"
           type="submit"
           disabled={
             executing ||
             password.length === 0 ||
+            (additionalAuthRequired && additionalAuthCode.length !== 6) ||
             !validationConfirmed ||
             !serviceActionConfirmed
           }
@@ -978,15 +996,19 @@ function OperationPlan({
   receipt: OperationReceiptView | null;
   executing: boolean;
   errorMessage: string | null;
-  onApprove: (password: string) => Promise<void>;
+  onApprove: (password: string, additionalAuthCode: string) => Promise<void>;
 }) {
   const [password, setPassword] = useState("");
+  const [additionalAuthCode, setAdditionalAuthCode] = useState("");
+  const additionalAuthRequired = useAdditionalAuthRequired();
 
   async function submit(event: SyntheticEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
     const submittedPassword = password;
+    const submittedCode = additionalAuthCode;
     setPassword("");
-    await onApprove(submittedPassword);
+    setAdditionalAuthCode("");
+    await onApprove(submittedPassword, submittedCode);
   }
 
   if (receipt !== null) return <OperationResult receipt={receipt} />;
@@ -1067,7 +1089,8 @@ function OperationPlan({
           value={password}
           onChange={(event) => setPassword(event.currentTarget.value)}
         />
-        <Button className="mt-4 w-full" type="submit" disabled={executing || password.length === 0}>
+        <AdditionalAuthCodeField id="nginx-state-operation-totp" value={additionalAuthCode} onChange={setAdditionalAuthCode} disabled={executing} />
+        <Button className="mt-4 w-full" type="submit" disabled={executing || password.length === 0 || (additionalAuthRequired && additionalAuthCode.length !== 6)}>
           {executing ? (
             <LoaderCircle aria-hidden="true" className="size-4 animate-spin" />
           ) : (
@@ -1177,32 +1200,8 @@ function DetailRow({ label, value }: { label: string; value: string }) {
   );
 }
 
-function BulletList({ values }: { values: string[] }) {
-  return (
-    <ul className="mt-2 space-y-1 text-sm leading-6 text-muted">
-      {values.map((value) => (
-        <li key={value} className="flex gap-2">
-          <span aria-hidden="true">·</span>
-          <span>{value}</span>
-        </li>
-      ))}
-    </ul>
-  );
-}
-
 function stateLabel(state: NginxSiteState): string {
   return state === "enabled" ? "활성" : "비활성";
-}
-
-function isTerminalStage(stage: OperationStage): boolean {
-  return [
-    "SUCCEEDED",
-    "ROLLED_BACK",
-    "RECOVERY_REQUIRED",
-    "REJECTED",
-    "EXPIRED",
-    "CANCELLED_BEFORE_APPLY",
-  ].includes(stage);
 }
 
 function canPlan(row: NginxRowView): row is NginxRowView & {

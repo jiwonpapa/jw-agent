@@ -43,6 +43,7 @@ import { Sheet } from "../../shared/ui/sheet";
 import { StatusMark } from "../../shared/ui/status-mark";
 import { SurfaceState } from "../../shared/ui/surface-state";
 import { WorkspaceHeader } from "../../shared/ui/workspace-header";
+import { AdditionalAuthCodeField, useAdditionalAuthRequired } from "../../shared/ui/additional-auth-code";
 import { useFileSession } from "./file-session";
 
 type WorkState = "idle" | "connecting" | "loading" | "planning" | "applying" | "ready" | "error";
@@ -63,10 +64,12 @@ export function FilesScreen() {
   const [writeDraft, setWriteDraft] = useState<WriteDraft | null>(null);
   const [uploadPlan, setUploadPlan] = useState<FileUploadPlanView | null>(null);
   const [uploadPassword, setUploadPassword] = useState("");
+  const [additionalAuthCode, setAdditionalAuthCode] = useState("");
   const [writeRiskConfirmed, setWriteRiskConfirmed] = useState(false);
   const [overwriteConfirmed, setOverwriteConfirmed] = useState(false);
   const [connectOpen, setConnectOpen] = useState(false);
   const [writeOpen, setWriteOpen] = useState(false);
+  const additionalAuthRequired = useAdditionalAuthRequired();
 
   if (capabilityQuery.isPending) {
     return (
@@ -185,6 +188,7 @@ export function FilesScreen() {
     setWriteDraft(null);
     setUploadPlan(null);
     setUploadPassword("");
+    setAdditionalAuthCode("");
     setWriteRiskConfirmed(false);
     setOverwriteConfirmed(false);
     setWriteOpen(false);
@@ -240,6 +244,7 @@ export function FilesScreen() {
       session === null
       || writeDraft === null
       || uploadPassword.length === 0
+      || (additionalAuthRequired && additionalAuthCode.length !== 6)
       || !writeRiskConfirmed
       || (writeDraft.targetExists && !overwriteConfirmed)
       || state === "planning"
@@ -265,15 +270,18 @@ export function FilesScreen() {
         contentBytes: bytes.byteLength,
         contentDigest,
         password: uploadPassword,
+        ...(additionalAuthCode.length === 0 ? {} : { additionalAuthCode }),
         nonReversibleConfirmed: true,
         overwriteConfirmed,
       });
       setUploadPassword("");
+      setAdditionalAuthCode("");
       setUploadPlan(plan);
       setState("ready");
       setMessage("G1 업로드 계획을 만들었습니다. 대상·digest·원복 불가 범위를 확인한 뒤 적용하세요.");
     } catch (error) {
       setUploadPassword("");
+      setAdditionalAuthCode("");
       handleOperationError(error);
     }
   }
@@ -507,6 +515,7 @@ export function FilesScreen() {
               <div className="mt-6 border-t border-border pt-5">
                 <label htmlFor="file-upload-password" className="text-sm font-semibold text-text">Linux 비밀번호 재확인</label>
                 <Input id="file-upload-password" className="mt-2" type="password" autoComplete="current-password" value={uploadPassword} onChange={(event) => setUploadPassword(event.target.value)} />
+                <AdditionalAuthCodeField id="file-upload-totp" value={additionalAuthCode} onChange={setAdditionalAuthCode} disabled={state === "planning"} />
                 <label className="mt-4 flex cursor-pointer items-start gap-3 text-sm leading-6 text-text">
                   <input type="checkbox" className="mt-1 size-4 shrink-0 accent-action" checked={writeRiskConfirmed} onChange={(event) => setWriteRiskConfirmed(event.target.checked)} />
                   <span>이 쓰기는 자동 원복되지 않으며 실패 시 SSH로 직접 확인해야 할 수 있음을 이해했습니다.</span>
@@ -517,7 +526,7 @@ export function FilesScreen() {
                     <span>기존 파일을 교체하며 이전 내용의 자동 백업이 없음을 확인했습니다.</span>
                   </label>
                 ) : null}
-                <Button className="mt-5" disabled={uploadPassword.length === 0 || !writeRiskConfirmed || (writeDraft.targetExists && !overwriteConfirmed) || state === "planning"} onClick={() => void createUploadPlan()}>
+                <Button className="mt-5" disabled={uploadPassword.length === 0 || (additionalAuthRequired && additionalAuthCode.length !== 6) || !writeRiskConfirmed || (writeDraft.targetExists && !overwriteConfirmed) || state === "planning"} onClick={() => void createUploadPlan()}>
                   <KeyRound aria-hidden="true" className="size-4" />{state === "planning" ? "계획 검증 중" : "재인증 후 계획 만들기"}
                 </Button>
               </div>

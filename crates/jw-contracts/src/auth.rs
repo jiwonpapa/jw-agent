@@ -117,6 +117,8 @@ pub enum ReauthPurpose {
         #[serde(rename = "targetPolicy")]
         target_policy: crate::AdditionalAuthPolicy,
     },
+    TotpEnrollment,
+    TotpRecoveryReset,
 }
 
 #[derive(Debug, Deserialize, Serialize, ToSchema)]

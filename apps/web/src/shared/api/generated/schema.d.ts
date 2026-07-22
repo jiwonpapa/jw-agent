@@ -84,6 +84,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/auth/totp/verify": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["verify_totp"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/capabilities": {
         parameters: {
             query?: never;
@@ -596,6 +612,54 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/settings/access/totp/enrollment": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["begin_totp_enrollment"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/settings/access/totp/enrollment/confirm": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["confirm_totp_enrollment"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/settings/access/totp/reset": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["reset_totp"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/terminal": {
         parameters: {
             query?: never;
@@ -644,7 +708,7 @@ export interface components {
         /** @enum {string} */
         AdditionalAuthPolicy: "disabled" | "risky_operations" | "all_mutations";
         /** @enum {string} */
-        AdditionalAuthProviderStatus: "not_implemented" | "not_configured" | "ready";
+        AdditionalAuthProviderStatus: "not_implemented" | "not_configured" | "ready" | "unavailable";
         /** @enum {string} */
         AssuranceLevel: "g0_observe_only" | "g1_verified_action" | "g2_reversible_config" | "g3_restore_validated_data";
         AssuranceView: {
@@ -921,6 +985,8 @@ export interface components {
             sizeBytes: number;
         };
         FileUploadPlanRequest: {
+            /** Format: password */
+            additionalAuthCode?: string | null;
             /** Format: int64 */
             contentBytes: number;
             contentDigest: string;
@@ -1241,6 +1307,12 @@ export interface components {
             /** @enum {string} */
             kind: "security_policy_change";
             targetPolicy: components["schemas"]["AdditionalAuthPolicy"];
+        } | {
+            /** @enum {string} */
+            kind: "totp_enrollment";
+        } | {
+            /** @enum {string} */
+            kind: "totp_recovery_reset";
         };
         ReauthRequest: {
             /** Format: password */
@@ -1326,6 +1398,8 @@ export interface components {
             ticketTtlSeconds: number;
         };
         TerminalTicketRequest: {
+            /** Format: password */
+            additionalAuthCode?: string | null;
             /** Format: int32 */
             cols: number;
             /** Format: password */
@@ -1341,6 +1415,49 @@ export interface components {
             /** Format: password */
             ticket: string;
             websocketPath: string;
+        };
+        TotpEnrollmentConfirmRequest: {
+            /** Format: password */
+            code: string;
+            enrollmentId: string;
+        };
+        TotpEnrollmentConfirmView: {
+            providerId: string;
+            state: components["schemas"]["TotpEnrollmentState"];
+        };
+        TotpEnrollmentStartRequest: {
+            /** Format: password */
+            reauthToken: string;
+        };
+        TotpEnrollmentStartView: {
+            enrollmentId: string;
+            expiresAt: string;
+            /** Format: password */
+            manualKey: string;
+            /** Format: password */
+            otpauthUri: string;
+            providerId: string;
+            recoveryCodes: string[];
+        };
+        /** @enum {string} */
+        TotpEnrollmentState: "awaiting_next_code" | "ready";
+        TotpRecoveryResetRequest: {
+            /** Format: password */
+            reauthToken: string;
+            /** Format: password */
+            recoveryCode: string;
+        };
+        TotpVerificationRequest: {
+            /** Format: password */
+            code: string;
+            planHash: string;
+            /** Format: password */
+            reauthToken: string;
+        };
+        TotpVerificationView: {
+            /** Format: password */
+            additionalAuthClaim: string;
+            expiresAt: string;
         };
         UpdateAdditionalAuthRequest: {
             policy: components["schemas"]["AdditionalAuthPolicy"];
@@ -1552,6 +1669,57 @@ export interface operations {
             };
             /** @description Authentication required */
             401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    verify_totp: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TotpVerificationRequest"];
+            };
+        };
+        responses: {
+            /** @description Plan-bound single-use additional-auth claim */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TotpVerificationView"];
+                };
+            };
+            /** @description Generic TOTP or claim rejection */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description TOTP rate limited */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description TOTP provider unavailable */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -3184,6 +3352,139 @@ export interface operations {
             };
             /** @description Recent PAM reauthentication required */
             428: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    begin_totp_enrollment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TotpEnrollmentStartRequest"];
+            };
+        };
+        responses: {
+            /** @description One-time TOTP enrollment material */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TotpEnrollmentStartView"];
+                };
+            };
+            /** @description Recovery ingress, admin role, CSRF, or PAM claim rejected */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Provider already configured */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Wrapping key unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    confirm_totp_enrollment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TotpEnrollmentConfirmRequest"];
+            };
+        };
+        responses: {
+            /** @description Enrollment confirmation progress */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TotpEnrollmentConfirmView"];
+                };
+            };
+            /** @description Generic confirmation rejection */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description TOTP rate limited */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    reset_totp: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TotpRecoveryResetRequest"];
+            };
+        };
+        responses: {
+            /** @description TOTP enrollment removed and subject sessions revoked */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Recovery ingress, PAM claim, or recovery code rejected */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description TOTP rate limited */
+            429: {
                 headers: {
                     [name: string]: unknown;
                 };

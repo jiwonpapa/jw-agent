@@ -11,10 +11,13 @@ use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
 use zeroize::{Zeroize, Zeroizing};
 
+use crate::totp::{TotpService, additional_claim_digest};
+
 const MIGRATION_1: &str = include_str!("../migrations/0001_initial.sql");
 const MIGRATION_2: &str = include_str!("../migrations/0002_terminal_audit.sql");
 const MIGRATION_3: &str = include_str!("../migrations/0003_file_audit.sql");
 const MIGRATION_4: &str = include_str!("../migrations/0004_file_upload_audit.sql");
+const MIGRATION_5: &str = include_str!("../migrations/0005_totp.sql");
 const TOKEN_BYTES: usize = 32;
 const TOKEN_TEXT_BYTES: usize = 43;
 const PUBLIC_IDLE_MS: i64 = 15 * 60 * 1_000;
@@ -27,6 +30,7 @@ const SESSION_TOUCH_INTERVAL_MS: i64 = 60 * 1_000;
 #[derive(Clone, Debug)]
 pub struct SessionStore {
     path: PathBuf,
+    totp: TotpService,
 }
 
 pub struct IssuedSession {
@@ -70,7 +74,8 @@ impl SessionStore {
             std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
         }
         migrate(&path, now_unix_ms)?;
-        Ok(Self { path })
+        let totp = TotpService::new(path.clone());
+        Ok(Self { path, totp })
     }
 
     pub fn issue_session(
@@ -445,6 +450,11 @@ impl SessionStore {
         policy_in_connection(&connection)
     }
 
+    #[must_use]
+    pub fn totp(&self) -> &TotpService {
+        &self.totp
+    }
+
     pub fn issue_reauth_claim(
         &self,
         session_token: &str,
@@ -490,6 +500,15 @@ impl SessionStore {
         if subject.role != Role::Admin {
             return Err(PolicyUpdateError::Denied);
         }
+        if target != AdditionalAuthPolicy::Disabled
+            && self
+                .totp
+                .provider_status(subject.uid)
+                .map_err(|_| PolicyUpdateError::ProviderUnavailable)?
+                != jw_contracts::AdditionalAuthProviderStatus::Ready
+        {
+            return Err(PolicyUpdateError::ProviderUnavailable);
+        }
         let mut connection = self.connection().map_err(PolicyUpdateError::Storage)?;
         let transaction = connection
             .transaction()
@@ -524,14 +543,40 @@ impl SessionStore {
         reauth_token: &str,
         now_unix_ms: i64,
     ) -> Result<(), OperationClaimError> {
+        self.consume_operation_claims(OperationAuthorization {
+            session_token,
+            subject,
+            plan_hash,
+            reauth_token,
+            additional_auth_claim: None,
+            additional_auth_required: false,
+            now_unix_ms,
+        })
+    }
+
+    pub fn consume_operation_claims(
+        &self,
+        authorization: OperationAuthorization<'_>,
+    ) -> Result<(), OperationClaimError> {
+        let OperationAuthorization {
+            session_token,
+            subject,
+            plan_hash,
+            reauth_token,
+            additional_auth_claim,
+            additional_auth_required,
+            now_unix_ms,
+        } = authorization;
         if !valid_token_shape(reauth_token) || plan_hash.is_empty() || plan_hash.len() > 128 {
             return Err(OperationClaimError::Invalid);
         }
         let digest = claim_digest(reauth_token.as_bytes());
         let session_digest = session_digest(session_token.as_bytes());
-        let changed = self
-            .connection()
-            .map_err(OperationClaimError::Storage)?
+        let mut connection = self.connection().map_err(OperationClaimError::Storage)?;
+        let transaction = connection
+            .transaction()
+            .map_err(|error| OperationClaimError::Storage(error.to_string()))?;
+        let changed = transaction
             .execute(
                 "UPDATE reauth_claims SET consumed_at_unix_ms = ?1 \
                  WHERE token_digest = ?2 AND session_digest = ?3 AND subject_uid = ?4 \
@@ -546,11 +591,41 @@ impl SessionStore {
                 ],
             )
             .map_err(|error| OperationClaimError::Storage(error.to_string()))?;
-        if changed == 1 {
-            Ok(())
-        } else {
-            Err(OperationClaimError::Invalid)
+        if changed != 1 {
+            return Err(OperationClaimError::Invalid);
         }
+        match (additional_auth_required, additional_auth_claim) {
+            (false, None) => {}
+            (false, Some(_)) | (true, None) => return Err(OperationClaimError::InvalidAdditional),
+            (true, Some(claim)) => {
+                if !valid_token_shape(claim) {
+                    return Err(OperationClaimError::InvalidAdditional);
+                }
+                let claim_digest = additional_claim_digest(claim.as_bytes());
+                let consumed = transaction
+                    .execute(
+                        "UPDATE additional_auth_claims SET consumed_at_unix_ms = ?1 \
+                         WHERE token_digest = ?2 AND reauth_digest = ?3 AND session_digest = ?4 \
+                           AND subject_uid = ?5 AND context_digest = ?6 \
+                           AND expires_at_unix_ms > ?1 AND consumed_at_unix_ms IS NULL",
+                        params![
+                            now_unix_ms,
+                            claim_digest.as_slice(),
+                            digest.as_slice(),
+                            session_digest.as_slice(),
+                            subject.uid,
+                            plan_hash,
+                        ],
+                    )
+                    .map_err(|error| OperationClaimError::Storage(error.to_string()))?;
+                if consumed != 1 {
+                    return Err(OperationClaimError::InvalidAdditional);
+                }
+            }
+        }
+        transaction
+            .commit()
+            .map_err(|error| OperationClaimError::Storage(error.to_string()))
     }
 
     fn connection(&self) -> Result<Connection, String> {
@@ -563,13 +638,25 @@ pub enum PolicyUpdateError {
     Denied,
     ReauthRequired,
     InvalidReauth,
+    ProviderUnavailable,
     Storage(String),
 }
 
 #[derive(Debug)]
 pub enum OperationClaimError {
     Invalid,
+    InvalidAdditional,
     Storage(String),
+}
+
+pub struct OperationAuthorization<'a> {
+    pub session_token: &'a str,
+    pub subject: &'a Subject,
+    pub plan_hash: &'a str,
+    pub reauth_token: &'a str,
+    pub additional_auth_claim: Option<&'a str>,
+    pub additional_auth_required: bool,
+    pub now_unix_ms: i64,
 }
 
 struct SessionRecord {
@@ -736,6 +823,28 @@ fn migrate(path: &Path, now_unix_ms: i64) -> Result<(), String> {
         .execute_batch(MIGRATION_2)
         .map_err(|error| error.to_string())?;
     transaction
+        .execute_batch(MIGRATION_5)
+        .map_err(|error| error.to_string())?;
+    transaction
+        .execute(
+            "INSERT OR IGNORE INTO schema_migrations(version, applied_at_unix_ms) VALUES (5, ?1)",
+            [now_unix_ms],
+        )
+        .map_err(|error| error.to_string())?;
+    transaction
+        .execute(
+            "DELETE FROM additional_auth_claims \
+             WHERE expires_at_unix_ms <= ?1 OR consumed_at_unix_ms IS NOT NULL",
+            [now_unix_ms],
+        )
+        .map_err(|error| error.to_string())?;
+    transaction
+        .execute(
+            "DELETE FROM totp_enrollments WHERE state = 'pending' AND expires_at_unix_ms <= ?1",
+            [now_unix_ms],
+        )
+        .map_err(|error| error.to_string())?;
+    transaction
         .execute(
             "INSERT OR IGNORE INTO schema_migrations(version, applied_at_unix_ms) VALUES (2, ?1)",
             [now_unix_ms],
@@ -752,7 +861,7 @@ fn migrate(path: &Path, now_unix_ms: i64) -> Result<(), String> {
     transaction.commit().map_err(|error| error.to_string())
 }
 
-fn configure(connection: Connection) -> Result<Connection, String> {
+pub(crate) fn configure(connection: Connection) -> Result<Connection, String> {
     connection
         .busy_timeout(Duration::from_secs(5))
         .map_err(|error| error.to_string())?;
@@ -776,11 +885,11 @@ fn random_token() -> Result<Zeroizing<String>, String> {
     Ok(Zeroizing::new(encoded))
 }
 
-fn session_digest(token: &[u8]) -> [u8; 32] {
+pub(crate) fn session_digest(token: &[u8]) -> [u8; 32] {
     digest_with_domain(b"jw-agent/session/v1\0", token)
 }
 
-fn claim_digest(token: &[u8]) -> [u8; 32] {
+pub(crate) fn claim_digest(token: &[u8]) -> [u8; 32] {
     digest_with_domain(b"jw-agent/reauth/v1\0", token)
 }
 
@@ -835,7 +944,7 @@ fn session_view(
     })
 }
 
-fn format_rfc3339(unix_ms: i64) -> Result<String, String> {
+pub(crate) fn format_rfc3339(unix_ms: i64) -> Result<String, String> {
     let nanos = i128::from(unix_ms).saturating_mul(1_000_000);
     let time = time::OffsetDateTime::from_unix_timestamp_nanos(nanos)
         .map_err(|_| String::from("timestamp is out of range"))?;
@@ -904,6 +1013,8 @@ fn reauth_context(purpose: &ReauthPurpose) -> (&'static str, String) {
             "security_policy_change",
             target_policy.as_storage_value().to_owned(),
         ),
+        ReauthPurpose::TotpEnrollment => ("totp_enrollment", String::from("totp/v1")),
+        ReauthPurpose::TotpRecoveryReset => ("totp_recovery_reset", String::from("totp/v1")),
     }
 }
 
@@ -912,9 +1023,9 @@ mod tests {
     use std::fs;
     use std::path::PathBuf;
 
-    use jw_contracts::{AdditionalAuthPolicy, IngressChannel, ReauthPurpose, Role, Subject};
+    use jw_contracts::{AdditionalAuthPolicy, IngressChannel, Role, Subject};
 
-    use super::{FileUploadPlanAudit, OperationClaimError, PolicyUpdateError, SessionStore};
+    use super::{FileUploadPlanAudit, SessionStore};
 
     fn test_path() -> Result<PathBuf, String> {
         let mut random = [0_u8; 8];
@@ -1098,99 +1209,6 @@ mod tests {
             .map_err(|error| error.to_string())?;
         assert_eq!(upload_forbidden_columns, 0);
         drop(reopened);
-        cleanup_test_database(&path)
-    }
-
-    #[test]
-    fn policy_update_requires_admin_reauth_and_consumes_claim_once() -> Result<(), String> {
-        let path = test_path()?;
-        let store = SessionStore::open(path.clone(), 1_000)?;
-        let admin = Subject {
-            uid: 1_000,
-            username: String::from("admin"),
-            role: Role::Admin,
-        };
-        let issued = store.issue_session(&admin, IngressChannel::Recovery, 1_000)?;
-        let target = AdditionalAuthPolicy::RiskyOperations;
-        assert!(matches!(
-            store.update_additional_auth_policy(issued.token(), &admin, target, None, 2_000,),
-            Err(PolicyUpdateError::ReauthRequired)
-        ));
-
-        let claim = store.issue_reauth_claim(
-            issued.token(),
-            &admin,
-            &ReauthPurpose::SecurityPolicyChange {
-                target_policy: target,
-            },
-            2_000,
-        )?;
-        store
-            .update_additional_auth_policy(
-                issued.token(),
-                &admin,
-                target,
-                Some(claim.token()),
-                2_001,
-            )
-            .map_err(|error| format!("first policy update failed: {error:?}"))?;
-        assert_eq!(store.additional_auth_policy()?, target);
-        assert!(matches!(
-            store.update_additional_auth_policy(
-                issued.token(),
-                &admin,
-                AdditionalAuthPolicy::Disabled,
-                Some(claim.token()),
-                2_002,
-            ),
-            Err(PolicyUpdateError::InvalidReauth)
-        ));
-
-        drop(claim);
-        drop(issued);
-        cleanup_test_database(&path)
-    }
-
-    #[test]
-    fn operation_claim_is_bound_to_rotated_session_uid_and_plan() -> Result<(), String> {
-        let path = test_path()?;
-        let store = SessionStore::open(path.clone(), 1_000)?;
-        let subject = Subject {
-            uid: 1_000,
-            username: String::from("admin"),
-            role: Role::Admin,
-        };
-        let session = store.issue_session(&subject, IngressChannel::Public, 1_000)?;
-        let purpose = ReauthPurpose::Operation {
-            plan_hash: String::from(
-                "sha256:0000000000000000000000000000000000000000000000000000000000000000",
-            ),
-        };
-        let claim = store.issue_reauth_claim(session.token(), &subject, &purpose, 1_100)?;
-        store
-            .consume_operation_claim(
-                session.token(),
-                &subject,
-                match &purpose {
-                    ReauthPurpose::Operation { plan_hash } => plan_hash,
-                    ReauthPurpose::SecurityPolicyChange { .. } => "",
-                },
-                claim.token(),
-                1_200,
-            )
-            .map_err(|error| format!("{error:?}"))?;
-        assert!(matches!(
-            store.consume_operation_claim(
-                session.token(),
-                &subject,
-                "sha256:0000000000000000000000000000000000000000000000000000000000000000",
-                claim.token(),
-                1_300,
-            ),
-            Err(OperationClaimError::Invalid)
-        ));
-        drop(claim);
-        drop(session);
         cleanup_test_database(&path)
     }
 

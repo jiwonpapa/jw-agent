@@ -143,6 +143,7 @@ const REQUIRED_FOUNDATION_PATHS: &[&str] = &[
     "docs/90-specs/adr/0011-certbot-network-runner.md",
     "docs/90-specs/adr/0012-loopback-tls-verifier.md",
     "docs/90-specs/adr/0013-system-openssh-client.md",
+    "docs/90-specs/adr/0016-totp-crypto-and-enrollment-boundary.md",
     "tests/spec-fixtures/nginx-site-state-set-v1.json",
 ];
 
@@ -657,6 +658,17 @@ const GATES: &[Gate] = &[
         run: vm::gate_p2_openssh_sftp_atomic_upload,
     },
     Gate {
+        id: "VM-P2-TOTP-STEP-UP",
+        owner: "Security Maintainer",
+        scope: "recovery-only TOTP enrollment, exact-plan step-up, replay denial, and recovery reset",
+        inputs: "installed P2 package, recovery ingress, PAM fixture, encrypted agentd state, and typed Nginx no-op",
+        lanes: P2_VM_LANES,
+        timeout_seconds: 240,
+        evidence: "two consecutive codes, risky-operation policy, PAM plus TOTP approval, single-use replay denial, reset, and encrypted-at-rest cleanup passed",
+        failure_policy: "fail lane on public enrollment, weak key storage, skipped factor, claim replay, retained recovery material, or incomplete reset",
+        run: vm::totp::gate_p2_totp_step_up,
+    },
+    Gate {
         id: "VM-SECRET-SCAN",
         owner: "Security Maintainer",
         scope: "journal, SQLite, snapshot, process arguments, and package logs",
@@ -670,13 +682,11 @@ const GATES: &[Gate] = &[
 ];
 
 fn main() -> ExitCode {
-    match execute() {
-        Ok(()) => ExitCode::SUCCESS,
-        Err(error) => {
-            eprintln!("xtask: {error}");
-            ExitCode::FAILURE
-        }
+    if let Err(error) = execute() {
+        eprintln!("xtask: {error}");
+        return ExitCode::FAILURE;
     }
+    ExitCode::SUCCESS
 }
 
 fn execute() -> Result<(), String> {

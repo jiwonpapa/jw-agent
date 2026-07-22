@@ -13,16 +13,19 @@ import { Skeleton } from "../../shared/ui/skeleton";
 import { StatusMark } from "../../shared/ui/status-mark";
 import { SurfaceState } from "../../shared/ui/surface-state";
 import { WorkspaceHeader } from "../../shared/ui/workspace-header";
+import { AdditionalAuthCodeField, useAdditionalAuthRequired } from "../../shared/ui/additional-auth-code";
 import { useTerminalSession } from "./terminal-session";
 
 export function TerminalScreen() {
   const capabilityQuery = useQuery(terminalQueryOptions);
   const [password, setPassword] = useState("");
   const [riskConfirmed, setRiskConfirmed] = useState(false);
+  const [additionalAuthCode, setAdditionalAuthCode] = useState("");
   const [connectOpen, setConnectOpen] = useState(false);
   const hostRef = useRef<HTMLDivElement | null>(null);
   const terminalSession = useTerminalSession();
   const { active, attach, disconnect, message, state } = terminalSession;
+  const additionalAuthRequired = useAdditionalAuthRequired();
 
   useEffect(() => {
     const host = hostRef.current;
@@ -54,8 +57,9 @@ export function TerminalScreen() {
   const capability = capabilityQuery.data;
   async function connect(): Promise<void> {
     if (!capability.available || !riskConfirmed || password.length === 0 || active) return;
-    const connected = await terminalSession.connect(password, riskConfirmed);
+    const connected = await terminalSession.connect(password, riskConfirmed, additionalAuthCode);
     setPassword("");
+    setAdditionalAuthCode("");
     if (connected) setConnectOpen(false);
   }
 
@@ -163,6 +167,7 @@ export function TerminalScreen() {
           value={password}
           onChange={(event) => setPassword(event.target.value)}
         />
+        <AdditionalAuthCodeField id="terminal-totp" value={additionalAuthCode} onChange={setAdditionalAuthCode} disabled={state === "connecting"} />
         <label className="mt-5 flex cursor-pointer items-start gap-3 text-sm leading-6 text-text">
           <input
             type="checkbox"
@@ -174,7 +179,7 @@ export function TerminalScreen() {
         </label>
         <Button
           className="mt-6 w-full"
-          disabled={!riskConfirmed || password.length === 0 || active}
+          disabled={!riskConfirmed || password.length === 0 || (additionalAuthRequired && additionalAuthCode.length !== 6) || active}
           onClick={() => void connect()}
         >
           <KeyRound aria-hidden="true" className="size-4" />

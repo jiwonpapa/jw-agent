@@ -2,7 +2,7 @@
 
 Ubuntu 24.04 LTS 서버의 **범용 서비스 설정·유지보수 작업을 안전하게 수행하는 단일 서버 우선 관리 콘솔**입니다.
 
-현재 단계는 `P2 Safe local operations`입니다. durable safety kernel, Nginx와 PHP 8.3 FPM 설정 G2 작업, Certbot one-shot 경계·인증서 조회·G1 갱신 dry-run, guided 발급의 안전한 CA 실패 경로, 보호 vhost 인증서 연결 G2, non-root terminal G1과 home-scoped SFTP read G0/create·replace G1을 Ubuntu VM에서 검증했습니다. 공인 CA 발급 성공, 범용 SFTP 쓰기와 P2 전체 완료는 아직 주장하지 않습니다.
+현재 단계는 `P2 Safe local operations`입니다. durable safety kernel, Nginx와 PHP 8.3 FPM 설정 G2 작업, Certbot lifecycle, non-root terminal G1, home-scoped SFTP G0/G1과 recovery-only TOTP step-up을 Ubuntu VM에서 검증했습니다. 공인 CA 발급 성공, 범용 SFTP 쓰기와 P2 전체 완료는 아직 주장하지 않습니다.
 
 이 저장소의 P1 기준점은 공개 개발 스냅샷이며 아직 오픈소스 릴리스가 아닙니다. `LICENSE`가 추가되기 전에는 사용·수정·재배포 권한을 부여하지 않으며, 정식 라이선스는 P3 release 준비에서 명시적으로 결정합니다.
 
@@ -17,6 +17,7 @@ Ubuntu 24.04 LTS 서버의 **범용 서비스 설정·유지보수 작업을 안
 - 일반 사용자는 공개 HTTPS URL로 직접 접속하고, loopback·SSH 터널은 장애 복구 경로로만 사용
 - 공개 경로는 Nginx+Certbot 443에서 agentd 전용 Unix socket으로 proxy
 - Linux PAM ID·비밀번호, 허용 Linux group 기반 권한
+- recovery ingress 전용 TOTP 등록·복구 코드 초기화와 exact-plan PAM+TOTP 승인
 - Rust `agentd` 비-root / `authd`·`opsd` root·networkless 분리
 - React + TypeScript + Bun + Vite + Tailwind CSS CLI + shadcn/ui
 - desktop·tablet·mobile 반응형 웹

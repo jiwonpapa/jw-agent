@@ -53,6 +53,10 @@ export type AdditionalAuthProviderStatus =
   components["schemas"]["AdditionalAuthProviderStatus"];
 export type ProblemDetails = components["schemas"]["ProblemDetails"];
 export type ReauthView = components["schemas"]["ReauthView"];
+export type TotpEnrollmentStartView = components["schemas"]["TotpEnrollmentStartView"];
+export type TotpEnrollmentConfirmView = components["schemas"]["TotpEnrollmentConfirmView"];
+export type TotpEnrollmentState = components["schemas"]["TotpEnrollmentState"];
+export type TotpVerificationView = components["schemas"]["TotpVerificationView"];
 export type ObservationStatus = components["schemas"]["ObservationStatus"];
 export type AssuranceLevel = components["schemas"]["AssuranceLevel"];
 export type AssuranceView = components["schemas"]["AssuranceView"];

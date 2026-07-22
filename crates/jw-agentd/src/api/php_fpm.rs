@@ -2,7 +2,8 @@ use axum::Json;
 use axum::extract::State;
 use axum::http::HeaderMap;
 use jw_contracts::{
-    AdditionalAuthPolicy, MANAGED_CONFIG_OPERATION, PhpFpmView, ProblemDetails, Role, Subject,
+    AdditionalAuthPolicy, AdditionalAuthProviderStatus, MANAGED_CONFIG_OPERATION, PhpFpmView,
+    ProblemDetails, Role, Subject,
 };
 
 use crate::php_fpm::{PhpFpmObservationProfile, observe_php_fpm};
@@ -56,7 +57,10 @@ async fn managed_config_mutation_gate_reason(
             "현재 계정은 서비스 설정 변경 권한이 없습니다.",
         ));
     }
-    if additional_auth_policy != AdditionalAuthPolicy::Disabled {
+    if additional_auth_policy != AdditionalAuthPolicy::Disabled
+        && state.store.totp().provider_status(subject.uid).ok()
+            != Some(AdditionalAuthProviderStatus::Ready)
+    {
         return Some(String::from(
             "설정된 추가 인증 수단이 아직 준비되지 않아 변경이 차단되었습니다.",
         ));

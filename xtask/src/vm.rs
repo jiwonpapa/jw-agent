@@ -4,6 +4,7 @@ pub(crate) mod php_fpm;
 pub(crate) mod public_recovery;
 mod receipt;
 pub(crate) mod service_inventory;
+pub(crate) mod totp;
 
 use std::env;
 use std::ffi::{OsStr, OsString};

@@ -59,4 +59,4 @@ Internet에 노출되는 것은 valid TLS의 Nginx 443뿐입니다. 127.0.0.1-on
 
 ## Additional authentication policy
 
-추가 인증은 `disabled | risky_operations | all_mutations` 설정으로 제공합니다. P1 기본은 `disabled`이고 `risky_operations`를 권장합니다. PAM 재인증은 정책과 무관하게 write 승인과 정책 변경에 항상 필요합니다. 공개 root-equivalent 관리에서 password-only 선택은 잔여 위험 경고와 감사 event를 남기며, 정책 완화는 추가 경고를 요구합니다. 첫 provider는 `TOTP/v1`로 Accepted 되었으며 등록·복구·replay 방지는 `docs/90-specs/auth/totp-step-up-v1.md`를 따릅니다. P2 진입은 승인되었고 실제 provider와 mutation enforcement는 safety kernel·secret storage·replay gate 뒤 활성화합니다.
+추가 인증은 `disabled | risky_operations | all_mutations` 설정으로 제공합니다. 기본은 `disabled`이고 `risky_operations`를 권장합니다. PAM 재인증은 정책과 무관하게 write 승인과 정책 변경에 항상 필요합니다. 공개 root-equivalent 관리에서 password-only 선택은 잔여 위험 경고와 감사 event를 남기며, 정책 완화는 추가 경고를 요구합니다. 첫 provider `totp/v1`은 recovery ingress의 admin PAM 뒤에서만 등록·초기화할 수 있고, non-disabled 정책의 typed-operation 승인은 exact-plan PAM claim과 single-use TOTP claim을 원자적으로 소비합니다. Linux PAM·SSH MFA는 변경하지 않으며 console recovery bypass는 제공하지 않습니다. 등록·복구·replay 계약과 VM 증거는 [AUTH-TOTP-STEP-UP-V1](../90-specs/auth/totp-step-up-v1.md)을 따릅니다.
