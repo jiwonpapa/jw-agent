@@ -38,6 +38,7 @@ import type {
   NginxSitesView,
   OperationAcceptedView,
   OperationApprovalRequest,
+  OperationListView,
   OperationReceiptView,
   OperationStageEvidenceView,
   ProblemDetails,
@@ -146,6 +147,14 @@ export async function getNginxSites(signal?: AbortSignal): Promise<NginxSitesVie
 
 export async function getServices(signal?: AbortSignal): Promise<ServicesView> {
   const { data, error, response } = await api.GET("/api/v1/services", {
+    signal: signal ?? null,
+  });
+  if (data !== undefined) return data;
+  throw new ApiError(error, response);
+}
+
+export async function getRecentOperations(signal?: AbortSignal): Promise<OperationListView> {
+  const { data, error, response } = await api.GET("/api/v1/activity", {
     signal: signal ?? null,
   });
   if (data !== undefined) return data;

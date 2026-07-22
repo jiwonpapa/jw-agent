@@ -4,6 +4,22 @@
  */
 
 export interface paths {
+    "/api/v1/activity": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["recent_operations"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/auth/login": {
         parameters: {
             query?: never;
@@ -1138,15 +1154,20 @@ export interface components {
             /** Format: int32 */
             schemaVersion: number;
         };
+        OperationListView: {
+            operations: components["schemas"]["OperationReceiptView"][];
+        };
         OperationReceiptView: {
             actor: components["schemas"]["Subject"];
             afterDigest: string;
             assurance: components["schemas"]["AssuranceView"];
             beforeDigest: string;
+            displayName: string;
             operationId: string;
             operationType: string;
             planHash: string;
             planId: string;
+            recordedAt: string;
             recoveryPath: string[];
             rollbackResult?: string | null;
             /** Format: int32 */
@@ -1212,6 +1233,7 @@ export interface components {
             serviceId: string;
             subState: string;
             support: components["schemas"]["ServiceSupport"];
+            templateId?: string | null;
             unitFileState?: string | null;
             unitName: string;
             visibility: components["schemas"]["ServiceVisibility"];
@@ -1293,6 +1315,44 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    recent_operations: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Recent typed-operation receipts for the current Linux subject */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OperationListView"];
+                };
+            };
+            /** @description Authentication required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Operation ledger unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
     login: {
         parameters: {
             query?: never;

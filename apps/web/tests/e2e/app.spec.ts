@@ -2,6 +2,7 @@ import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page } from "@playwright/test";
 
 import type { OperationReceiptView } from "../../src/shared/api/types";
+import { services } from "./fixtures/service-inventory";
 
 const session = {
   subject: { uid: 1001, username: "operator", role: "admin" },
@@ -152,6 +153,8 @@ const operationReceipt: OperationReceiptView = {
   planId: "plan_fixture",
   planHash,
   actor: session.subject as OperationReceiptView["actor"],
+  displayName: "example.com 비활성화",
+  recordedAt: "2026-07-21T02:12:05Z",
   terminalState: "SUCCEEDED",
   beforeDigest: enabledStateDigest,
   afterDigest: `sha256:${"4".repeat(64)}`,
@@ -556,6 +559,8 @@ const certbotRenewReceipt: OperationReceiptView = {
   planId: certbotRenewPlan.planId,
   planHash: certbotRenewPlan.planHash,
   actor: session.subject as OperationReceiptView["actor"],
+  displayName: "Certbot 인증서 갱신 시험",
+  recordedAt: "2026-07-21T02:12:04Z",
   terminalState: "SUCCEEDED",
   beforeDigest: certificates.inventoryDigest,
   afterDigest: certificates.inventoryDigest,
@@ -697,6 +702,8 @@ async function mockApi(
       });
     }
     if (path === "/api/v1/host") return route.fulfill({ json: host });
+    if (path === "/api/v1/services") return route.fulfill({ json: services });
+    if (path === "/api/v1/activity") return route.fulfill({ json: { operations: [activeReceipt] } });
     if (path === "/api/v1/terminal" && request.method() === "GET") {
       return route.fulfill({ json: operationOptions.terminalFixture ?? terminalCapability });
     }
@@ -915,13 +922,7 @@ test("expired session redirects to login once without nesting returnTo", async (
   expect(pageErrors).toEqual([]);
 });
 
-for (const viewport of [
-  { width: 320, height: 800 },
-  { width: 390, height: 844 },
-  { width: 768, height: 1024 },
-  { width: 1024, height: 768 },
-  { width: 1440, height: 900 },
-]) {
+for (const viewport of [{ width: 320, height: 800 }, { width: 390, height: 844 }, { width: 768, height: 1024 }, { width: 1024, height: 768 }, { width: 1440, height: 900 }]) {
   test(
     `overview reflows at ${String(viewport.width)}x${String(viewport.height)}`,
     async ({ page }) => {
@@ -946,24 +947,21 @@ test("access screen states provider limitation without false protection claim", 
   expect(accessibility.violations.filter((violation) => ["critical", "serious"].includes(violation.impact ?? ""))).toEqual([]);
 });
 
-for (const viewport of [
-  { width: 320, height: 800 },
-  { width: 768, height: 1024 },
-  { width: 1440, height: 900 },
-]) {
+for (const viewport of [{ width: 320, height: 800 }, { width: 768, height: 1024 }, { width: 1440, height: 900 }]) {
   test(
     `terminal keeps G1 approval visible at ${String(viewport.width)}x${String(viewport.height)}`,
     async ({ page }) => {
       await page.setViewportSize(viewport);
       await mockApi(page, true);
       await page.goto("/terminal");
-      await expect(page.getByRole("heading", { name: "비루트 터미널" })).toBeVisible();
+      await expect(page.getByRole("heading", { name: "터미널", exact: true })).toBeVisible();
+      await page.getByRole("button", { name: "터미널 연결" }).click();
       await expect(page.getByText("G1 · 자동 원복 없음")).toBeVisible();
       await expect(page.getByText(/잘못된 명령으로 서비스나 데이터가 손상될 수 있음/)).toBeVisible();
       const connect = page.getByRole("button", { name: "재인증 후 연결" });
       await page.getByLabel("Linux 비밀번호 재확인").fill("fixture-terminal-password");
       await expect(connect).toBeDisabled();
-      await page.getByLabel(/터미널 명령은 자동 원복되지 않으며/).check();
+      await page.getByLabel(/명령은 자동 원복되지 않으며/).check();
       await expect(connect).toBeEnabled();
       const hasOverflow = await page.evaluate(
         () => document.documentElement.scrollWidth > document.documentElement.clientWidth,
@@ -988,8 +986,9 @@ test("terminal ticket keeps password out of URL and browser storage", async ({ p
     },
   });
   await page.goto("/terminal");
+  await page.getByRole("button", { name: "터미널 연결" }).click();
   await page.getByLabel("Linux 비밀번호 재확인").fill("fixture-terminal-password");
-  await page.getByLabel(/터미널 명령은 자동 원복되지 않으며/).check();
+  await page.getByLabel(/명령은 자동 원복되지 않으며/).check();
   await page.getByRole("button", { name: "재인증 후 연결" }).click();
   await expect(page.getByText(/세션 01234567/)).toBeVisible();
   expect(ticketBody).toEqual({
@@ -1026,13 +1025,13 @@ for (const viewport of [
       onFileList: (body) => { listBody = body; },
     });
     await page.goto("/files");
-    await expect(page.getByRole("heading", { name: "홈 파일" })).toBeVisible();
-    await expect(page.getByText("G0 · 변경 없음").first()).toBeVisible();
-    await expect(page.getByText(/업로드·생성·편집·삭제·이동·권한 변경/).first()).toBeVisible();
-    const open = page.getByRole("button", { name: "재인증 후 열기" });
+    await expect(page.getByRole("heading", { name: "SFTP", exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "SFTP 연결" }).click();
+    await expect(page.getByText("G0 조회 · 쓰기는 별도 G1")).toBeVisible();
+    const open = page.getByRole("button", { name: "재인증 후 홈 열기" });
     await page.getByLabel("Linux 비밀번호 재확인").fill("fixture-file-password");
     await expect(open).toBeDisabled();
-    await page.getByLabel(/파일 생성·교체는 별도 G1 계획/).check();
+    await page.getByLabel(/쓰기는 별도 계획과 재인증/).check();
     await open.click();
     await expect(page.getByText("notes.txt")).toBeVisible();
     await page.getByRole("button", { name: "notes.txt 텍스트 보기", exact: true }).click();
@@ -1068,25 +1067,26 @@ test("G1 text save requires an exact plan and keeps secrets out of navigation an
     },
   });
   await page.goto("/files");
+  await page.getByRole("button", { name: "SFTP 연결" }).click();
   await page.getByLabel("Linux 비밀번호 재확인").fill("fixture-file-password");
-  await page.getByLabel(/파일 생성·교체는 별도 G1 계획/).check();
-  await page.getByRole("button", { name: "재인증 후 열기" }).click();
-  await expect(page.getByText("G1 · 자동 원복 없음")).toBeVisible();
+  await page.getByLabel(/쓰기는 별도 계획과 재인증/).check();
+  await page.getByRole("button", { name: "재인증 후 홈 열기" }).click();
   await page.getByRole("button", { name: "notes.txt 텍스트 보기", exact: true }).click();
-  await page.getByRole("button", { name: "편집 준비" }).click();
-  await page.getByLabel("UTF-8 내용 편집").fill("changed evidence\n");
+  await page.getByRole("button", { name: "편집" }).click();
+  await expect(page.getByText("G1 · 자동 원복 없음")).toBeVisible();
+  await page.getByLabel("UTF-8 내용").fill("changed evidence\n");
 
   const planButton = page.getByRole("button", { name: "재인증 후 계획 만들기" });
   await page.getByLabel("Linux 비밀번호 재확인").fill("fixture-upload-password");
   await expect(planButton).toBeDisabled();
   await page.getByLabel(/자동 원복되지 않으며 실패 시 SSH/).check();
   await expect(planButton).toBeDisabled();
-  await page.getByLabel(/기존 파일을 교체합니다/).check();
+  await page.getByRole("checkbox", { name: /기존 파일을 교체하며 이전 내용의 자동 백업이 없음을 확인했습니다/ }).check();
   await expect(planButton).toBeEnabled();
   await planButton.click();
 
   await expect(page.getByText("적용 직전 계획")).toBeVisible();
-  await expect(page.getByText(/적용 후 이전 파일 자동 원복은 불가능/)).toBeVisible();
+  await expect(page.getByText(/이전 파일 자동 원복은 불가능/)).toBeVisible();
   expect(uploadRequests).toBe(0);
   expect(planBody).toMatchObject({
     sessionToken: "F".repeat(43),

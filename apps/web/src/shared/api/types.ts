@@ -40,6 +40,7 @@ export type ManagedConfigApprovalRequest =
 export type OperationApprovalRequest = components["schemas"]["OperationApprovalRequest"];
 export type OperationAcceptedView = components["schemas"]["OperationAcceptedView"];
 export type OperationReceiptView = components["schemas"]["OperationReceiptView"];
+export type OperationListView = components["schemas"]["OperationListView"];
 export type OperationStage = components["schemas"]["OperationStage"];
 export type OperationStageEvidenceView =
   components["schemas"]["OperationStageEvidenceView"];

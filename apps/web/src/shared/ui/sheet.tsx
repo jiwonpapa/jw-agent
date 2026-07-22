@@ -11,6 +11,7 @@ interface SheetProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   side?: "left" | "right";
+  size?: "default" | "wide";
 }
 
 export function Sheet({
@@ -20,6 +21,7 @@ export function Sheet({
   open,
   onOpenChange,
   side = "left",
+  size = "default",
 }: SheetProps) {
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
@@ -27,7 +29,8 @@ export function Sheet({
         <Dialog.Overlay className="fixed inset-0 z-40 animate-overlay-in bg-text/35 backdrop-blur-sm" />
         <Dialog.Content
           className={cn(
-            "fixed inset-y-0 z-50 w-full max-w-sm animate-sheet-in overflow-y-auto border-border bg-surface p-5 shadow-xl",
+            "fixed inset-y-0 z-50 w-full animate-sheet-in overflow-y-auto border-border bg-surface p-5 shadow-xl",
+            size === "wide" ? "max-w-2xl" : "max-w-sm",
             side === "left" ? "left-0 border-r" : "right-0 border-l",
           )}
         >

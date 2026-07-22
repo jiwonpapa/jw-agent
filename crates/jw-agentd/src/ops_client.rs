@@ -8,8 +8,9 @@ use jw_contracts::{
     CertbotRenewTestPlanRequest, CertbotRenewTestPlanView, CertificateInventoryView,
     IPC_PROTOCOL_VERSION, ManagedConfigApprovalIntent, ManagedConfigPlanRequest,
     ManagedConfigPlanView, ManagedConfigResourceView, NginxSiteStatePlanRequest,
-    NginxSiteStatePlanView, OPS_FRAME_MAX_BYTES, OperationReceiptView, OpsCapabilityResponse,
-    OpsRequest, OpsRequestBody, OpsResponse, OpsResponseBody, Subject, decode_frame, encode_frame,
+    NginxSiteStatePlanView, OPS_FRAME_MAX_BYTES, OperationListView, OperationReceiptView,
+    OpsCapabilityResponse, OpsRequest, OpsRequestBody, OpsResponse, OpsResponseBody, Subject,
+    decode_frame, encode_frame,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixStream;
@@ -120,6 +121,10 @@ pub trait OpsBroker: Send + Sync {
         actor: Subject,
         operation_id: String,
     ) -> OpsFuture<'a, OperationReceiptView>;
+
+    fn recent_operations<'a>(&'a self, _actor: Subject) -> OpsFuture<'a, OperationListView> {
+        Box::pin(async move { Err(OpsBrokerError::Unavailable) })
+    }
 
     fn execute_operation<'a>(
         &'a self,
@@ -427,6 +432,18 @@ impl OpsBroker for UdsOpsBroker {
                 return Err(OpsBrokerError::InvalidResponse);
             };
             Ok(receipt)
+        })
+    }
+
+    fn recent_operations<'a>(&'a self, actor: Subject) -> OpsFuture<'a, OperationListView> {
+        Box::pin(async move {
+            let body = self
+                .request(OpsRequestBody::RecentOperations { actor })
+                .await?;
+            let OpsResponseBody::RecentOperations(operations) = body else {
+                return Err(OpsBrokerError::InvalidResponse);
+            };
+            Ok(operations)
         })
     }
 

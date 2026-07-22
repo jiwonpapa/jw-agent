@@ -45,7 +45,7 @@ Last reviewed: 2026-07-22
 `GET /api/v1/services`는 다음을 반환합니다.
 
 - `observedAt`, `status`, `templateProfile`, `truncated`
-- `serviceId`, `unitName`, `displayName`, `purpose`
+- `serviceId`, catalog-derived optional `templateId`, `unitName`, `displayName`, `purpose`
 - `category`, `runtimeState`, `activeState`, `subState`, `unitFileState`
 - `visibility`, `support`, `readOnly`, `hiddenByDefault`
 
@@ -58,7 +58,9 @@ Last reviewed: 2026-07-22
 - 상단은 전체·실행·실패·중지 개수와 관찰 시각만 표시합니다.
 - 본문은 `주요 서비스 → 발견된 서비스 → 시스템 서비스` 순서의 한 목록을 사용합니다.
 - 시스템 서비스는 기본 접기지만 실패 항목은 주요 Attention 영역에도 표시합니다.
-- 각 행은 쉬운 역할 설명, unit, 실행·자동시작 상태, 지원 수준을 표시합니다.
+- 주요 서비스는 같은 `templateId`의 service·timer·instance를 하나의 서비스 가족으로 묶고,
+  쉬운 역할 설명, child unit, 실행·자동시작 상태와 지원 수준을 표시합니다.
+- 주요 서비스 가족은 desktop 다열·mobile 한 열의 작업 카드로 표시하고, 시스템 unit은 밀집 목록으로 유지합니다.
 - `관리 지원`, `알려진 읽기 전용`, `발견된 읽기 전용`, `시스템 내부`를 혼동하지 않습니다.
 - mobile 320px에서 상태·역할·지원 수준을 생략하지 않고 한 열로 reflow합니다.
 
@@ -78,4 +80,3 @@ Last reviewed: 2026-07-22
 - OpenAPI drift, web type/lint/unit/build
 - 기존 `p2-browser` lane의 route·responsive·accessibility scenario
 - 기존 `p2-vm` lane의 installed package와 실제 systemd inventory scenario
-

@@ -434,6 +434,8 @@ pub struct OperationReceiptView {
     pub schema_version: u16,
     pub operation_type: String,
     pub operation_id: String,
+    pub display_name: String,
+    pub recorded_at: String,
     pub plan_id: String,
     pub plan_hash: String,
     pub actor: Subject,
@@ -444,6 +446,12 @@ pub struct OperationReceiptView {
     pub assurance: AssuranceView,
     pub rollback_result: Option<String>,
     pub recovery_path: Vec<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct OperationListView {
+    pub operations: Vec<OperationReceiptView>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, ToSchema)]
@@ -548,6 +556,9 @@ pub enum OpsRequestBody {
         actor: Subject,
         operation_id: String,
     },
+    RecentOperations {
+        actor: Subject,
+    },
 }
 
 impl OpsRequest {
@@ -597,6 +608,7 @@ impl OpsRequest {
         match &self.body {
             OpsRequestBody::Capabilities => Ok(()),
             OpsRequestBody::CertificateInventory { .. } => Ok(()),
+            OpsRequestBody::RecentOperations { .. } => Ok(()),
             OpsRequestBody::PlanCertbotIssue { plan, .. } => plan.validate(now_unix_ms),
             OpsRequestBody::PlanCertbotRenewTest { plan, .. } => plan.validate(),
             OpsRequestBody::PlanCertbotAttach { plan, .. } => plan.validate(),
@@ -677,6 +689,7 @@ pub enum OpsResponseBody {
     NginxSiteStatePlan(NginxSiteStatePlanView),
     ManagedConfigPlan(ManagedConfigPlanView),
     OperationReceipt(OperationReceiptView),
+    RecentOperations(OperationListView),
     Rejected(OpsRejectedResponse),
 }
 

@@ -9,6 +9,44 @@
     "version": "0.2.0"
   },
   "paths": {
+    "/api/v1/activity": {
+      "get": {
+        "tags": [],
+        "operationId": "recent_operations",
+        "responses": {
+          "200": {
+            "description": "Recent typed-operation receipts for the current Linux subject",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperationListView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Operation ledger unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/auth/login": {
       "post": {
         "tags": [],
@@ -4218,12 +4256,28 @@
         },
         "additionalProperties": false
       },
+      "OperationListView": {
+        "type": "object",
+        "required": [
+          "operations"
+        ],
+        "properties": {
+          "operations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OperationReceiptView"
+            }
+          }
+        }
+      },
       "OperationReceiptView": {
         "type": "object",
         "required": [
           "schemaVersion",
           "operationType",
           "operationId",
+          "displayName",
+          "recordedAt",
           "planId",
           "planHash",
           "actor",
@@ -4247,6 +4301,9 @@
           "beforeDigest": {
             "type": "string"
           },
+          "displayName": {
+            "type": "string"
+          },
           "operationId": {
             "type": "string"
           },
@@ -4257,6 +4314,9 @@
             "type": "string"
           },
           "planId": {
+            "type": "string"
+          },
+          "recordedAt": {
             "type": "string"
           },
           "recoveryPath": {
@@ -4536,6 +4596,12 @@
           },
           "support": {
             "$ref": "#/components/schemas/ServiceSupport"
+          },
+          "templateId": {
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "unitFileState": {
             "type": [

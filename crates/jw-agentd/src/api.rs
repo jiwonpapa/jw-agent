@@ -37,7 +37,7 @@ use jw_contracts::{
     LoginRequest, MANAGED_CONFIG_OPERATION, ManagedConfigApprovalRequest, ManagedConfigPlanRequest,
     ManagedConfigPlanView, ManagedConfigResourceView, NGINX_SITE_STATE_OPERATION,
     NginxSiteStatePlanRequest, NginxSiteStatePlanView, NginxSitesView, ObservationStatus,
-    OperationAcceptedView, OperationApprovalRequest, OperationReceiptView,
+    OperationAcceptedView, OperationApprovalRequest, OperationListView, OperationReceiptView,
     OperationStageEvidenceView, ProblemDetails, ReauthPurpose, ReauthRequest, ReauthView, Role,
     RollbackSupport, ServiceAction, ServiceCategory, ServiceRuntimeState, ServiceSummary,
     ServiceSupport, ServiceVisibility, ServicesView, SessionView, Subject,
@@ -60,6 +60,9 @@ use crate::terminal::{
 };
 use crate::terminal_session::run_terminal;
 use crate::{AgentConfig, AuthBroker, OpsBroker, SessionStore};
+
+mod activity;
+use activity::{__path_recent_operations, recent_operations};
 
 const API_BODY_MAX_BYTES: usize = 64 * 1_024;
 const CLIENT_ADDRESS_HEADER: &str = "x-jw-client-address";
@@ -147,6 +150,7 @@ impl AppState {
         approve_managed_config,
         operation_events,
         operation_receipt,
+        recent_operations,
         terminal_capability,
         issue_terminal_ticket,
         file_capability,
@@ -199,6 +203,7 @@ impl AppState {
         OperationAcceptedView,
         OperationApprovalRequest,
         OperationReceiptView,
+        OperationListView,
         jw_contracts::OperationStage,
         jw_contracts::OperationStageEvidenceView,
         AssuranceLevel,
@@ -323,6 +328,7 @@ pub fn build_router(state: AppState) -> Router {
             "/api/v1/operations/{operation_id}/events",
             get(operation_events),
         )
+        .route("/api/v1/activity", get(recent_operations))
         .route("/api/v1/operations/{operation_id}", get(operation_receipt))
         .route("/api/v1/integrations", get(integrations))
         .route("/api/v1/settings/access", get(access_settings))
@@ -2911,6 +2917,8 @@ mod tests {
         AppState, AuthLimiter, login, session_cookie, validate_request_boundary, websocket_ticket,
     };
 
+    mod websocket_contract_tests;
+
     struct StaticAuth;
     struct StaticOps;
 
@@ -3254,28 +3262,5 @@ mod tests {
         assert_eq!(rate_problem.status, StatusCode::TOO_MANY_REQUESTS);
         drop(state);
         cleanup_database(&path)
-    }
-
-    #[test]
-    fn terminal_websocket_ticket_is_header_only_and_single_value() -> Result<(), String> {
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            "sec-websocket-protocol",
-            HeaderValue::from_static(
-                "jw-terminal-v1, ticket.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
-            ),
-        );
-        let ticket = websocket_ticket(&headers)
-            .map_err(|_| String::from("valid terminal protocol rejected"))?;
-        assert_eq!(ticket.len(), 43);
-
-        headers.insert(
-            "sec-websocket-protocol",
-            HeaderValue::from_static(
-                "jw-terminal-v1, ticket.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA, ticket.BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
-            ),
-        );
-        assert!(websocket_ticket(&headers).is_err());
-        Ok(())
     }
 }

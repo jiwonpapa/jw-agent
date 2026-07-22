@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { AlertTriangle, ListFilter, ServerCog } from "lucide-react";
+import { AlertTriangle, ListFilter, Search, ServerCog } from "lucide-react";
 import { useState } from "react";
 
 import type { ServiceSummary } from "../../shared/api/types";
@@ -11,12 +11,13 @@ import { Skeleton } from "../../shared/ui/skeleton";
 import { StatusMark } from "../../shared/ui/status-mark";
 import { SurfaceState } from "../../shared/ui/surface-state";
 import { WorkspaceHeader } from "../../shared/ui/workspace-header";
-import { ServiceList, ServiceRow } from "./service-list";
+import { PrimaryServiceGrid, ServiceList, ServiceRow } from "./service-list";
 import { SERVICE_FILTERS, matchesFilter, type ServiceFilter } from "./service-presenter";
 
 export function ServicesScreen() {
   const inventory = useQuery(servicesQueryOptions);
   const [filter, setFilter] = useState<ServiceFilter>("all");
+  const [systemSearch, setSystemSearch] = useState("");
   const services = inventory.data?.services ?? [];
   const filtered = services.filter((service) => matchesFilter(service, filter));
   const primary = filtered.filter((service) => service.visibility === "primary");
@@ -58,19 +59,18 @@ export function ServicesScreen() {
           <InventorySummary services={services} partial={inventory.data.status === "partial"} />
           {failed.length > 0 ? <FailureNotice services={failed} /> : null}
           <FilterBar value={filter} onChange={setFilter} />
-          <ServiceList
-            title="주요 서비스"
-            description="템플릿으로 역할과 지원 범위를 확인한 운영 대상입니다."
-            services={primary}
-            emptyLabel="현재 필터에 해당하는 주요 서비스가 없습니다."
-          />
+          <section className="border-t border-border py-7" aria-labelledby="primary-services-heading">
+            <h2 id="primary-services-heading" className="text-sm font-semibold text-text">주요 서비스</h2>
+            <p className="mt-1 text-sm text-muted">같은 서비스의 timer·instance는 한 카드 안에서 확인합니다.</p>
+            <PrimaryServiceGrid services={primary} />
+          </section>
           <ServiceList
             title="발견된 서비스"
             description="서버 관리자가 추가한 systemd unit이며 JW Agent는 역할을 추측하지 않습니다."
             services={discovered}
             emptyLabel="발견된 사용자 정의 서비스가 없습니다."
           />
-          <SystemServices services={system} />
+          <SystemServices services={system} search={systemSearch} onSearch={setSystemSearch} />
           <p className="border-t border-border pt-5 text-xs text-muted">
             템플릿 {inventory.data.templateProfile} · 최대 512개 · 모든 항목은 G0 읽기 전용
           </p>
@@ -151,7 +151,15 @@ function FilterBar({ value, onChange }: { value: ServiceFilter; onChange: (value
   );
 }
 
-function SystemServices({ services }: { services: ServiceSummary[] }) {
+function SystemServices({ services, search, onSearch }: {
+  services: ServiceSummary[];
+  search: string;
+  onSearch: (value: string) => void;
+}) {
+  const normalized = search.trim().toLocaleLowerCase("ko-KR");
+  const visible = normalized.length === 0
+    ? services
+    : services.filter((service) => `${service.displayName} ${service.unitName} ${service.purpose}`.toLocaleLowerCase("ko-KR").includes(normalized));
   return (
     <section className="border-t border-border py-7" aria-labelledby="system-services-heading">
       <details className="group">
@@ -166,12 +174,23 @@ function SystemServices({ services }: { services: ServiceSummary[] }) {
           <span className="text-sm font-medium text-action group-open:hidden">펼치기</span>
           <span className="hidden text-sm font-medium text-action group-open:inline">접기</span>
         </summary>
-        {services.length === 0 ? (
+        <label className="mt-4 flex max-w-md items-center gap-2 rounded-control border border-border bg-surface px-3">
+          <Search aria-hidden="true" className="size-4 text-muted" />
+          <span className="sr-only">시스템 서비스 검색</span>
+          <input
+            type="search"
+            value={search}
+            onChange={(event) => onSearch(event.target.value)}
+            placeholder="unit 이름 검색"
+            className="min-h-11 min-w-0 flex-1 bg-transparent text-sm text-text placeholder:text-muted"
+          />
+        </label>
+        {visible.length === 0 ? (
           <p className="mt-4 border-y border-border py-5 text-sm text-muted">현재 필터에 해당하는 시스템 서비스가 없습니다.</p>
         ) : (
-          <ul className="mt-5 divide-y divide-border border-y border-border">
-            {services.map((service) => (
-              <li key={service.serviceId}><ServiceRow service={service} /></li>
+          <ul className="mt-5 grid gap-px overflow-hidden rounded-panel border border-border bg-border md:grid-cols-2 2xl:grid-cols-3">
+            {visible.map((service) => (
+              <li key={service.serviceId} className="min-w-0 bg-surface"><ServiceRow service={service} compact /></li>
             ))}
           </ul>
         )}

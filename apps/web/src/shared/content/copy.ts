@@ -3,16 +3,34 @@ export const PRODUCT = {
   edition: "Single Server",
 } as const;
 
-export const NAV_ITEMS = [
-  { href: "/overview", label: "개요", key: "overview" },
-  { href: "/services", label: "서비스", key: "services" },
-  { href: "/services/nginx", label: "Nginx", key: "nginx" },
-  { href: "/certificates", label: "인증서", key: "certificates" },
-  { href: "/integrations", label: "통합 카탈로그", key: "integrations" },
-  { href: "/terminal", label: "터미널", key: "terminal" },
-  { href: "/files", label: "파일", key: "files" },
-  { href: "/settings/access", label: "접속 및 인증", key: "access" },
+export const NAV_GROUPS = [
+  {
+    label: "서버",
+    items: [
+      { href: "/overview", label: "개요", key: "overview" },
+      { href: "/services", label: "서비스", key: "services" },
+    ],
+  },
+  {
+    label: "운영 도구",
+    items: [
+      { href: "/terminal", label: "터미널", key: "terminal" },
+      { href: "/files", label: "SFTP", key: "files" },
+    ],
+  },
+  {
+    label: "관리",
+    items: [
+      { href: "/settings/access", label: "접속 및 보안", key: "access" },
+    ],
+  },
 ] as const;
+
+export const CATALOG_NAV_ITEM = {
+  href: "/integrations",
+  label: "통합 카탈로그",
+  key: "integrations",
+} as const;
 
 export const AUTH_COPY = {
   title: "서버에 로그인",

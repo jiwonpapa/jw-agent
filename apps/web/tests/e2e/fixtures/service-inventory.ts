@@ -5,6 +5,7 @@ export const services = {
   services: [
     {
       serviceId: "svc_nginx",
+      templateId: "nginx",
       unitName: "nginx.service",
       displayName: "Nginx",
       purpose: "웹 요청을 처리하고 다른 애플리케이션으로 전달하는 웹 서버·리버스 프록시입니다.",
@@ -20,6 +21,7 @@ export const services = {
     },
     {
       serviceId: "svc_php",
+      templateId: "php-fpm",
       unitName: "php8.3-fpm.service",
       displayName: "PHP-FPM",
       purpose: "Nginx나 Apache에서 전달된 PHP 애플리케이션 코드를 실행합니다.",
@@ -35,6 +37,7 @@ export const services = {
     },
     {
       serviceId: "svc_acme_worker",
+      templateId: null,
       unitName: "acme-worker.service",
       displayName: "acme-worker",
       purpose: "고객 애플리케이션 작업 처리기",
@@ -50,6 +53,7 @@ export const services = {
     },
     {
       serviceId: "svc_systemd_resolved",
+      templateId: null,
       unitName: "systemd-resolved.service",
       displayName: "systemd-resolved.service",
       purpose: "Network Name Resolution",

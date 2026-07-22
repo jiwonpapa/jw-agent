@@ -42,3 +42,19 @@ export function matchesFilter(service: ServiceSummary, filter: ServiceFilter): b
   }
   return service.runtimeState === filter;
 }
+
+export function aggregateServiceState(services: ServiceSummary[]): ServiceRuntimeState {
+  const priority: ServiceRuntimeState[] = [
+    "failed",
+    "transitioning",
+    "running",
+    "active",
+    "stopped",
+    "unknown",
+  ];
+  return priority.find((state) => services.some((service) => service.runtimeState === state)) ?? "unknown";
+}
+
+export function serviceFamilyKey(service: ServiceSummary): string {
+  return service.templateId ?? service.serviceId;
+}

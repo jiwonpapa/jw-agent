@@ -13,6 +13,7 @@ import {
   Save,
   ShieldCheck,
   TriangleAlert,
+  Upload,
 } from "lucide-react";
 import { type ChangeEvent, useEffect, useRef, useState } from "react";
 
@@ -39,6 +40,7 @@ import { Button } from "../../shared/ui/button";
 import { cn } from "../../shared/ui/cn";
 import { Input } from "../../shared/ui/input";
 import { Skeleton } from "../../shared/ui/skeleton";
+import { Sheet } from "../../shared/ui/sheet";
 import { StatusMark } from "../../shared/ui/status-mark";
 import { SurfaceState } from "../../shared/ui/surface-state";
 import { WorkspaceHeader } from "../../shared/ui/workspace-header";
@@ -64,6 +66,8 @@ export function FilesScreen() {
   const [uploadPassword, setUploadPassword] = useState("");
   const [writeRiskConfirmed, setWriteRiskConfirmed] = useState(false);
   const [overwriteConfirmed, setOverwriteConfirmed] = useState(false);
+  const [connectOpen, setConnectOpen] = useState(false);
+  const [writeOpen, setWriteOpen] = useState(false);
 
   useEffect(() => {
     sessionRef.current = session;
@@ -106,6 +110,7 @@ export function FilesScreen() {
     try {
       const issued = await createFileSession({ password, readOnlyConfirmed: true });
       setPassword("");
+      setConnectOpen(false);
       setSession(issued);
       const root = await listFiles({ sessionToken: issued.sessionToken, path: "" });
       setListing(root);
@@ -202,6 +207,7 @@ export function FilesScreen() {
     setUploadPassword("");
     setWriteRiskConfirmed(false);
     setOverwriteConfirmed(false);
+    setWriteOpen(false);
   }
 
   async function chooseUpload(event: ChangeEvent<HTMLInputElement>): Promise<void> {
@@ -218,6 +224,7 @@ export function FilesScreen() {
       const path = joinFilePath(listing.path, file.name);
       const targetExists = listing.entries.some((entry) => entry.path === path);
       setWriteDraft({ kind: "file", path, label: file.name, bytes, targetExists });
+      setWriteOpen(true);
       setUploadPlan(null);
       setUploadPassword("");
       setWriteRiskConfirmed(false);
@@ -240,6 +247,7 @@ export function FilesScreen() {
       lineEnding: preview.lineEnding,
       targetExists: true,
     });
+    setWriteOpen(true);
     setUploadPlan(null);
     setUploadPassword("");
     setWriteRiskConfirmed(false);
@@ -317,35 +325,34 @@ export function FilesScreen() {
     <div className="animate-state-in">
       <WorkspaceHeader
         eyebrow="Manual access / OpenSSH SFTP"
-        title="홈 파일"
-        description="홈 조회는 G0, 일반 파일 생성·교체는 별도 재인증이 필요한 G1으로 분리합니다."
-        action={<StatusMark label="G0 조회 · G1 쓰기" tone="warning" />}
-      />
-
-      <section className="py-7" aria-labelledby="file-boundary-heading">
-        <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_19rem]">
-          <div>
-            <div className="flex items-start gap-3">
-              <ShieldCheck aria-hidden="true" className="mt-0.5 size-5 shrink-0 text-success" />
-              <div>
-                <h2 id="file-boundary-heading" className="text-sm font-semibold text-text">읽기 경계</h2>
-                <p className="mt-1 text-sm leading-6 text-muted">
-                  {capability.username} 계정의 {capability.rootLabel} 아래만 허용합니다. 링크가 홈 밖을 가리키면
-                  서버가 거부합니다.
-                </p>
-              </div>
+        title="SFTP"
+        description={`${capability.username} 계정의 홈 디렉터리를 탐색하고 파일을 전송합니다.`}
+        action={
+          session === null ? (
+            <Button disabled={!capability.available} onClick={() => setConnectOpen(true)}>
+              <KeyRound aria-hidden="true" className="size-4" />홈에 연결
+            </Button>
+          ) : (
+            <div className="flex flex-wrap gap-2">
+              <label className={cn(
+                "inline-flex min-h-10 cursor-pointer items-center justify-center gap-2 rounded-control bg-action px-3 text-sm font-semibold text-white",
+                !capability.uploadAssurance.operationAvailable && "pointer-events-none opacity-50",
+              )}>
+                <Upload aria-hidden="true" className="size-4" />업로드
+                <input
+                  className="sr-only"
+                  type="file"
+                  disabled={!capability.uploadAssurance.operationAvailable || state === "loading"}
+                  onChange={(event) => void chooseUpload(event)}
+                />
+              </label>
+              <Button variant="secondary" onClick={() => void disconnect()}>
+                <CircleStop aria-hidden="true" className="size-4" />세션 종료
+              </Button>
             </div>
-            <div className="mt-5"><AssuranceDetails assurance={capability.assurance} /></div>
-          </div>
-          <dl className="divide-y divide-border border-y border-border text-sm">
-            <Limit label="Idle 종료" value={`${String(capability.limits.idleTimeoutSeconds / 60)}분`} />
-            <Limit label="최대 세션" value={`${String(capability.limits.maxLifetimeSeconds / 60)}분`} />
-            <Limit label="텍스트 미리보기" value={formatFileBytes(capability.limits.maxTextBytes)} />
-            <Limit label="다운로드" value={formatFileBytes(capability.limits.maxDownloadBytes)} />
-            <Limit label="원자 업로드" value={formatFileBytes(capability.limits.maxUploadBytes)} />
-          </dl>
-        </div>
-      </section>
+          )
+        }
+      />
 
       {!capability.available ? (
         <SurfaceState
@@ -353,214 +360,72 @@ export function FilesScreen() {
           title="파일 세션을 열 수 없습니다"
           description={capability.reason ?? "OpenSSH와 계정 권한을 확인해 주세요."}
         />
-      ) : session === null ? (
-        <section className="border-t border-border py-7" aria-labelledby="file-session-heading">
-          <h2 id="file-session-heading" className="text-sm font-semibold text-text">제한 시간 세션</h2>
-          <p className="mt-1 text-sm text-muted">비밀번호는 OpenSSH 인증 직후 폐기되며 파일 경로와 내용은 기록하지 않습니다.</p>
-          <div className="mt-5 max-w-2xl border-l-2 border-success bg-success/5 px-4 py-4">
-            <label htmlFor="file-password" className="text-sm font-semibold text-text">Linux 비밀번호 재확인</label>
-            <Input
-              id="file-password"
-              className="mt-2"
-              type="password"
-              autoComplete="current-password"
-              value={password}
-              onChange={(event) => setPassword(event.target.value)}
-            />
-            <label className="mt-4 flex cursor-pointer items-start gap-3 text-sm leading-6 text-text">
-              <input
-                type="checkbox"
-                className="mt-1 size-4 shrink-0 accent-action"
-                checked={confirmed}
-                onChange={(event) => setConfirmed(event.target.checked)}
-              />
-              <span>이 세션의 기본 조회는 G0이며, 파일 생성·교체는 별도 G1 계획·PAM 재인증 없이는 실행되지 않음을 확인했습니다.</span>
-            </label>
-            <Button className="mt-4" disabled={!confirmed || password.length === 0 || state === "connecting"} onClick={() => void connect()}>
-              <KeyRound aria-hidden="true" className="size-4" />
-              {state === "connecting" ? "OpenSSH 확인 중" : "재인증 후 열기"}
-            </Button>
+      ) : session === null || listing === null ? (
+        <section className="grid min-h-[32rem] place-content-center justify-items-center gap-4 py-8 text-center">
+          <div className="grid size-16 place-content-center rounded-full bg-action/10 text-action">
+            <FolderOpen aria-hidden="true" className="size-8" />
           </div>
+          <div>
+            <h2 className="text-lg font-semibold text-text">홈 디렉터리에 연결하세요</h2>
+            <p className="mt-2 max-w-md text-sm leading-6 text-muted">연결 후 폴더 트리, 파일 목록, 텍스트 미리보기를 한 화면에서 사용할 수 있습니다.</p>
+          </div>
+          <Button onClick={() => setConnectOpen(true)}>
+            <KeyRound aria-hidden="true" className="size-4" />SFTP 연결
+          </Button>
         </section>
       ) : (
-        <section className="border-t border-border py-7" aria-labelledby="file-browser-heading">
-          <div className="flex flex-wrap items-center justify-between gap-3">
+        <section className="py-5" aria-labelledby="file-browser-heading">
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
             <div>
-              <h2 id="file-browser-heading" className="text-sm font-semibold text-text">파일 탐색</h2>
-              <p className="mt-1 text-sm text-muted">세션 토큰은 이 화면의 메모리에만 유지됩니다.</p>
+              <h2 id="file-browser-heading" className="text-sm font-semibold text-text">{capability.rootLabel}</h2>
+              <p className="mt-1 text-xs text-muted">홈 경계 · G0 조회</p>
             </div>
-            <Button variant="secondary" onClick={() => void disconnect()}>
-              <CircleStop aria-hidden="true" className="size-4" />세션 종료
-            </Button>
+            <StatusMark label={state === "loading" ? "불러오는 중" : "SFTP 연결됨"} tone={state === "error" ? "danger" : "success"} />
           </div>
 
-          <div className="mt-5 border-l-2 border-warning bg-warning/5 px-4 py-5" aria-labelledby="file-upload-heading">
-            <div className="flex flex-wrap items-start justify-between gap-3">
-              <div>
-                <h3 id="file-upload-heading" className="text-sm font-semibold text-text">G1 원자 업로드·텍스트 저장</h3>
-                <p className="mt-1 text-sm leading-6 text-muted">
-                  같은 디렉터리 임시파일에 쓴 뒤 fsync와 원자 교체를 사용하지만, 이전 파일 자동 백업·원복은 제공하지 않습니다.
-                </p>
+          <div className="grid min-h-[35rem] min-w-0 overflow-hidden rounded-panel border border-border bg-surface lg:grid-cols-[13rem_minmax(20rem,0.9fr)_minmax(0,1.1fr)]">
+            <DirectoryTree listing={listing} disabled={state === "loading"} onOpen={openDirectory} />
+            <div className="min-w-0 border-border lg:border-l">
+              <Breadcrumb path={listing.path} onOpen={(path) => void openDirectory(path)} />
+              <div className="divide-y divide-border" role="list" aria-label="SFTP 파일 목록">
+                {listing.entries.length === 0 ? (
+                  <p className="px-4 py-12 text-center text-sm text-muted">이 디렉터리는 비어 있습니다.</p>
+                ) : listing.entries.map((entry) => (
+                  <FileRow
+                    key={entry.path}
+                    entry={entry}
+                    disabled={state === "loading"}
+                    onDirectory={openDirectory}
+                    onPreview={openPreview}
+                    onDownload={saveDownload}
+                  />
+                ))}
               </div>
-              <StatusMark label="G1 · 자동 원복 없음" tone="warning" />
+              {listing.truncated ? <p className="border-t border-warning bg-warning/5 px-4 py-3 text-xs text-warning">500개까지만 표시했습니다.</p> : null}
             </div>
-            <div className="mt-4"><AssuranceDetails assurance={capability.uploadAssurance} /></div>
 
-            {writeDraft === null ? (
-              <div className="mt-5 max-w-xl">
-                <label htmlFor="file-upload-input" className="text-sm font-semibold text-text">현재 디렉터리에 파일 선택</label>
-                <Input
-                  id="file-upload-input"
-                  className="mt-2"
-                  type="file"
-                  disabled={!capability.uploadAssurance.operationAvailable || state === "loading"}
-                  onChange={(event) => void chooseUpload(event)}
-                />
-                <p className="mt-2 text-xs leading-5 text-muted">최대 {formatFileBytes(capability.limits.maxUploadBytes)} · 재귀 전송, 삭제, 이동, chmod는 지원하지 않습니다.</p>
-              </div>
-            ) : (
-              <div className="mt-5 grid gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(18rem,0.8fr)]">
-                <div className="min-w-0">
-                  <dl className="grid gap-3 text-sm sm:grid-cols-2">
-                    <PlanFact label="대상" value={writeDraft.path} />
-                    <PlanFact label="작업" value={writeDraft.targetExists ? "기존 파일 교체" : "새 파일 생성"} />
-                    <PlanFact label="크기" value={formatFileBytes(writeDraftBytes(writeDraft).byteLength)} />
-                    <PlanFact label="자동 원복" value="지원하지 않음" danger />
-                  </dl>
-                  {writeDraft.kind === "text" ? (
-                    <div className="mt-4">
-                      <label htmlFor="file-text-editor" className="text-sm font-semibold text-text">UTF-8 내용 편집</label>
-                      <textarea
-                        id="file-text-editor"
-                        className="mt-2 min-h-64 w-full resize-y rounded-control border border-border bg-surface px-3 py-3 font-mono text-sm leading-6 text-text outline-none focus:border-action focus:ring-2 focus:ring-action/20 disabled:opacity-60"
-                        value={writeDraft.text}
-                        disabled={uploadPlan !== null || state === "planning" || state === "applying"}
-                        onChange={(event) => setWriteDraft({ ...writeDraft, text: event.target.value })}
-                      />
-                      <p className="mt-2 text-xs text-muted">원문 줄바꿈 {writeDraft.lineEnding.toUpperCase()} 유지 · 편집 상한 {formatFileBytes(capability.limits.maxTextBytes)}</p>
-                    </div>
-                  ) : null}
+            <div className="min-w-0 border-t border-border lg:border-l lg:border-t-0">
+              {preview === null ? (
+                <div className="grid min-h-72 place-content-center justify-items-center gap-3 p-8 text-center text-sm text-muted">
+                  <FileCode2 aria-hidden="true" className="size-7" />
+                  <p>파일을 선택하면 이곳에서 UTF-8 내용을 미리 봅니다.</p>
                 </div>
-
-                {uploadPlan === null ? (
-                  <div className="min-w-0 border-t border-warning/40 pt-4 xl:border-l xl:border-t-0 xl:pl-5 xl:pt-0">
-                    <label htmlFor="file-upload-password" className="text-sm font-semibold text-text">Linux 비밀번호 재확인</label>
-                    <Input
-                      id="file-upload-password"
-                      className="mt-2"
-                      type="password"
-                      autoComplete="current-password"
-                      value={uploadPassword}
-                      onChange={(event) => setUploadPassword(event.target.value)}
-                    />
-                    <label className="mt-4 flex cursor-pointer items-start gap-3 text-sm leading-6 text-text">
-                      <input
-                        type="checkbox"
-                        className="mt-1 size-4 shrink-0 accent-action"
-                        checked={writeRiskConfirmed}
-                        onChange={(event) => setWriteRiskConfirmed(event.target.checked)}
-                      />
-                      <span>이 작업은 자동 원복되지 않으며 실패 시 SSH로 직접 확인해야 할 수 있음을 이해했습니다.</span>
-                    </label>
-                    {writeDraft.targetExists ? (
-                      <label className="mt-3 flex cursor-pointer items-start gap-3 text-sm leading-6 text-text">
-                        <input
-                          type="checkbox"
-                          className="mt-1 size-4 shrink-0 accent-action"
-                          checked={overwriteConfirmed}
-                          onChange={(event) => setOverwriteConfirmed(event.target.checked)}
-                        />
-                        <span>기존 파일을 교체합니다. 이전 내용의 자동 백업이 없음을 확인했습니다.</span>
-                      </label>
-                    ) : null}
-                    <div className="mt-4 flex flex-wrap gap-2">
-                      <Button
-                        disabled={
-                          uploadPassword.length === 0
-                          || !writeRiskConfirmed
-                          || (writeDraft.targetExists && !overwriteConfirmed)
-                          || state === "planning"
-                        }
-                        onClick={() => void createUploadPlan()}
-                      >
-                        <KeyRound aria-hidden="true" className="size-4" />
-                        {state === "planning" ? "계획 검증 중" : "재인증 후 계획 만들기"}
-                      </Button>
-                      <Button variant="secondary" disabled={state === "planning"} onClick={resetWrite}>준비 취소</Button>
+              ) : (
+                <div>
+                  <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-4 py-3">
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-semibold text-text">{preview.path}</p>
+                      <p className="mt-0.5 text-xs text-muted">{formatFileBytes(preview.sizeBytes)} · {preview.lineEnding.toUpperCase()} · {preview.digest.slice(0, 19)}…</p>
                     </div>
+                    <Button size="compact" variant="secondary" disabled={state === "applying"} onClick={beginTextEdit}>
+                      <Pencil aria-hidden="true" className="size-4" />편집
+                    </Button>
                   </div>
-                ) : (
-                  <div className="min-w-0 border-t border-warning/40 pt-4 xl:border-l xl:border-t-0 xl:pl-5 xl:pt-0">
-                    <p className="text-sm font-semibold text-text">적용 직전 계획</p>
-                    <dl className="mt-3 space-y-3 text-sm">
-                      <PlanFact label="대상 상태" value={uploadPlan.targetState === "replace" ? "기존 digest 일치 시 교체" : "대상이 계속 없을 때 생성"} />
-                      <PlanFact label="현재 digest" value={uploadPlan.beforeDigest?.slice(0, 23) ?? "대상 없음"} />
-                      <PlanFact label="새 digest" value={uploadPlan.afterDigest.slice(0, 23)} />
-                      <PlanFact label="계획 만료" value={new Date(uploadPlan.expiresAt).toLocaleTimeString("ko-KR")} />
-                    </dl>
-                    <p className="mt-4 text-xs leading-5 text-danger">적용 후 이전 파일 자동 원복은 불가능합니다. 결과 불명확 시 성공으로 표시하지 않습니다.</p>
-                    <div className="mt-4 flex flex-wrap gap-2">
-                      <Button disabled={state === "applying"} onClick={() => void applyUploadPlan()}>
-                        <Save aria-hidden="true" className="size-4" />
-                        {state === "applying" ? "쓰기·검증 중" : "계획대로 원자 업로드"}
-                      </Button>
-                      <Button variant="secondary" disabled={state === "applying"} onClick={() => void disconnect()}>
-                        계획 폐기·세션 종료
-                      </Button>
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
+                  <pre className="max-h-[38rem] overflow-auto whitespace-pre-wrap break-words p-4 font-mono text-xs leading-6 text-text">{preview.content}</pre>
+                </div>
+              )}
+            </div>
           </div>
-
-          {listing !== null ? (
-            <div className="mt-5 grid min-w-0 gap-5 xl:grid-cols-[minmax(18rem,0.85fr)_minmax(0,1.15fr)]">
-              <div className="min-w-0 overflow-hidden rounded-panel border border-border bg-surface">
-                <Breadcrumb path={listing.path} onOpen={(path) => void openDirectory(path)} />
-                <div className="divide-y divide-border" role="list" aria-label="홈 파일 목록">
-                  {listing.entries.length === 0 ? (
-                    <p className="px-4 py-8 text-center text-sm text-muted">이 디렉터리는 비어 있습니다.</p>
-                  ) : listing.entries.map((entry) => (
-                    <FileRow
-                      key={entry.path}
-                      entry={entry}
-                      disabled={state === "loading"}
-                      onDirectory={openDirectory}
-                      onPreview={openPreview}
-                      onDownload={saveDownload}
-                    />
-                  ))}
-                </div>
-                {listing.truncated ? <p className="border-t border-warning bg-warning/5 px-4 py-3 text-xs text-warning">500개까지만 표시했습니다.</p> : null}
-              </div>
-
-              <div className="min-w-0 rounded-panel border border-border bg-surface">
-                {preview === null ? (
-                  <div className="grid min-h-72 place-content-center justify-items-center gap-3 p-8 text-center text-sm text-muted">
-                    <FileCode2 aria-hidden="true" className="size-7" />
-                    <p>일반 파일의 ‘텍스트 보기’를 선택해 내용을 확인하세요.</p>
-                  </div>
-                ) : (
-                  <div>
-                    <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-4 py-3">
-                      <div className="min-w-0">
-                        <p className="truncate text-sm font-semibold text-text">{preview.path}</p>
-                        <p className="mt-0.5 text-xs text-muted">{formatFileBytes(preview.sizeBytes)} · {preview.lineEnding.toUpperCase()} · {preview.digest.slice(0, 19)}…</p>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <StatusMark label="UTF-8" tone="neutral" />
-                        <Button size="compact" variant="secondary" disabled={uploadPlan !== null || state === "applying"} onClick={beginTextEdit}>
-                          <Pencil aria-hidden="true" className="size-4" />편집 준비
-                        </Button>
-                      </div>
-                    </div>
-                    <pre className="max-h-[34rem] overflow-auto whitespace-pre-wrap break-words p-4 font-mono text-xs leading-6 text-text">{preview.content}</pre>
-                  </div>
-                )}
-              </div>
-            </div>
-          ) : null}
         </section>
       )}
 
@@ -569,7 +434,183 @@ export function FilesScreen() {
           <TriangleAlert aria-hidden="true" className="mt-0.5 size-4 shrink-0" />{message}
         </p>
       ) : null}
+
+      <details className="mt-5 border-t border-border py-5">
+        <summary className="cursor-pointer text-sm font-semibold text-text">SFTP 보안 경계와 제한 보기</summary>
+        <div className="mt-5 grid gap-5 xl:grid-cols-[minmax(0,1fr)_19rem]">
+          <div>
+            <div className="flex items-start gap-3">
+              <ShieldCheck aria-hidden="true" className="mt-0.5 size-5 shrink-0 text-success" />
+              <p className="text-sm leading-6 text-muted">
+                {capability.rootLabel} 아래만 허용하며 홈 밖을 가리키는 링크는 서버가 거부합니다. 삭제·이동·권한 변경·재귀 전송은 지원하지 않습니다.
+              </p>
+            </div>
+            <div className="mt-5"><AssuranceDetails assurance={capability.assurance} /></div>
+          </div>
+          <dl className="divide-y divide-border border-y border-border text-sm">
+            <Limit label="Idle 종료" value={`${String(capability.limits.idleTimeoutSeconds / 60)}분`} />
+            <Limit label="최대 세션" value={`${String(capability.limits.maxLifetimeSeconds / 60)}분`} />
+            <Limit label="텍스트" value={formatFileBytes(capability.limits.maxTextBytes)} />
+            <Limit label="다운로드" value={formatFileBytes(capability.limits.maxDownloadBytes)} />
+            <Limit label="업로드" value={formatFileBytes(capability.limits.maxUploadBytes)} />
+          </dl>
+        </div>
+      </details>
+
+      <Sheet
+        open={connectOpen}
+        onOpenChange={setConnectOpen}
+        side="right"
+        title="SFTP 연결"
+        description={`${capability.username} 계정의 홈 디렉터리를 엽니다.`}
+      >
+        <StatusMark label="G0 조회 · 쓰기는 별도 G1" tone="success" />
+        <label htmlFor="file-password" className="mt-6 block text-sm font-semibold text-text">Linux 비밀번호 재확인</label>
+        <Input
+          id="file-password"
+          className="mt-2"
+          type="password"
+          autoComplete="current-password"
+          value={password}
+          onChange={(event) => setPassword(event.target.value)}
+        />
+        <label className="mt-5 flex cursor-pointer items-start gap-3 text-sm leading-6 text-text">
+          <input
+            type="checkbox"
+            className="mt-1 size-4 shrink-0 accent-action"
+            checked={confirmed}
+            onChange={(event) => setConfirmed(event.target.checked)}
+          />
+          <span>홈 조회만 열리며 쓰기는 별도 계획과 재인증 없이는 실행되지 않음을 확인했습니다.</span>
+        </label>
+        <Button className="mt-6 w-full" disabled={!confirmed || password.length === 0 || state === "connecting"} onClick={() => void connect()}>
+          <KeyRound aria-hidden="true" className="size-4" />
+          {state === "connecting" ? "OpenSSH 확인 중" : "재인증 후 홈 열기"}
+        </Button>
+        <p className="mt-3 text-xs leading-5 text-muted">비밀번호는 OpenSSH 인증 직후 폐기하며 파일 내용은 감사 로그에 저장하지 않습니다.</p>
+      </Sheet>
+
+      <Sheet
+        open={writeOpen}
+        onOpenChange={(open) => open ? setWriteOpen(true) : resetWrite()}
+        side="right"
+        size="wide"
+        title={writeDraft?.kind === "text" ? "텍스트 편집" : "파일 업로드"}
+        description="적용 전 대상과 원복 불가 범위를 확인합니다."
+      >
+        {writeDraft === null ? null : (
+          <div>
+            <div className="flex items-center justify-between gap-3">
+              <StatusMark label="G1 · 자동 원복 없음" tone="warning" />
+              <span className="text-xs text-muted">최대 {formatFileBytes(capability.limits.maxUploadBytes)}</span>
+            </div>
+            <dl className="mt-6 grid gap-4 text-sm sm:grid-cols-2">
+              <PlanFact label="대상" value={writeDraft.path} />
+              <PlanFact label="작업" value={writeDraft.targetExists ? "기존 파일 교체" : "새 파일 생성"} />
+              <PlanFact label="크기" value={formatFileBytes(writeDraftBytes(writeDraft).byteLength)} />
+              <PlanFact label="자동 원복" value="지원하지 않음" danger />
+            </dl>
+            {writeDraft.kind === "text" ? (
+              <div className="mt-5">
+                <label htmlFor="file-text-editor" className="text-sm font-semibold text-text">UTF-8 내용</label>
+                <textarea
+                  id="file-text-editor"
+                  className="mt-2 min-h-72 w-full resize-y rounded-control border border-border bg-surface px-3 py-3 font-mono text-sm leading-6 text-text outline-none focus:border-action focus:ring-2 focus:ring-action/20 disabled:opacity-60"
+                  value={writeDraft.text}
+                  disabled={uploadPlan !== null || state === "planning" || state === "applying"}
+                  onChange={(event) => setWriteDraft({ ...writeDraft, text: event.target.value })}
+                />
+              </div>
+            ) : null}
+            <div className="mt-5"><AssuranceDetails assurance={capability.uploadAssurance} /></div>
+            {uploadPlan === null ? (
+              <div className="mt-6 border-t border-border pt-5">
+                <label htmlFor="file-upload-password" className="text-sm font-semibold text-text">Linux 비밀번호 재확인</label>
+                <Input id="file-upload-password" className="mt-2" type="password" autoComplete="current-password" value={uploadPassword} onChange={(event) => setUploadPassword(event.target.value)} />
+                <label className="mt-4 flex cursor-pointer items-start gap-3 text-sm leading-6 text-text">
+                  <input type="checkbox" className="mt-1 size-4 shrink-0 accent-action" checked={writeRiskConfirmed} onChange={(event) => setWriteRiskConfirmed(event.target.checked)} />
+                  <span>이 쓰기는 자동 원복되지 않으며 실패 시 SSH로 직접 확인해야 할 수 있음을 이해했습니다.</span>
+                </label>
+                {writeDraft.targetExists ? (
+                  <label className="mt-3 flex cursor-pointer items-start gap-3 text-sm leading-6 text-text">
+                    <input type="checkbox" className="mt-1 size-4 shrink-0 accent-action" checked={overwriteConfirmed} onChange={(event) => setOverwriteConfirmed(event.target.checked)} />
+                    <span>기존 파일을 교체하며 이전 내용의 자동 백업이 없음을 확인했습니다.</span>
+                  </label>
+                ) : null}
+                <Button className="mt-5" disabled={uploadPassword.length === 0 || !writeRiskConfirmed || (writeDraft.targetExists && !overwriteConfirmed) || state === "planning"} onClick={() => void createUploadPlan()}>
+                  <KeyRound aria-hidden="true" className="size-4" />{state === "planning" ? "계획 검증 중" : "재인증 후 계획 만들기"}
+                </Button>
+              </div>
+            ) : (
+              <div className="mt-6 border-t border-warning/40 pt-5">
+                <p className="text-sm font-semibold text-text">적용 직전 계획</p>
+                <dl className="mt-4 grid gap-4 text-sm sm:grid-cols-2">
+                  <PlanFact label="대상 상태" value={uploadPlan.targetState === "replace" ? "기존 digest 일치 시 교체" : "대상이 계속 없을 때 생성"} />
+                  <PlanFact label="현재 digest" value={uploadPlan.beforeDigest?.slice(0, 23) ?? "대상 없음"} />
+                  <PlanFact label="새 digest" value={uploadPlan.afterDigest.slice(0, 23)} />
+                  <PlanFact label="계획 만료" value={new Date(uploadPlan.expiresAt).toLocaleTimeString("ko-KR")} />
+                </dl>
+                <p className="mt-4 text-xs leading-5 text-danger">이전 파일 자동 원복은 불가능합니다. 결과가 불명확하면 성공으로 표시하지 않습니다.</p>
+                <Button className="mt-5" disabled={state === "applying"} onClick={() => void applyUploadPlan()}>
+                  <Save aria-hidden="true" className="size-4" />{state === "applying" ? "쓰기·검증 중" : "계획대로 원자 업로드"}
+                </Button>
+              </div>
+            )}
+          </div>
+        )}
+      </Sheet>
     </div>
+  );
+}
+
+function DirectoryTree({ listing, disabled, onOpen }: {
+  listing: FileListView;
+  disabled: boolean;
+  onOpen: (path: string) => Promise<void>;
+}) {
+  const parts = listing.path === "" ? [] : listing.path.split("/");
+  const children = listing.entries.filter((entry) => entry.kind === "directory");
+  return (
+    <aside className="hidden min-w-0 bg-subtle/40 p-3 lg:block" aria-label="디렉터리 트리">
+      <p className="px-2 pb-2 text-xs font-semibold uppercase tracking-[0.12em] text-muted">Folders</p>
+      <button
+        type="button"
+        className="flex w-full items-center gap-2 rounded-control px-2 py-2 text-left text-sm font-semibold text-text hover:bg-surface"
+        disabled={disabled}
+        onClick={() => void onOpen("")}
+      >
+        <FolderOpen aria-hidden="true" className="size-4 text-action" />~
+      </button>
+      {parts.map((part, index) => {
+        const target = parts.slice(0, index + 1).join("/");
+        return (
+          <button
+            key={target}
+            type="button"
+            className="flex w-full items-center gap-2 rounded-control py-2 pr-2 text-left text-sm text-text hover:bg-surface"
+            style={{ paddingLeft: `${String(1.25 + index * 0.75)}rem` }}
+            disabled={disabled}
+            onClick={() => void onOpen(target)}
+          >
+            <FolderOpen aria-hidden="true" className="size-4 shrink-0 text-action" />
+            <span className="truncate">{part}</span>
+          </button>
+        );
+      })}
+      {children.length > 0 ? <div className="my-2 border-t border-border" /> : null}
+      {children.slice(0, 20).map((entry) => (
+        <button
+          key={entry.path}
+          type="button"
+          className="flex w-full items-center gap-2 rounded-control px-2 py-2 text-left text-sm text-muted hover:bg-surface hover:text-text"
+          disabled={disabled}
+          onClick={() => void onOpen(entry.path)}
+        >
+          <Folder aria-hidden="true" className="size-4 shrink-0" />
+          <span className="truncate">{entry.name}</span>
+        </button>
+      ))}
+    </aside>
   );
 }
 

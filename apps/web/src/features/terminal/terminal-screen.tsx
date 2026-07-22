@@ -15,6 +15,7 @@ import { Button } from "../../shared/ui/button";
 import { AssuranceDetails } from "../../shared/ui/assurance";
 import { cn } from "../../shared/ui/cn";
 import { Input } from "../../shared/ui/input";
+import { Sheet } from "../../shared/ui/sheet";
 import { Skeleton } from "../../shared/ui/skeleton";
 import { StatusMark } from "../../shared/ui/status-mark";
 import { SurfaceState } from "../../shared/ui/surface-state";
@@ -34,6 +35,7 @@ export function TerminalScreen() {
   const [riskConfirmed, setRiskConfirmed] = useState(false);
   const [state, setState] = useState<TerminalState>("idle");
   const [message, setMessage] = useState<string | null>(null);
+  const [connectOpen, setConnectOpen] = useState(false);
   const hostRef = useRef<HTMLDivElement | null>(null);
   const socketRef = useRef<WebSocket | null>(null);
   const terminalRef = useRef<Terminal | null>(null);
@@ -111,6 +113,7 @@ export function TerminalScreen() {
         riskConfirmed: true,
       });
       setPassword("");
+      setConnectOpen(false);
       const socket = openTerminalSocket(issued.websocketPath, issued.ticket);
       socket.binaryType = "arraybuffer";
       socketRef.current = socket;
@@ -204,39 +207,20 @@ export function TerminalScreen() {
     <div className="animate-state-in">
       <WorkspaceHeader
         eyebrow="Manual access / OpenSSH"
-        title="비루트 터미널"
-        description="자동화가 지원하지 않는 진단만 현재 Linux 계정 권한으로 잠시 수행합니다."
-        action={<StatusMark label="G1 · 자동 원복 없음" tone="warning" />}
+        title="터미널"
+        description={`${capability.username} Linux 계정으로 여는 제한 시간 OpenSSH 세션입니다.`}
+        action={
+          active ? (
+            <Button variant="secondary" onClick={disconnect}>
+              <CircleStop aria-hidden="true" className="size-4" />세션 종료
+            </Button>
+          ) : (
+            <Button disabled={!capability.available} onClick={() => setConnectOpen(true)}>
+              <KeyRound aria-hidden="true" className="size-4" />터미널 연결
+            </Button>
+          )
+        }
       />
-
-      <section className="py-7" aria-labelledby="terminal-boundary-heading">
-        <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_19rem]">
-          <div>
-            <div className="flex items-start gap-3">
-              <ShieldAlert aria-hidden="true" className="mt-0.5 size-5 shrink-0 text-warning" />
-              <div>
-                <h2 id="terminal-boundary-heading" className="text-sm font-semibold text-text">
-                  세션 경계
-                </h2>
-                <p className="mt-1 text-sm leading-6 text-muted">
-                  {capability.username} 계정으로 loopback OpenSSH에 연결합니다. root 로그인과 sudo
-                  비밀번호 자동 입력은 지원하지 않습니다.
-                </p>
-              </div>
-            </div>
-            <div className="mt-5">
-              <AssuranceDetails assurance={capability.assurance} />
-            </div>
-          </div>
-
-          <dl className="divide-y divide-border border-y border-border text-sm">
-            <Limit label="Idle 종료" value={`${String(Math.round(capability.limits.idleTimeoutSeconds / 60))}분`} />
-            <Limit label="최대 세션" value={`${String(Math.round(capability.limits.maxLifetimeSeconds / 60))}분`} />
-            <Limit label="동시 연결" value={`${String(capability.limits.maxSessionsPerUser)}개`} />
-            <Limit label="명령 기록" value="저장 안 함" />
-          </dl>
-        </div>
-      </section>
 
       {!capability.available ? (
         <SurfaceState
@@ -245,64 +229,16 @@ export function TerminalScreen() {
           description={capability.reason ?? "OpenSSH와 권한 정책을 확인해 주세요."}
         />
       ) : (
-        <section className="border-t border-border py-7" aria-labelledby="terminal-session-heading">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <h2 id="terminal-session-heading" className="text-sm font-semibold text-text">
-                제한 시간 세션
-              </h2>
-              <p className="mt-1 text-sm text-muted">연결이 끊기면 재접속되지 않습니다. 새로 승인해야 합니다.</p>
-            </div>
-            {active ? (
-              <Button variant="secondary" onClick={disconnect}>
-                <CircleStop aria-hidden="true" className="size-4" />
-                세션 종료
-              </Button>
-            ) : null}
+        <section className="py-6" aria-labelledby="terminal-session-heading">
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+            <h2 id="terminal-session-heading" className="text-sm font-semibold text-text">터미널 세션</h2>
+            <StatusMark
+              label={active ? "연결됨 · 비-root" : "연결 안 됨 · G1"}
+              tone={active ? "success" : "warning"}
+            />
           </div>
-
-          {!active ? (
-            <div className="mt-5 max-w-2xl border-l-2 border-warning bg-warning/5 px-4 py-4">
-              <label htmlFor="terminal-password" className="text-sm font-semibold text-text">
-                Linux 비밀번호 재확인
-              </label>
-              <Input
-                id="terminal-password"
-                className="mt-2"
-                type="password"
-                autoComplete="current-password"
-                value={password}
-                onChange={(event) => setPassword(event.target.value)}
-              />
-              <label className="mt-4 flex cursor-pointer items-start gap-3 text-sm leading-6 text-text">
-                <input
-                  type="checkbox"
-                  className="mt-1 size-4 shrink-0 accent-action"
-                  checked={riskConfirmed}
-                  onChange={(event) => setRiskConfirmed(event.target.checked)}
-                />
-                <span>
-                  터미널 명령은 자동 원복되지 않으며, 잘못된 명령으로 서비스나 데이터가 손상될 수 있음을
-                  확인했습니다.
-                </span>
-              </label>
-              <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center">
-                <Button
-                  disabled={!riskConfirmed || password.length === 0}
-                  onClick={() => void connect()}
-                >
-                  <KeyRound aria-hidden="true" className="size-4" />
-                  재인증 후 연결
-                </Button>
-                <p className="text-xs leading-5 text-muted">
-                  비밀번호와 일회용 ticket은 저장하지 않으며 30초 안에 한 번만 사용합니다.
-                </p>
-              </div>
-            </div>
-          ) : null}
-
           <div
-            className="terminal-frame mt-5"
+            className="terminal-frame"
             data-state={state}
             aria-label="OpenSSH 터미널 출력"
           >
@@ -310,7 +246,7 @@ export function TerminalScreen() {
             {!active ? (
               <div className="terminal-placeholder">
                 <SquareTerminal aria-hidden="true" className="size-7" />
-                <p>위험 경계를 확인하고 재인증하면 터미널이 열립니다.</p>
+                <p>‘터미널 연결’을 누르면 이 영역에 바로 세션이 열립니다.</p>
               </div>
             ) : null}
           </div>
@@ -329,6 +265,69 @@ export function TerminalScreen() {
           ) : null}
         </section>
       )}
+
+      <details className="border-t border-border py-5">
+        <summary className="cursor-pointer text-sm font-semibold text-text">세션 보안과 제한 보기</summary>
+        <div className="mt-5 grid gap-5 xl:grid-cols-[minmax(0,1fr)_19rem]">
+          <div>
+            <div className="flex items-start gap-3">
+              <ShieldAlert aria-hidden="true" className="mt-0.5 size-5 shrink-0 text-warning" />
+              <p className="text-sm leading-6 text-muted">
+                root 로그인과 sudo 비밀번호 자동 입력은 지원하지 않습니다. 터미널 명령은 자동 원복되지
+                않으므로 typed operation이 없는 진단에만 사용해 주세요.
+              </p>
+            </div>
+            <div className="mt-5"><AssuranceDetails assurance={capability.assurance} /></div>
+          </div>
+          <dl className="divide-y divide-border border-y border-border text-sm">
+            <Limit label="Idle 종료" value={`${String(Math.round(capability.limits.idleTimeoutSeconds / 60))}분`} />
+            <Limit label="최대 세션" value={`${String(Math.round(capability.limits.maxLifetimeSeconds / 60))}분`} />
+            <Limit label="동시 연결" value={`${String(capability.limits.maxSessionsPerUser)}개`} />
+            <Limit label="명령 내용" value="저장 안 함" />
+          </dl>
+        </div>
+      </details>
+
+      <Sheet
+        open={connectOpen}
+        onOpenChange={setConnectOpen}
+        side="right"
+        title="터미널 연결"
+        description={`${capability.username} 계정의 OpenSSH 세션을 시작합니다.`}
+      >
+        <StatusMark label="G1 · 자동 원복 없음" tone="warning" />
+        <label htmlFor="terminal-password" className="mt-6 block text-sm font-semibold text-text">
+          Linux 비밀번호 재확인
+        </label>
+        <Input
+          id="terminal-password"
+          className="mt-2"
+          type="password"
+          autoComplete="current-password"
+          value={password}
+          onChange={(event) => setPassword(event.target.value)}
+        />
+        <label className="mt-5 flex cursor-pointer items-start gap-3 text-sm leading-6 text-text">
+          <input
+            type="checkbox"
+            className="mt-1 size-4 shrink-0 accent-action"
+            checked={riskConfirmed}
+            onChange={(event) => setRiskConfirmed(event.target.checked)}
+          />
+          <span>명령은 자동 원복되지 않으며 잘못된 명령으로 서비스나 데이터가 손상될 수 있음을 확인했습니다.</span>
+        </label>
+        <Button
+          className="mt-6 w-full"
+          disabled={!riskConfirmed || password.length === 0 || active}
+          onClick={() => void connect()}
+        >
+          <KeyRound aria-hidden="true" className="size-4" />
+          {state === "connecting" ? "OpenSSH 연결 중" : "재인증 후 연결"}
+        </Button>
+        <p className="mt-3 text-xs leading-5 text-muted">
+          비밀번호와 1회용 ticket은 저장하지 않으며 ticket은 30초 안에 한 번만 사용됩니다.
+        </p>
+      </Sheet>
     </div>
   );
 }

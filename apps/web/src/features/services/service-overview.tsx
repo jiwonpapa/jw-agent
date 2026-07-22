@@ -5,9 +5,8 @@ import { ArrowRight, CheckCircle2, ServerCog } from "lucide-react";
 import { servicesQueryOptions } from "../../shared/api/queries";
 import { Button } from "../../shared/ui/button";
 import { Skeleton } from "../../shared/ui/skeleton";
-import { StatusMark } from "../../shared/ui/status-mark";
 import { SurfaceState } from "../../shared/ui/surface-state";
-import { stateLabel, stateTone } from "./service-presenter";
+import { PrimaryServiceGrid } from "./service-list";
 
 export function ServiceOverview() {
   const inventory = useQuery(servicesQueryOptions);
@@ -42,17 +41,7 @@ export function ServiceOverview() {
       ) : primary.length === 0 ? (
         <p className="mt-5 border-y border-border py-5 text-sm text-muted">발견된 주요 서비스가 없습니다.</p>
       ) : (
-        <div className="mt-5 divide-y divide-border border-y border-border">
-          {primary.slice(0, 5).map((service) => (
-            <div key={service.serviceId} className="flex min-h-14 items-center justify-between gap-4 py-3">
-              <div className="min-w-0">
-                <p className="truncate text-sm font-medium text-text">{service.displayName}</p>
-                <p className="mt-0.5 truncate text-xs text-muted">{service.purpose}</p>
-              </div>
-              <StatusMark label={stateLabel(service.runtimeState)} tone={stateTone(service.runtimeState)} />
-            </div>
-          ))}
-        </div>
+        <PrimaryServiceGrid services={primary.slice(0, 6)} />
       )}
       {failed.length > 0 ? (
         <p className="mt-4 text-sm font-medium text-danger">실패한 서비스 {failed.length}개가 확인됐습니다.</p>

@@ -8,8 +8,8 @@ use jw_contracts::{
     AssuranceView, CERTBOT_ATTACH_OPERATION, CERTBOT_ISSUE_OPERATION, CERTBOT_RENEW_TEST_OPERATION,
     CertbotAttachPlanView, CertbotIssuePlanView, CertbotRenewTestPlanView, CertificateEnvironment,
     MANAGED_CONFIG_OPERATION, ManagedConfigPlanView, NGINX_SITE_STATE_OPERATION, NginxSiteState,
-    NginxSiteStatePlanView, OPERATION_SCHEMA_VERSION, OperationReceiptView, OperationStage,
-    OperationStageEvidenceView, Role, Subject,
+    NginxSiteStatePlanView, OPERATION_SCHEMA_VERSION, OperationListView, OperationReceiptView,
+    OperationStage, OperationStageEvidenceView, Role, Subject,
 };
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use serde::{Deserialize, Serialize};
@@ -27,6 +27,8 @@ use crate::managed_config::{
 };
 use crate::nginx::{NGINX_IMPACT, NGINX_RECOVERY_PATH};
 use crate::snapshot::SnapshotRecord;
+
+mod activity;
 
 const GENESIS_DIGEST: &str =
     "sha256:0000000000000000000000000000000000000000000000000000000000000000";
@@ -485,10 +487,16 @@ impl Ledger {
                 evidence_digest,
             });
         }
+        let recorded_at = stages
+            .last()
+            .map(|stage| stage.recorded_at.clone())
+            .ok_or(OpsError::ForensicLockdown)?;
         Ok(OperationReceiptView {
             schema_version: OPERATION_SCHEMA_VERSION,
             operation_type: operation.plan.operation_type.clone(),
             operation_id: operation.operation_id,
+            display_name: operation.plan.display_name,
+            recorded_at,
             plan_id: operation.plan.plan_id,
             plan_hash: operation.plan.plan_hash,
             actor: operation.plan.actor,
@@ -504,6 +512,14 @@ impl Ledger {
                 Vec::new()
             },
         })
+    }
+
+    pub fn recent_receipts(
+        &self,
+        actor_uid: u32,
+        limit: u8,
+    ) -> Result<OperationListView, OpsError> {
+        activity::recent_receipts(self, actor_uid, limit)
     }
 
     pub fn plan_view(&self, plan: &StoredPlan) -> Result<NginxSiteStatePlanView, OpsError> {
@@ -1311,46 +1327,14 @@ mod tests {
         Role, RollbackSupport, Subject, sha256_digest,
     };
 
-    #[test]
-    fn older_checkpoint_completion_cannot_clear_newer_pending_sequence() -> Result<(), String> {
-        let connection = Connection::open_in_memory().map_err(|error| error.to_string())?;
-        connection
-            .execute_batch(
-                "CREATE TABLE metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);\n\
-                 INSERT INTO metadata (key, value) VALUES ('checkpoint_required_sequence', '42');",
-            )
-            .map_err(|error| error.to_string())?;
-        clear_completed_checkpoint(&connection, 41).map_err(|error| error.to_string())?;
-        let pending: String = connection
-            .query_row(
-                "SELECT value FROM metadata WHERE key = ?1",
-                [CHECKPOINT_PENDING_KEY],
-                |row| row.get(0),
-            )
-            .map_err(|error| error.to_string())?;
-        if pending != "42" {
-            return Err(String::from(
-                "older checkpoint completion cleared the newer pending sequence",
-            ));
-        }
-        clear_completed_checkpoint(&connection, 42).map_err(|error| error.to_string())?;
-        let remaining: i64 = connection
-            .query_row("SELECT COUNT(*) FROM metadata", [], |row| row.get(0))
-            .map_err(|error| error.to_string())?;
-        if remaining != 0 {
-            return Err(String::from(
-                "matching checkpoint completion did not clear its pending sequence",
-            ));
-        }
-        Ok(())
-    }
-
     use crate::config::OpsPaths;
 
     use super::{
         CHECKPOINT_PENDING_KEY, Connection, Ledger, StoredPlan, Transition,
         clear_completed_checkpoint,
     };
+
+    mod activity_tests;
 
     #[test]
     fn idempotency_reuses_same_plan_and_rejects_different_meaning() -> Result<(), String> {

@@ -116,8 +116,7 @@
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .app-nav-desktop,
-  .app-inspector-desktop {
+  .app-nav-desktop {
     display: none;
   }
 
@@ -172,6 +171,45 @@
     font-size: 0.875rem;
   }
 
+  .resource-meter {
+    height: 0.45rem;
+    overflow: hidden;
+    border: 0;
+    border-radius: 999px;
+    background: var(--color-subtle);
+  }
+
+  .resource-meter::-webkit-progress-bar {
+    background: var(--color-subtle);
+    border-radius: 999px;
+  }
+
+  .resource-meter::-webkit-progress-value {
+    border-radius: 999px;
+    background: var(--color-info);
+  }
+
+  .resource-meter::-moz-progress-bar {
+    border-radius: 999px;
+    background: var(--color-info);
+  }
+
+  .resource-meter[data-tone="warning"]::-webkit-progress-value {
+    background: var(--color-warning);
+  }
+
+  .resource-meter[data-tone="warning"]::-moz-progress-bar {
+    background: var(--color-warning);
+  }
+
+  .resource-meter[data-tone="danger"]::-webkit-progress-value {
+    background: var(--color-danger);
+  }
+
+  .resource-meter[data-tone="danger"]::-moz-progress-bar {
+    background: var(--color-danger);
+  }
+
   @media (min-width: 64rem) {
     .app-body {
       grid-template-columns: 4.5rem minmax(0, 1fr);
@@ -194,11 +232,7 @@
 
   @media (min-width: 80rem) {
     .app-body {
-      grid-template-columns: 13.75rem minmax(0, 1fr) 19rem;
-    }
-
-    .app-inspector-desktop {
-      display: block;
+      grid-template-columns: 13.75rem minmax(0, 1fr);
     }
   }
 

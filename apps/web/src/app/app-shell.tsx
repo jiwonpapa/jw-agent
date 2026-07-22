@@ -2,7 +2,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useRouter } from "@tanstack/react-router";
 import {
   Activity,
-  BadgeCheck,
+  ChevronDown,
   GlobeLock,
   ListTree,
   FolderOpen,
@@ -13,12 +13,13 @@ import {
   Settings2,
   ShieldCheck,
   SquareTerminal,
+  UserRound,
 } from "lucide-react";
 import { useState, type ReactNode } from "react";
 
 import { logout } from "../shared/api/client";
 import { hostQueryOptions, sessionQueryOptions } from "../shared/api/queries";
-import { NAV_ITEMS, PRODUCT, ROLE_LABELS } from "../shared/content/copy";
+import { CATALOG_NAV_ITEM, NAV_GROUPS, PRODUCT, ROLE_LABELS } from "../shared/content/copy";
 import { formatDateTime } from "../shared/domain/format";
 import { Button } from "../shared/ui/button";
 import { cn } from "../shared/ui/cn";
@@ -28,8 +29,6 @@ import { StatusMark } from "../shared/ui/status-mark";
 const navigationIcons = {
   overview: Activity,
   services: ListTree,
-  nginx: Server,
-  certificates: BadgeCheck,
   integrations: PackageSearch,
   terminal: SquareTerminal,
   files: FolderOpen,
@@ -38,31 +37,57 @@ const navigationIcons = {
 
 function Navigation({ compact = false, onNavigate }: { compact?: boolean; onNavigate?: () => void }) {
   return (
-    <nav aria-label="주요 메뉴" className="space-y-1">
-      {NAV_ITEMS.map((item) => {
-        const Icon = navigationIcons[item.key];
-        return (
-          <Link
-            key={item.href}
-            to={item.href}
-            onClick={onNavigate}
-            className={cn(
-              "flex min-h-11 items-center gap-3 rounded-control px-3 text-sm font-medium text-muted transition-colors hover:bg-subtle hover:text-text",
-              compact && "justify-center px-0 xl:justify-start xl:px-3",
-            )}
-            activeProps={{ className: "bg-subtle text-text" }}
-          >
-            <Icon aria-hidden="true" className="size-4 shrink-0" />
-            <span className={cn(compact && "sr-only xl:not-sr-only")}>{item.label}</span>
-          </Link>
-        );
-      })}
+    <nav aria-label="주요 메뉴" className="flex min-h-full flex-col">
+      <div className="space-y-6">
+        {NAV_GROUPS.map((group) => (
+          <div key={group.label}>
+            <p className={cn("mb-2 px-3 text-[0.6875rem] font-semibold uppercase tracking-wider text-muted", compact && "sr-only xl:not-sr-only")}>
+              {group.label}
+            </p>
+            <div className="space-y-1">
+              {group.items.map((item) => (
+                <NavigationLink key={item.href} item={item} compact={compact} onNavigate={onNavigate} />
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+      <div className="mt-auto border-t border-border pt-3">
+        <NavigationLink item={CATALOG_NAV_ITEM} compact={compact} onNavigate={onNavigate} />
+      </div>
     </nav>
+  );
+}
+
+function NavigationLink({
+  item,
+  compact,
+  onNavigate,
+}: {
+  item: { href: string; label: string; key: keyof typeof navigationIcons };
+  compact: boolean;
+  onNavigate: (() => void) | undefined;
+}) {
+  const Icon = navigationIcons[item.key];
+  return (
+    <Link
+      to={item.href}
+      onClick={onNavigate}
+      className={cn(
+        "flex min-h-11 items-center gap-3 rounded-control px-3 text-sm font-medium text-muted transition-colors hover:bg-subtle hover:text-text",
+        compact && "justify-center px-0 xl:justify-start xl:px-3",
+      )}
+      activeProps={{ className: "bg-subtle text-text" }}
+    >
+      <Icon aria-hidden="true" className="size-4 shrink-0" />
+      <span className={cn(compact && "sr-only xl:not-sr-only")}>{item.label}</span>
+    </Link>
   );
 }
 
 export function AppShell({ children }: { children: ReactNode }) {
   const [navigationOpen, setNavigationOpen] = useState(false);
+  const [accountOpen, setAccountOpen] = useState(false);
   const [logoutPending, setLogoutPending] = useState(false);
   const session = useQuery(sessionQueryOptions).data;
   const host = useQuery(hostQueryOptions);
@@ -121,14 +146,19 @@ export function AppShell({ children }: { children: ReactNode }) {
           </div>
         </div>
 
-        <div className="ml-3 hidden items-center gap-3 sm:flex">
-          <StatusMark
-            label={ROLE_LABELS[session.subject.role]}
-            tone={session.subject.role === "admin" ? "info" : "neutral"}
-          />
-          <span className="h-5 w-px bg-border" aria-hidden="true" />
-          <span className="text-sm text-muted">{session.subject.username}</span>
-        </div>
+        <Button
+          className="ml-3 max-w-[13rem] gap-2"
+          variant="ghost"
+          onClick={() => setAccountOpen(true)}
+          aria-label="현재 계정과 권한 보기"
+        >
+          <UserRound aria-hidden="true" className="size-4 shrink-0" />
+          <span className="hidden min-w-0 text-left sm:block">
+            <span className="block truncate text-sm font-semibold text-text">{session.subject.username}</span>
+            <span className="block truncate text-[0.6875rem] text-muted">JW Agent {ROLE_LABELS[session.subject.role]}</span>
+          </span>
+          <ChevronDown aria-hidden="true" className="hidden size-4 shrink-0 text-muted sm:block" />
+        </Button>
       </header>
 
       <div className="app-body">
@@ -140,44 +170,6 @@ export function AppShell({ children }: { children: ReactNode }) {
           {children}
         </main>
 
-        <aside className="app-inspector-desktop border-l border-border bg-surface px-5 py-6">
-          <p className="text-xs font-semibold uppercase tracking-wider text-muted">현재 세션</p>
-          <dl className="mt-5 space-y-5 text-sm">
-            <div>
-              <dt className="text-muted">Linux 계정</dt>
-              <dd className="mt-1 font-medium text-text">{session.subject.username}</dd>
-            </div>
-            <div>
-              <dt className="text-muted">권한</dt>
-              <dd className="mt-1 font-medium text-text">{ROLE_LABELS[session.subject.role]}</dd>
-            </div>
-            <div>
-              <dt className="text-muted">접속 경로</dt>
-              <dd className="mt-1 font-medium text-text">
-                {session.ingress === "public" ? "공개 HTTPS" : "Loopback · SSH 터널"}
-              </dd>
-            </div>
-            <div>
-              <dt className="text-muted">세션 만료</dt>
-              <dd className="mt-1 font-medium text-text">{formatDateTime(session.idleExpiresAt)}</dd>
-            </div>
-            <div>
-              <dt className="text-muted">관찰 시각</dt>
-              <dd className="mt-1 font-medium text-text">
-                {observedAt === undefined ? "확인 중" : formatDateTime(observedAt)}
-              </dd>
-            </div>
-          </dl>
-          <Button
-            className="mt-8 w-full"
-            variant="secondary"
-            disabled={logoutPending}
-            onClick={() => void handleLogout()}
-          >
-            <LogOut aria-hidden="true" className="size-4" />
-            {logoutPending ? "로그아웃 중" : "로그아웃"}
-          </Button>
-        </aside>
       </div>
 
       <Sheet
@@ -207,6 +199,45 @@ export function AppShell({ children }: { children: ReactNode }) {
           </Button>
         </div>
       </Sheet>
+
+      <Sheet
+        side="right"
+        open={accountOpen}
+        onOpenChange={setAccountOpen}
+        title={session.subject.username}
+        description={`JW Agent ${ROLE_LABELS[session.subject.role]} · Linux UID ${String(session.subject.uid)}`}
+      >
+        <StatusMark
+          label={session.subject.uid === 0 ? "root 로그인 차단 대상" : "비-root Linux 계정"}
+          tone={session.subject.uid === 0 ? "danger" : "success"}
+        />
+        <dl className="mt-6 divide-y divide-border border-y border-border text-sm">
+          <SessionDetail label="JW Agent 권한" value={ROLE_LABELS[session.subject.role]} />
+          <SessionDetail label="Linux 계정" value={`${session.subject.username} · UID ${String(session.subject.uid)}`} />
+          <SessionDetail label="root 권한" value="웹 root 로그인 없음 · typed opsd 작업만 별도 승인" />
+          <SessionDetail label="접속 경로" value={session.ingress === "public" ? "공개 HTTPS" : "Loopback · SSH 터널"} />
+          <SessionDetail label="세션 만료" value={formatDateTime(session.idleExpiresAt)} />
+          <SessionDetail label="관찰 시각" value={observedAt === undefined ? "확인 중" : formatDateTime(observedAt)} />
+        </dl>
+        <Button
+          className="mt-6 w-full"
+          variant="secondary"
+          disabled={logoutPending}
+          onClick={() => void handleLogout()}
+        >
+          <LogOut aria-hidden="true" className="size-4" />
+          {logoutPending ? "로그아웃 중" : "로그아웃"}
+        </Button>
+      </Sheet>
+    </div>
+  );
+}
+
+function SessionDetail({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="py-4">
+      <dt className="text-xs text-muted">{label}</dt>
+      <dd className="mt-1 leading-6 text-text">{value}</dd>
     </div>
   );
 }

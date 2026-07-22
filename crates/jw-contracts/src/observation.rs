@@ -144,6 +144,7 @@ pub enum ServiceSupport {
 #[serde(rename_all = "camelCase")]
 pub struct ServiceSummary {
     pub service_id: String,
+    pub template_id: Option<String>,
     pub unit_name: String,
     pub display_name: String,
     pub purpose: String,

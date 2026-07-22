@@ -20,6 +20,9 @@ Last reviewed: 2026-07-21
 - Nginx site inventory
 - recent operation receipts
 
+`GET /api/v1/activity`는 현재 canonical Linux UID가 실행한 최근 typed operation receipt를
+최대 8개 반환합니다. background 관찰 조회와 terminal command 내용은 이 목록에 넣지 않습니다.
+
 정확한 REST type은 generated client가 소유합니다.
 
 ## Layout

@@ -1,3 +1,12 @@
+jw-agent (0.2.0~p2.13) noble; urgency=medium
+
+  * Rework the dashboard, service inventory, terminal, and SFTP work surfaces.
+  * Group service families into responsive cards with locally bundled icons.
+  * Add current-subject recent typed-operation receipts to the overview.
+  * Move account and manual-access details into bounded right-side drawers.
+
+ -- JW Agent Maintainers <maintainers@example.invalid>  Wed, 22 Jul 2026 14:53:05 +0900
+
 jw-agent (0.2.0~p2.12) noble; urgency=medium
 
   * Add a bounded Ubuntu 24.04 systemd service inventory and catalog.

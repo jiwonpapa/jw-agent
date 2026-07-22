@@ -452,6 +452,10 @@ impl OpsService {
             } => self
                 .operation_receipt(actor, operation_id)
                 .map(OpsResponseBody::OperationReceipt),
+            OpsRequestBody::RecentOperations { actor } => self
+                .open_ledger()?
+                .recent_receipts(actor.uid, 8)
+                .map(OpsResponseBody::RecentOperations),
         }
     }
 
@@ -3245,6 +3249,8 @@ mod tests {
     use super::OpsService;
     use super::test_fakes::{FakeCertbotRunner, FakeRunner};
 
+    mod operation_smoke_tests;
+
     #[test]
     fn certbot_staging_issue_is_non_persistent_and_unlocks_production_plan() -> Result<(), String> {
         let root = test_root("certbot-issue-staging")?;
@@ -3438,20 +3444,6 @@ mod tests {
         )
         .map_err(|error| error.to_string())?;
         assert_eq!(restored, original);
-        fs::remove_dir_all(root).map_err(|error| error.to_string())
-    }
-
-    #[test]
-    fn successful_enable_reaches_verified_terminal_receipt() -> Result<(), String> {
-        let root = test_root("success")?;
-        let service = fixture_service(&root, Arc::new(FakeRunner::all_success()))?;
-        let plan = plan(&service, 1_000)?;
-        let receipt = approve(&service, &plan, 1_001)?;
-        assert_eq!(
-            receipt.terminal_state,
-            jw_contracts::OperationStage::Succeeded
-        );
-        assert_eq!(receipt.after_digest, enabled_state_digest(true));
         fs::remove_dir_all(root).map_err(|error| error.to_string())
     }
 

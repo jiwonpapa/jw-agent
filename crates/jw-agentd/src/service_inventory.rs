@@ -338,9 +338,10 @@ fn classify_unit(catalog: &ServiceCatalog, unit: SystemdUnit) -> ServiceSummary 
         .fragment_path
         .as_deref()
         .is_some_and(|path| path.starts_with("/etc/systemd/system/"));
-    let (display_name, purpose, category, visibility, support, hidden_by_default) =
+    let (template_id, display_name, purpose, category, visibility, support, hidden_by_default) =
         if let Some(template) = template {
             (
+                Some(template.id.clone()),
                 template.display_name.clone(),
                 template.purpose.clone(),
                 template.category,
@@ -350,6 +351,7 @@ fn classify_unit(catalog: &ServiceCatalog, unit: SystemdUnit) -> ServiceSummary 
             )
         } else if local_custom && !product_or_system {
             (
+                None,
                 unit.unit_name.trim_end_matches(".service").to_owned(),
                 fallback_purpose(&unit),
                 ServiceCategory::Custom,
@@ -359,6 +361,7 @@ fn classify_unit(catalog: &ServiceCatalog, unit: SystemdUnit) -> ServiceSummary 
             )
         } else {
             (
+                None,
                 unit.unit_name.clone(),
                 fallback_purpose(&unit),
                 ServiceCategory::System,
@@ -369,6 +372,7 @@ fn classify_unit(catalog: &ServiceCatalog, unit: SystemdUnit) -> ServiceSummary 
         };
     ServiceSummary {
         service_id: service_id(&unit.unit_name),
+        template_id,
         unit_name: unit.unit_name,
         display_name,
         purpose,

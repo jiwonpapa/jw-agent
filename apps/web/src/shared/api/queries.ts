@@ -8,6 +8,7 @@ import {
   getHost,
   getIntegrations,
   getNginxSites,
+  getRecentOperations,
   getSession,
   getServices,
   getTerminalCapability,
@@ -18,6 +19,7 @@ export const queryKeys = {
   session: ["session"] as const,
   host: ["host"] as const,
   services: ["services"] as const,
+  activity: ["activity"] as const,
   nginxSites: ["services", "nginx", "sites"] as const,
   certificates: ["certificates"] as const,
   integrations: ["integrations"] as const,
@@ -51,6 +53,13 @@ export const servicesQueryOptions = queryOptions({
   queryKey: queryKeys.services,
   queryFn: ({ signal }) => getServices(signal),
   staleTime: 15_000,
+  retry: 1,
+});
+
+export const activityQueryOptions = queryOptions({
+  queryKey: queryKeys.activity,
+  queryFn: ({ signal }) => getRecentOperations(signal),
+  staleTime: 10_000,
   retry: 1,
 });
 
