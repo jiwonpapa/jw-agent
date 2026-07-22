@@ -183,6 +183,7 @@ const P1_REQUIRED_PATHS: &[&str] = &[
     "tests/vm/playwright-cli.json.template",
     "tests/vm/tls/server.ext.template",
     "xtask/src/vm.rs",
+    "xtask/src/vm/public_recovery.rs",
 ];
 
 const P2_REQUIRED_PATHS: &[&str] = &[
@@ -520,7 +521,7 @@ const GATES: &[Gate] = &[
         timeout_seconds: 60,
         evidence: "valid TLS, exact boundary, HTTP redirect, deep link, and recovery passed",
         failure_policy: "fail lane on public plaintext, bad headers, exposed recovery, or lost SSH path",
-        run: vm::gate_public_recovery,
+        run: vm::public_recovery::gate_public_recovery,
     },
     Gate {
         id: "VM-P2-SERVICE-INVENTORY",

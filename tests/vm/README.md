@@ -34,7 +34,9 @@ cargo xtask verify p2-vm
 일반 UI 확인은 `https://jw-agent-p1.test/` 공개 HTTPS를 직접 사용합니다.
 SSH local port forwarding은 공개 edge 장애 시나리오와 복구 검증에만 사용하며
 정상 사용자 진입점으로 안내하지 않습니다. 이 private-LAN 이름은 시험 클라이언트의
-DNS 또는 hosts 설정과 전용 test CA 신뢰가 별도로 필요합니다.
+DNS 또는 hosts 설정과 전용 test CA 신뢰가 별도로 필요합니다. 현재 Mac 시험
+클라이언트는 mkcert local CA를 login keychain에 신뢰시키고 동일 CA의 leaf
+certificate를 VM management edge에 설치합니다.
 
 ## Current VM evidence
 
