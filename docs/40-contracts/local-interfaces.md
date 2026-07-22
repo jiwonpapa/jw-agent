@@ -40,7 +40,7 @@ P2 이후에만 추가할 endpoint:
 - `GET /api/v1/operations/{operation_id}`
 - `GET /api/v1/operations/{operation_id}/events`
 
-로그인·재인증 password는 strict body limit의 HTTPS JSON body에서만 받고 request logging 전에 secret type으로 분리합니다. 인증 실패는 account 존재·잠김·비밀번호 오류를 같은 public response로 반환합니다.
+로그인·재인증 password는 bounded HTTPS JSON body에서만 받고 request logging 전에 secret type으로 분리합니다. 일반 JSON body 상한은 `64 KiB`이며 exact managed-config plan route와 ops IPC frame만 `256 KiB`입니다. operation별 content 상한은 opsd가 다시 검사합니다. 인증 실패는 account 존재·잠김·비밀번호 오류를 같은 public response로 반환합니다.
 
 예외적으로 loopback recovery listener는 SSH tunnel transport에서 같은 JSON form을 받습니다. Public과 recovery는 cookie name·session namespace·acceptance channel을 분리하며 서로의 session을 거부합니다.
 

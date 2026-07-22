@@ -46,6 +46,11 @@ server {
         include /usr/share/jw-agent/nginx/proxy-common.conf;
     }
 
+    location = /api/v1/operations/service/config-file/plans {
+        client_max_body_size 256k;
+        include /usr/share/jw-agent/nginx/proxy-common.conf;
+    }
+
     location / {
         include /usr/share/jw-agent/nginx/proxy-common.conf;
     }

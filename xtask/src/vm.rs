@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+pub(crate) mod php_fpm;
 pub(crate) mod public_recovery;
 mod receipt;
 pub(crate) mod service_inventory;
@@ -1933,14 +1934,16 @@ pub fn gate_p2_managed_config(_root: &Path, timeout: Duration) -> Result<(), Str
         require_success(&proposals, "managed config proposal cleanup", false)
     })();
     let cleanup = cleanup_managed_config_fixture(&config, timeout);
-    match (result, cleanup) {
+    let nginx_result = match (result, cleanup) {
         (Ok(()), Ok(())) => Ok(()),
         (Err(error), Ok(())) => Err(error),
         (Ok(()), Err(cleanup_error)) => Err(cleanup_error),
         (Err(error), Err(cleanup_error)) => Err(format!(
             "{error}; managed config cleanup also failed: {cleanup_error}"
         )),
-    }
+    };
+    nginx_result?;
+    php_fpm::gate_p2_php_fpm(_root, timeout)
 }
 
 pub fn gate_p2_forensic_lockdown(_root: &Path, timeout: Duration) -> Result<(), String> {
@@ -3434,10 +3437,13 @@ fn operation_idempotency_key() -> Result<String, String> {
 }
 
 fn require_terminal(body: &str, expected: &str, label: &str) -> Result<(), String> {
-    if json_string_field(body, "terminalState")? == expected {
+    let actual = json_string_field(body, "terminalState")?;
+    if actual == expected {
         Ok(())
     } else {
-        Err(format!("{label} returned the wrong terminal state"))
+        Err(format!(
+            "{label} returned terminal state {actual}, expected {expected}"
+        ))
     }
 }
 

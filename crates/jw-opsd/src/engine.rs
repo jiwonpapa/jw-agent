@@ -27,13 +27,13 @@ use crate::digest::canonical_digest;
 use crate::error::OpsError;
 use crate::ledger::{Ledger, StoredOperation, StoredPlan, Transition};
 use crate::managed_config::{
-    MANAGED_CONFIG_IMPACT, MANAGED_CONFIG_RECOVERY_PATH, ManagedConfigPlanPayload, ProposalRecord,
-    cleanup_internal_temporaries, diff_stats, discover_managed_config, discover_protected_config,
+    ManagedConfigAdapter, ManagedConfigPlanPayload, ProposalRecord, cleanup_internal_temporaries,
+    diff_stats, discover_managed_config, discover_protected_config, managed_config_adapter,
+    managed_config_assurance, managed_config_failure_code, managed_config_test_succeeded,
     read_proposal, remove_proposal, replace_managed_config, replace_protected_config,
     restore_managed_config, restore_protected_config, write_proposal,
 };
 use crate::nginx::{NGINX_IMPACT, NGINX_RECOVERY_PATH, NginxSite, discover_site, set_enabled};
-use crate::nginx_diagnostic::nginx_config_failure_code;
 use crate::runner::{CommandClass, CommandEvidence, OperationRunner};
 use crate::snapshot::{
     CertificateInventorySnapshot, ManagedConfigSnapshot, NginxLinkSnapshot,
@@ -514,7 +514,9 @@ impl OpsService {
         &self,
         resource_id: &str,
     ) -> Result<ManagedConfigResourceView, OpsError> {
-        discover_managed_config(&self.paths, resource_id)?.view(managed_config_assurance())
+        let resource = discover_managed_config(&self.paths, resource_id)?;
+        let assurance = managed_config_assurance(resource.adapter);
+        resource.view(assurance)
     }
 
     fn certificate_inventory(&self, now_ms: i64) -> Result<CertificateInventoryView, OpsError> {
@@ -917,6 +919,9 @@ impl OpsService {
         self.remove_expired_proposals(&ledger, now_ms)?;
         drop(ledger);
         let resource = discover_managed_config(&self.paths, &request.resource_id)?;
+        if request.proposed_content.len() > resource.adapter.maximum_bytes() {
+            return Err(OpsError::Rejected("size_limit"));
+        }
         if resource.content_digest != request.expected_content_digest
             || resource.metadata_digest != request.expected_metadata_digest
         {
@@ -986,7 +991,7 @@ impl OpsService {
             plan_hash: String::new(),
             actor: actor.clone(),
             site_id: resource.resource_id,
-            display_name: resource.basename,
+            display_name: resource.display_name,
             current_state: NginxSiteState::Disabled,
             target_state: NginxSiteState::Disabled,
             available_digest: resource.content_digest,
@@ -997,10 +1002,10 @@ impl OpsService {
             request_digest,
             resource_key: format!(
                 "config/{}/{}",
-                jw_contracts::NGINX_CONFIG_ADAPTER_ID,
+                resource.adapter.adapter_id(),
                 request.resource_id
             ),
-            assurance: managed_config_assurance(),
+            assurance: managed_config_assurance(resource.adapter),
             managed_config: Some(payload),
             certbot_renew: None,
             certbot_issue: None,
@@ -2217,7 +2222,13 @@ impl OpsService {
         };
         let snapshotted = ledger.attach_snapshot(&operation.operation_id, &record, now_ms)?;
         if preflight.content_digest == payload.proposed_content_digest {
-            return self.finish_managed_noop(ledger, &snapshotted, &proposal, now_ms);
+            return self.finish_managed_noop(
+                ledger,
+                &snapshotted,
+                &proposal,
+                preflight.adapter,
+                now_ms,
+            );
         }
         ledger.transition(
             &operation.operation_id,
@@ -2255,21 +2266,23 @@ impl OpsService {
                 now_ms,
             },
         )?;
-        let config_test = match self.runner.run(CommandClass::NginxConfigTest) {
+        let config_test = match self.runner.run(preflight.adapter.config_test()) {
             Ok(evidence) => evidence,
             Err(error) => {
+                let code = format!("{}_unavailable", preflight.adapter.config_test().as_str());
                 return self.rollback_managed_config(
                     ledger,
                     &snapshotted.operation_id,
-                    "nginx_config_test_unavailable",
+                    &code,
                     &sha256_digest(error.code().as_bytes()),
                     now_ms,
                 );
             }
         };
         let config_digest = command_digest(&config_test)?;
-        if !config_test.success {
-            let failure_code = nginx_config_failure_code(&config_test, &preflight.basename);
+        if !managed_config_test_succeeded(preflight.adapter, &config_test) {
+            let failure_code =
+                managed_config_failure_code(preflight.adapter, &config_test, &preflight.basename);
             return self.rollback_managed_config(
                 ledger,
                 &snapshotted.operation_id,
@@ -2283,20 +2296,21 @@ impl OpsService {
             Transition {
                 expected: &[OperationStage::Validating],
                 next: OperationStage::Reloading,
-                result_code: "nginx_config_valid",
+                result_code: preflight.adapter.config_valid_code(),
                 evidence_digest: &config_digest,
                 after_digest: None,
                 rollback_result: None,
                 now_ms,
             },
         )?;
-        let reload = match self.runner.run(CommandClass::NginxReload) {
+        let reload = match self.runner.run(preflight.adapter.reload()) {
             Ok(evidence) => evidence,
             Err(error) => {
+                let code = format!("{}_unavailable", preflight.adapter.reload().as_str());
                 return self.rollback_managed_config(
                     ledger,
                     &snapshotted.operation_id,
-                    "nginx_reload_unavailable",
+                    &code,
                     &sha256_digest(error.code().as_bytes()),
                     now_ms,
                 );
@@ -2304,10 +2318,11 @@ impl OpsService {
         };
         let reload_digest = command_digest(&reload)?;
         if !reload.success {
+            let code = format!("{}_failed", preflight.adapter.reload().as_str());
             return self.rollback_managed_config(
                 ledger,
                 &snapshotted.operation_id,
-                "nginx_reload_failed",
+                &code,
                 &reload_digest,
                 now_ms,
             );
@@ -2317,7 +2332,7 @@ impl OpsService {
             Transition {
                 expected: &[OperationStage::Reloading],
                 next: OperationStage::Verifying,
-                result_code: "nginx_reloaded",
+                result_code: preflight.adapter.reloaded_code(),
                 evidence_digest: &reload_digest,
                 after_digest: None,
                 rollback_result: None,
@@ -2325,7 +2340,7 @@ impl OpsService {
             },
         )?;
         let read_back = discover_managed_config(&self.paths, &snapshotted.plan.site_id);
-        let active = self.runner.run(CommandClass::NginxActive);
+        let active = self.runner.run(preflight.adapter.active());
         let verified = read_back.as_ref().is_ok_and(|resource| {
             resource.content_digest == payload.proposed_content_digest
                 && resource.metadata_digest == snapshotted.plan.enabled_state_digest
@@ -2333,7 +2348,7 @@ impl OpsService {
         if !verified {
             let evidence = match active.as_ref() {
                 Ok(value) => command_digest(value)?,
-                Err(_) => sha256_digest(b"nginx_active_unavailable"),
+                Err(_) => sha256_digest(preflight.adapter.active().as_str().as_bytes()),
             };
             return self.rollback_managed_config(
                 ledger,
@@ -2390,6 +2405,7 @@ impl OpsService {
         ledger: &mut Ledger,
         operation: &StoredOperation,
         proposal: &ProposalRecord,
+        adapter: ManagedConfigAdapter,
         now_ms: i64,
     ) -> Result<OperationReceiptView, OpsError> {
         ledger.transition(
@@ -2404,9 +2420,11 @@ impl OpsService {
                 now_ms,
             },
         )?;
-        let config = self.runner.run(CommandClass::NginxConfigTest);
-        let active = self.runner.run(CommandClass::NginxActive);
-        let valid = config.as_ref().is_ok_and(|evidence| evidence.success)
+        let config = self.runner.run(adapter.config_test());
+        let active = self.runner.run(adapter.active());
+        let valid = config
+            .as_ref()
+            .is_ok_and(|evidence| managed_config_test_succeeded(adapter, evidence))
             && active.as_ref().is_ok_and(|evidence| evidence.success);
         if !valid {
             let cancelled = ledger.transition(
@@ -2503,8 +2521,8 @@ impl OpsService {
                 );
             }
         };
-        let config = match self.runner.run(CommandClass::NginxConfigTest) {
-            Ok(evidence) if evidence.success => evidence,
+        let config = match self.runner.run(restored.adapter.config_test()) {
+            Ok(evidence) if managed_config_test_succeeded(restored.adapter, &evidence) => evidence,
             _ => {
                 return self.recovery_required(
                     ledger,
@@ -2514,7 +2532,7 @@ impl OpsService {
                 );
             }
         };
-        let reload = match self.runner.run(CommandClass::NginxReload) {
+        let reload = match self.runner.run(restored.adapter.reload()) {
             Ok(evidence) if evidence.success => evidence,
             _ => {
                 return self.recovery_required(
@@ -2525,7 +2543,7 @@ impl OpsService {
                 );
             }
         };
-        let active = match self.runner.run(CommandClass::NginxActive) {
+        let active = match self.runner.run(restored.adapter.active()) {
             Ok(evidence) if evidence.success => evidence,
             _ => {
                 return self.recovery_required(
@@ -2981,6 +2999,7 @@ fn managed_config_plan_hash(plan: &StoredPlan) -> Result<String, OpsError> {
         .managed_config
         .as_ref()
         .ok_or(OpsError::ForensicLockdown)?;
+    let adapter = managed_config_adapter(&plan.site_id)?;
     canonical_digest(
         b"jw-agent/operation-plan/v1",
         &ManagedPlanHashMaterial {
@@ -3002,8 +3021,8 @@ fn managed_config_plan_hash(plan: &StoredPlan) -> Result<String, OpsError> {
             removed_lines: payload.removed_lines,
             diff_summary: &payload.diff_summary,
             resource_key: &plan.resource_key,
-            impact: &MANAGED_CONFIG_IMPACT,
-            recovery_path: &MANAGED_CONFIG_RECOVERY_PATH,
+            impact: adapter.impact(),
+            recovery_path: adapter.recovery_path(),
             assurance: &plan.assurance,
         },
     )
@@ -3128,32 +3147,6 @@ fn nginx_assurance() -> AssuranceView {
     }
 }
 
-fn managed_config_assurance() -> AssuranceView {
-    AssuranceView {
-        level: AssuranceLevel::G2ReversibleConfig,
-        rollback_support: RollbackSupport::AutomaticBounded,
-        operation_available: true,
-        scope: vec![String::from(
-            "등록된 Nginx 설정 파일 하나의 bytes·owner·mode와 검증된 reload",
-        )],
-        excluded_effects: vec![
-            String::from("include된 다른 파일과 active connection"),
-            String::from("Nginx process의 과거 in-memory 상태"),
-            String::from("제품 밖 root 사용자의 동시 변경"),
-        ],
-        apply_verifier: vec![
-            String::from("atomic replace와 content·metadata read-back"),
-            String::from("nginx -t"),
-            String::from("reload 후 nginx.service active"),
-        ],
-        rollback_verifier: vec![
-            String::from("이전 bytes·owner·mode 복원"),
-            String::from("nginx -t와 reload 후 active 확인"),
-        ],
-        reason: None,
-    }
-}
-
 fn require_operator(actor: &Subject) -> Result<(), OpsError> {
     if matches!(actor.role, Role::Admin | Role::Operator) {
         Ok(())
@@ -3237,9 +3230,9 @@ mod tests {
         ManagedConfigApprovalIntent, ManagedConfigPlanRequest, NGINX_CONFIG_ADAPTER_ID,
         NGINX_LAYOUT_ID, NGINX_MANAGEMENT_MARKER, NGINX_SITE_STATE_OPERATION, NginxSiteState,
         NginxSiteStatePlanRequest, OperationStage, OpsRequest, OpsRequestBody, OpsResponseBody,
-        Role, ServiceAction, Subject, nginx_config_resource_id,
+        PHP_FPM_CONFIG_ADAPTER_ID, Role, ServiceAction, Subject, nginx_config_resource_id,
         nginx_enabled_state_digest as enabled_state_digest, nginx_site_id as site_id,
-        sha256_digest,
+        php_fpm_config_resource_id, sha256_digest,
     };
 
     use crate::certbot_runner::CertbotRunner;
@@ -3252,6 +3245,7 @@ mod tests {
     use super::test_fakes::{FakeCertbotRunner, FakeRunner};
 
     mod operation_smoke_tests;
+    mod php_fpm_tests;
 
     #[test]
     fn certbot_staging_issue_is_non_persistent_and_unlocks_production_plan() -> Result<(), String> {

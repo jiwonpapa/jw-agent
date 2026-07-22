@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { nginxSyntaxDiagnosticLine, operationResultLabel } from "./managed-config-diagnostic";
+import {
+  managedConfigSyntaxDiagnosticLine,
+  nginxSyntaxDiagnosticLine,
+  operationResultLabel,
+} from "./managed-config-diagnostic";
 
 describe("managed config diagnostics", () => {
   it("accepts only the bounded selected-resource line code", () => {
@@ -17,6 +21,11 @@ describe("managed config diagnostics", () => {
     );
     expect(operationResultLabel("nginx_config_test_failed:line=9:secret")).toBe(
       "Nginx 문법검사 실패",
+    );
+    expect(managedConfigSyntaxDiagnosticLine([{ resultCode: "php_fpm_config_syntax_line_42" }])).toBe(42);
+    expect(managedConfigSyntaxDiagnosticLine([{ resultCode: "php_fpm_config_syntax_line_0" }])).toBeNull();
+    expect(operationResultLabel("php_fpm_config_syntax_line_42")).toBe(
+      "PHP-FPM 문법 오류 · php.ini 42번째 줄",
     );
   });
 });

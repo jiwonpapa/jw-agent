@@ -1,3 +1,15 @@
+jw-agent (0.2.0~p2.15) noble; urgency=medium
+
+  * Add a fixed Ubuntu PHP 8.3 FPM runtime and extension inventory.
+  * Add bounded php.ini planning, syntax validation, reload, and exact rollback.
+  * Add the responsive PHP-FPM workspace and INI-aware CodeMirror editor.
+  * Raise only the exact managed-config plan edge path to a 256 KiB body cap.
+  * Extend the opsd write sandbox only to the fixed PHP 8.3 FPM configuration root.
+  * Bind the validator-only PHP-FPM log target to /dev/null inside opsd.
+  * Verify the shared managed-config adapter contract in browser and Ubuntu VM.
+
+ -- JW Agent Maintainers <maintainers@example.invalid>  Wed, 22 Jul 2026 20:30:00 +0900
+
 jw-agent (0.2.0~p2.14) noble; urgency=medium
 
   * Add CodeMirror Nginx and SFTP editors with a lazy unified diff.

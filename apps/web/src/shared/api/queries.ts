@@ -8,6 +8,7 @@ import {
   getHost,
   getIntegrations,
   getNginxSites,
+  getPhpFpm,
   getRecentOperations,
   getSession,
   getServices,
@@ -21,6 +22,7 @@ export const queryKeys = {
   services: ["services"] as const,
   activity: ["activity"] as const,
   nginxSites: ["services", "nginx", "sites"] as const,
+  phpFpm: ["services", "php-fpm"] as const,
   certificates: ["certificates"] as const,
   integrations: ["integrations"] as const,
   accessSettings: ["settings", "access"] as const,
@@ -66,6 +68,13 @@ export const activityQueryOptions = queryOptions({
 export const nginxSitesQueryOptions = queryOptions({
   queryKey: queryKeys.nginxSites,
   queryFn: ({ signal }) => getNginxSites(signal),
+  staleTime: 15_000,
+  retry: 1,
+});
+
+export const phpFpmQueryOptions = queryOptions({
+  queryKey: queryKeys.phpFpm,
+  queryFn: ({ signal }) => getPhpFpm(signal),
   staleTime: 15_000,
   retry: 1,
 });

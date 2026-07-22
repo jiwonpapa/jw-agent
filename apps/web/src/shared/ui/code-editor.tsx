@@ -6,6 +6,7 @@ import {
   type LanguageSupport,
 } from "@codemirror/language";
 import { nginx } from "@codemirror/legacy-modes/mode/nginx";
+import { properties } from "@codemirror/legacy-modes/mode/properties";
 import { Compartment, type Extension } from "@codemirror/state";
 import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
 import {
@@ -25,7 +26,7 @@ import { useEffect, useRef } from "react";
 
 import { cn } from "./cn";
 
-export type EditorLanguage = "nginx" | "plain";
+export type EditorLanguage = "ini" | "nginx" | "plain";
 
 interface CodeEditorProps {
   value: string;
@@ -39,6 +40,7 @@ interface CodeEditorProps {
 }
 
 const nginxLanguage = StreamLanguage.define(nginx);
+const iniLanguage = StreamLanguage.define(properties);
 
 export const editorTheme = EditorView.theme({
   "&": {
@@ -124,7 +126,9 @@ function diagnosticExtension(view: EditorView, lineNumber: number | null, messag
 }
 
 export function languageExtension(language: EditorLanguage): LanguageSupport | ReturnType<typeof StreamLanguage.define> | null {
-  return language === "nginx" ? nginxLanguage : null;
+  if (language === "nginx") return nginxLanguage;
+  if (language === "ini") return iniLanguage;
+  return null;
 }
 
 export function CodeEditor({

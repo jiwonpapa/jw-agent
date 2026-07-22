@@ -19,9 +19,10 @@ Public ingress stays disabled until an administrator supplies an exact FQDN,
 certificate paths, and explicitly installs the Nginx template. The package must
 not edit DNS, UFW, SSH, Certbot, or unrelated Nginx sites automatically.
 An existing public-edge site remains administrator-owned: upgrading the package
-does not replace it. P2B managed-config requests require the reviewed `64k`
-JSON-envelope limit from the current template while decoded configuration content
-remains capped at `24 KiB`.
+does not replace it. Managed-config plan requests alone use a reviewed `256 KiB`
+JSON envelope: Nginx content stays capped at `24 KiB`, while the fixed Ubuntu
+PHP 8.3 FPM `php.ini` adapter is capped at `128 KiB`. Other API requests retain
+the `64 KiB` application limit.
 The current public edge still accepts an existing valid certificate path only.
 The P2C package contains the isolated one-shot runner, sanitized read-only
 certificate inventory, a planned/PAM-approved renewal dry-run, and guided
@@ -33,8 +34,8 @@ list/stat/text/download plus G1 regular-file creation and explicit replacement.
 G1 writes require a short-lived PAM-approved plan, OpenSSH fsync and POSIX rename
 extensions, and mode/size/SHA-256 read-back. Delete, move, chmod/chown, recursive
 transfer, system paths, and root SFTP remain absent. The exact binary upload route
-has an 8 MiB edge limit while every other API request remains under the 64 KiB
-JSON envelope.
+has an 8 MiB edge limit. The managed-config exception above does not widen PAM,
+terminal, SFTP control, or other JSON endpoints.
 
 The public proxy socket uses the dedicated `jw-agent-proxy` group and
 `/run/jw-agent-proxy`. Nginx is never added to the privileged `jw-agent` group

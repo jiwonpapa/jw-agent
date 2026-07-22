@@ -6,7 +6,7 @@ use serde::de::DeserializeOwned;
 
 pub const IPC_PROTOCOL_VERSION: u16 = 1;
 pub const AUTH_FRAME_MAX_BYTES: usize = 16 * 1_024;
-pub const OPS_FRAME_MAX_BYTES: usize = 64 * 1_024;
+pub const OPS_FRAME_MAX_BYTES: usize = 256 * 1_024;
 
 #[derive(Debug)]
 pub enum FrameError {

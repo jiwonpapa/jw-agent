@@ -10,6 +10,7 @@ mod ledger;
 mod managed_config;
 mod nginx;
 mod nginx_diagnostic;
+mod php_fpm_diagnostic;
 mod runner;
 mod snapshot;
 

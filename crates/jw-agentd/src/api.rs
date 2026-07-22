@@ -38,11 +38,12 @@ use jw_contracts::{
     ManagedConfigPlanView, ManagedConfigResourceView, NGINX_SITE_STATE_OPERATION,
     NginxSiteStatePlanRequest, NginxSiteStatePlanView, NginxSitesView, ObservationStatus,
     OperationAcceptedView, OperationApprovalRequest, OperationListView, OperationReceiptView,
-    OperationStageEvidenceView, ProblemDetails, ReauthPurpose, ReauthRequest, ReauthView, Role,
-    RollbackSupport, ServiceAction, ServiceCategory, ServiceRuntimeState, ServiceSummary,
-    ServiceSupport, ServiceVisibility, ServicesView, SessionView, Subject,
-    TERMINAL_MAX_FRAME_BYTES, TERMINAL_MAX_OUTPUT_BUFFER_BYTES, TerminalCapabilityView,
-    TerminalLimitsView, TerminalTicketRequest, TerminalTicketView, UpdateAdditionalAuthRequest,
+    OperationStageEvidenceView, PhpFpmRuntimeView, PhpFpmView, ProblemDetails, ReauthPurpose,
+    ReauthRequest, ReauthView, Role, RollbackSupport, ServiceAction, ServiceCategory,
+    ServiceRuntimeState, ServiceSummary, ServiceSupport, ServiceVisibility, ServicesView,
+    SessionView, Subject, TERMINAL_MAX_FRAME_BYTES, TERMINAL_MAX_OUTPUT_BUFFER_BYTES,
+    TerminalCapabilityView, TerminalLimitsView, TerminalTicketRequest, TerminalTicketView,
+    UpdateAdditionalAuthRequest,
 };
 use sha2::{Digest, Sha256};
 use tower_http::services::{ServeDir, ServeFile};
@@ -63,8 +64,12 @@ use crate::{AgentConfig, AuthBroker, OpsBroker, SessionStore};
 
 mod activity;
 use activity::{__path_recent_operations, recent_operations};
+#[path = "api/php_fpm.rs"]
+mod php_fpm_api;
+use php_fpm_api::{__path_php_fpm, php_fpm};
 
 const API_BODY_MAX_BYTES: usize = 64 * 1_024;
+const MANAGED_CONFIG_API_BODY_MAX_BYTES: usize = 256 * 1_024;
 const CLIENT_ADDRESS_HEADER: &str = "x-jw-client-address";
 const CSRF_HEADER: &str = "x-csrf-token";
 const FILE_SESSION_HEADER: &str = "x-jw-file-session";
@@ -132,6 +137,7 @@ impl AppState {
         host,
         capabilities,
         services,
+        php_fpm,
         nginx_sites,
         certificates,
         plan_certbot_issue,
@@ -177,6 +183,8 @@ impl AppState {
         jw_contracts::MemoryObservation,
         jw_contracts::DiskObservation,
         NginxSitesView,
+        PhpFpmView,
+        PhpFpmRuntimeView,
         CertificateInventoryView,
         CertificateSummaryView,
         CertbotIssuePlanRequest,
@@ -278,6 +286,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/v1/host", get(host))
         .route("/api/v1/capabilities", get(capabilities))
         .route("/api/v1/services", get(services))
+        .route("/api/v1/services/php-fpm", get(php_fpm))
         .route("/api/v1/services/nginx/sites", get(nginx_sites))
         .route("/api/v1/certificates", get(certificates))
         .route(
@@ -318,7 +327,8 @@ pub fn build_router(state: AppState) -> Router {
         )
         .route(
             "/api/v1/operations/service/config-file/plans",
-            post(plan_managed_config),
+            post(plan_managed_config)
+                .layer(DefaultBodyLimit::max(MANAGED_CONFIG_API_BODY_MAX_BYTES)),
         )
         .route(
             "/api/v1/operations/service/config-file/approvals",
@@ -2315,7 +2325,7 @@ fn validate_operation_id(operation_id: &str) -> Result<(), ApiProblem> {
 fn validate_managed_config_resource_id(resource_id: &str) -> Result<(), ApiProblem> {
     if resource_id.len() < 12
         || resource_id.len() > 64
-        || !resource_id.starts_with("ngc_")
+        || !(resource_id.starts_with("ngc_") || resource_id.starts_with("php_"))
         || !resource_id
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))

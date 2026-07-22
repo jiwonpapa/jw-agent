@@ -21,7 +21,7 @@ Last reviewed: 2026-07-22
 - `rusqlite` with system SQLite; no bundled SQLite or ORM
 - Rust `utoipa` OpenAPI → `openapi-typescript` + `openapi-fetch`
 - direct libpam FFI with one masked prompt and 32-message hard limit; unsafe is isolated to `ffi-pam`
-- IPC version 1; auth frame 16 KiB, ops capability frame 64 KiB
+- IPC version 1; auth frame 16 KiB, ops frame 256 KiB (Nginx content 24 KiB, PHP-FPM content 128 KiB)
 - public session idle/absolute 15 minutes/8 hours; recovery 10 minutes/2 hours; reauth claim 5 minutes
 - exact locked Rust and Bun dependency versions
 - additional auth policy values `disabled | risky_operations | all_mutations`
@@ -59,19 +59,20 @@ P2 구현 진입은 2026-07-21 사용자 목표추진 지시와 [ADR-0010](../90
 - opsd는 private network namespace와 `CAP_NET_BIND_SERVICE`만 사용하며 외부 network API나 listening socket을 갖지 않습니다.
 - 제품 관리 vhost는 legacy basename뿐 아니라 versioned content marker와 제품 include로 판정합니다. 보호 resource는 operation type/schema를 노출하지 않고 opsd plan도 재검증합니다.
 - mutation 승인은 `202 Accepted`이며 durable ledger가 실행 상태를 소유합니다. 브라우저 SSE는 durable sequence를 event ID로 사용하고 canonical receipt를 다시 조회합니다.
-- `p2-local` 22개, `p2-browser` 8개, Playwright 37개, `p2-vm` 24개 gate가 PASS했습니다.
-- VM package는 `jw-agent_0.2.0~p2.14_amd64.deb`, SHA-256 `0c7b251139acc520ba08b3e21a7407c913162619eda15e6aa536c7b11ec8bc9b`입니다.
+- `p2-local` 22개, `p2-browser` 8개, Playwright 38개, `p2-vm` 24개 gate가 PASS했습니다.
+- VM package는 `jw-agent_0.2.0~p2.15_amd64.deb`, SHA-256 `3684319fa35e2be9af9f7ec475923d41cc041285a67d0f12831ba07dee06b51e`입니다.
 - Ubuntu systemd 서비스 목록은 템플릿 주요 서비스, 로컬 발견 unit과 시스템 내부 unit을 G0로 분리하며 failed unit을 숨기지 않습니다.
 - 로컬 콘솔은 Linux UID·non-root 경계를 명시하고 자원 사용률, 서비스 family, 현재 UID의 typed-operation 영수증만 요약합니다. opsd 임의 명령·전체 사용자 감사 조회 권한은 추가하지 않습니다.
-- managed Nginx config는 활성 exact symlink, root:root, UTF-8 24 KiB content·64 KiB request envelope, reload profile만 `VM_PASS + G2`입니다.
-- 현재 `SUPPORTED + VM_PASS + G2` write 표면은 `nginx.site_state.set/v1`, active Nginx profile의 `service.config_file.set/v1`, 보호 vhost의 `certbot.certificate.attach/v1`입니다. `certbot.certificate.renew_test/v1`은 `SUPPORTED + VM_PASS + G1`이며, `certbot.certificate.issue/v1`은 실패 안전성까지 `VM_PASS`이나 공인 CA 성공은 `UNVERIFIED`입니다.
+- managed Nginx config는 활성 exact symlink, root:root, UTF-8 24 KiB content와 exact managed-config plan 256 KiB envelope, reload profile만 `VM_PASS + G2`입니다.
+- PHP 8.3 FPM config는 표준 apt layout, root:root UTF-8 128 KiB content, fixed `php-fpm8.3 -t`·reload profile만 `VM_PASS + G2`이며 pool·extension package·다른 SAPI/version은 제외합니다.
+- 현재 `SUPPORTED + VM_PASS + G2` write 표면은 `nginx.site_state.set/v1`, active Nginx와 PHP 8.3 FPM profile의 `service.config_file.set/v1`, 보호 vhost의 `certbot.certificate.attach/v1`입니다. `certbot.certificate.renew_test/v1`은 `SUPPORTED + VM_PASS + G1`이며, `certbot.certificate.issue/v1`은 실패 안전성까지 `VM_PASS`이나 공인 CA 성공은 `UNVERIFIED`입니다.
 - `jw-certd` one-shot network privilege boundary, sanitized inventory, PAM 승인 renewal dry-run, DNS·listener·webroot preflight, 실패 영수증과 고정 loopback SNI probe는 `VM_PASS`입니다.
 - `jw-certd`의 추가 명령은 `127.0.0.1:443` 고정 SNI fingerprint probe뿐이며 `opsd` network 차단은 유지합니다. attach 정상 경로와 probe 강제 실패의 exact rollback은 `VM_PASS + G2`입니다.
 - P2D terminal은 system OpenSSH client, one-shot memory/FIFO password broker, same-origin WSS, non-root PTY와 metadata-only audit로 `VM_PASS + G1`입니다. SFTP list/stat/text-read/download는 fixed OpenSSH subsystem과 canonical home confinement으로 `VM_PASS + G0`입니다. 일반 파일 create/replace는 PAM plan, fsync·atomic rename, mode·size·digest read-back과 metadata-only audit로 `VM_PASS + G1`입니다. package는 sshd 정책을 자동 변경하지 않으며 VM fixture만 loopback password 인증을 허용합니다. delete·move·chmod·root/system path 쓰기는 제외합니다.
 - opsd는 SQLite ledger event와 외부 checkpoint 파일 사이의 일관된 판정을 위해 typed request 전체를 직렬화합니다. 실행 중 receipt 조회는 완료까지 대기하며 중간 checkpoint를 훼손으로 오판하지 않습니다.
 - [ADR-0014](../90-specs/adr/0014-codemirror-config-editor.md)는 Monaco 대신 mobile-compatible CodeMirror 최소 graph를 승인합니다. Mac mini production build는 2.38초, editor core gzip 100.97 kB, plan-only diff gzip 7.72 kB이며 범용 lint·autocomplete·search·React wrapper는 제외했습니다.
 - Nginx `nginx -t` stderr는 원문을 저장·노출하지 않고 selected-resource basename에 일치하는 양의 줄 번호만 `result_code`에 남깁니다. verified rollback 후 UI가 그 줄로 복귀하며 위치가 없으면 추측하지 않습니다.
-- terminal·SFTP memory-only session은 authenticated app shell이 소유합니다. route 이동은 close 효과가 아니며 browser regression gate는 같은 ticket/token 재사용과 close 요청 부재를 확인합니다. p2.14 package/runtime VM gate는 실제 OpenSSH terminal·SFTP endpoint와 제한 시간을 다시 검증했으며 무제한 session은 제공하지 않습니다.
+- terminal·SFTP memory-only session은 authenticated app shell이 소유합니다. route 이동은 close 효과가 아니며 browser regression gate는 같은 ticket/token 재사용과 close 요청 부재를 확인합니다. p2.15 package/runtime VM gate는 실제 OpenSSH terminal·SFTP endpoint와 제한 시간을 다시 검증했으며 무제한 session은 제공하지 않습니다.
 
 ## P3 전에 선택
 

@@ -221,6 +221,7 @@ const P2_REQUIRED_PATHS: &[&str] = &[
     "crates/jw-opsd/src/nginx.rs",
     "crates/jw-opsd/src/runner.rs",
     "crates/jw-opsd/src/snapshot.rs",
+    "xtask/src/vm/php_fpm.rs",
     "tests/spec-fixtures/nginx-site-state-set-v1.json",
     "tests/spec-fixtures/managed-config-file-v1.json",
 ];
@@ -548,11 +549,11 @@ const GATES: &[Gate] = &[
     Gate {
         id: "VM-P2-MANAGED-CONFIG",
         owner: "Managed Configuration Maintainers",
-        scope: "active Nginx config G2 plan, atomic replace, validation, reload, and exact rollback",
-        inputs: "installed P2 package, public TLS API, PAM fixture, active Nginx resource, opsd ledger",
+        scope: "Nginx and PHP-FPM config G2 plan, atomic replace, validation, reload, and exact rollback",
+        inputs: "installed P2 package, public TLS API, PAM fixture, active Nginx and PHP-FPM resources, opsd ledger",
         lanes: P2_VM_LANES,
         timeout_seconds: 300,
-        evidence: "save, no-op, syntax/reload rollback, external drift, inactive denial, and proposal cleanup passed",
+        evidence: "Nginx save and rollback matrix plus PHP-FPM observation, save, syntax rollback, and continuity passed",
         failure_policy: "fail lane on unvalidated save, inexact rollback, inactive edit, stale overwrite, or retained proposal",
         run: vm::gate_p2_managed_config,
     },

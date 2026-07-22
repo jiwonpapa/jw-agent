@@ -1921,6 +1921,34 @@
         }
       }
     },
+    "/api/v1/services/php-fpm": {
+      "get": {
+        "tags": [],
+        "operationId": "php_fpm",
+        "responses": {
+          "200": {
+            "description": "Sanitized PHP-FPM runtime and managed config capability",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PhpFpmView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/settings/access": {
       "get": {
         "tags": [],
@@ -3728,7 +3756,7 @@
           },
           "proposedContent": {
             "type": "string",
-            "maxLength": 24576
+            "maxLength": 131072
           },
           "resourceId": {
             "type": "string"
@@ -4392,6 +4420,114 @@
           },
           "stage": {
             "$ref": "#/components/schemas/OperationStage"
+          }
+        }
+      },
+      "PhpFpmRuntimeView": {
+        "type": "object",
+        "required": [
+          "version",
+          "unitName",
+          "runtimeState",
+          "activeState",
+          "subState",
+          "phpIniMaskedPath",
+          "poolDirectoryMaskedPath",
+          "extensionDirectoryMaskedPath",
+          "extensions",
+          "extensionCount",
+          "extensionsTruncated",
+          "assurance"
+        ],
+        "properties": {
+          "activeState": {
+            "type": "string"
+          },
+          "assurance": {
+            "$ref": "#/components/schemas/AssuranceView"
+          },
+          "blockedReason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "extensionCount": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "extensionDirectoryMaskedPath": {
+            "type": "string"
+          },
+          "extensions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "extensionsTruncated": {
+            "type": "boolean"
+          },
+          "managedConfigOperationType": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "managedConfigResourceId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "managedConfigSchemaVersion": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "phpIniMaskedPath": {
+            "type": "string"
+          },
+          "poolDirectoryMaskedPath": {
+            "type": "string"
+          },
+          "runtimeState": {
+            "$ref": "#/components/schemas/ServiceRuntimeState"
+          },
+          "subState": {
+            "type": "string"
+          },
+          "unitName": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          }
+        }
+      },
+      "PhpFpmView": {
+        "type": "object",
+        "required": [
+          "observedAt",
+          "status",
+          "runtimes"
+        ],
+        "properties": {
+          "observedAt": {
+            "type": "string"
+          },
+          "runtimes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PhpFpmRuntimeView"
+            }
+          },
+          "status": {
+            "$ref": "#/components/schemas/ObservationStatus"
           }
         }
       },

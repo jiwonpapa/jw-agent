@@ -548,6 +548,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/services/php-fpm": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["php_fpm"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/settings/access": {
         parameters: {
             query?: never;
@@ -1184,6 +1200,31 @@ export interface components {
             /** Format: int64 */
             sequence: number;
             stage: components["schemas"]["OperationStage"];
+        };
+        PhpFpmRuntimeView: {
+            activeState: string;
+            assurance: components["schemas"]["AssuranceView"];
+            blockedReason?: string | null;
+            /** Format: int32 */
+            extensionCount: number;
+            extensionDirectoryMaskedPath: string;
+            extensions: string[];
+            extensionsTruncated: boolean;
+            managedConfigOperationType?: string | null;
+            managedConfigResourceId?: string | null;
+            /** Format: int32 */
+            managedConfigSchemaVersion?: number | null;
+            phpIniMaskedPath: string;
+            poolDirectoryMaskedPath: string;
+            runtimeState: components["schemas"]["ServiceRuntimeState"];
+            subState: string;
+            unitName: string;
+            version: string;
+        };
+        PhpFpmView: {
+            observedAt: string;
+            runtimes: components["schemas"]["PhpFpmRuntimeView"][];
+            status: components["schemas"]["ObservationStatus"];
         };
         ProblemDetails: {
             code: string;
@@ -3039,6 +3080,35 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["NginxSitesView"];
+                };
+            };
+            /** @description Authentication required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    php_fpm: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Sanitized PHP-FPM runtime and managed config capability */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PhpFpmView"];
                 };
             };
             /** @description Authentication required */

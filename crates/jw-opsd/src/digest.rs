@@ -58,7 +58,7 @@ mod tests {
     use serde_json::Value;
 
     use jw_contracts::{
-        MANAGED_CONFIG_MAX_BYTES, NGINX_CONFIG_ADAPTER_ID, nginx_config_resource_id,
+        NGINX_CONFIG_ADAPTER_ID, NGINX_MANAGED_CONFIG_MAX_BYTES, nginx_config_resource_id,
         nginx_enabled_state_digest, nginx_site_id, sha256_digest,
     };
 
@@ -127,7 +127,7 @@ mod tests {
             .ok_or_else(|| String::from("fixture maxBytes missing"))?;
         assert_eq!(
             usize::try_from(max_bytes).map_err(|_| String::from("fixture maxBytes overflow"))?,
-            MANAGED_CONFIG_MAX_BYTES
+            NGINX_MANAGED_CONFIG_MAX_BYTES
         );
         let vector = fixture
             .get("resourceIdentityVector")

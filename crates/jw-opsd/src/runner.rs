@@ -13,6 +13,9 @@ pub enum CommandClass {
     NginxConfigTest,
     NginxReload,
     NginxActive,
+    PhpFpm83ConfigTest,
+    PhpFpm83Reload,
+    PhpFpm83Active,
     CertbotTimerEnabled,
     CertbotTimerActive,
 }
@@ -24,6 +27,9 @@ impl CommandClass {
             Self::NginxConfigTest => "nginx_config_test",
             Self::NginxReload => "nginx_reload",
             Self::NginxActive => "nginx_active",
+            Self::PhpFpm83ConfigTest => "php_fpm_83_config_test",
+            Self::PhpFpm83Reload => "php_fpm_83_reload",
+            Self::PhpFpm83Active => "php_fpm_83_active",
             Self::CertbotTimerEnabled => "certbot_timer_enabled",
             Self::CertbotTimerActive => "certbot_timer_active",
         }
@@ -36,6 +42,12 @@ impl CommandClass {
             Self::NginxActive => (
                 "/usr/bin/systemctl",
                 &["is-active", "--quiet", "nginx.service"],
+            ),
+            Self::PhpFpm83ConfigTest => ("/usr/sbin/php-fpm8.3", &["-t"]),
+            Self::PhpFpm83Reload => ("/usr/bin/systemctl", &["reload", "php8.3-fpm.service"]),
+            Self::PhpFpm83Active => (
+                "/usr/bin/systemctl",
+                &["is-active", "--quiet", "php8.3-fpm.service"],
             ),
             Self::CertbotTimerEnabled => (
                 "/usr/bin/systemctl",
@@ -303,6 +315,21 @@ mod tests {
                 CommandClass::NginxActive,
                 "/usr/bin/systemctl",
                 &["is-active", "--quiet", "nginx.service"][..],
+            ),
+            (
+                CommandClass::PhpFpm83ConfigTest,
+                "/usr/sbin/php-fpm8.3",
+                &["-t"][..],
+            ),
+            (
+                CommandClass::PhpFpm83Reload,
+                "/usr/bin/systemctl",
+                &["reload", "php8.3-fpm.service"][..],
+            ),
+            (
+                CommandClass::PhpFpm83Active,
+                "/usr/bin/systemctl",
+                &["is-active", "--quiet", "php8.3-fpm.service"][..],
             ),
             (
                 CommandClass::CertbotTimerEnabled,

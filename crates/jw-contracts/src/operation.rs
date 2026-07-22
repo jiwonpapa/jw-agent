@@ -11,7 +11,8 @@ pub const NGINX_SITE_STATE_OPERATION: &str = "nginx.site_state.set/v1";
 pub const NGINX_LAYOUT_ID: &str = "ubuntu-nginx-sites-v1";
 pub const MANAGED_CONFIG_OPERATION: &str = "service.config_file.set/v1";
 pub const NGINX_CONFIG_ADAPTER_ID: &str = "nginx/ubuntu-standard-v1";
-pub const MANAGED_CONFIG_MAX_BYTES: usize = 24 * 1_024;
+pub const MANAGED_CONFIG_MAX_BYTES: usize = 128 * 1_024;
+pub const NGINX_MANAGED_CONFIG_MAX_BYTES: usize = 24 * 1_024;
 pub const NGINX_MANAGEMENT_MARKER: &[u8] = b"jw-agent:protected-management-v1";
 pub const NGINX_MANAGEMENT_PROXY_INCLUDE: &[u8] =
     b"include /usr/share/jw-agent/nginx/proxy-common.conf;";
@@ -219,7 +220,7 @@ pub struct ManagedConfigPlanRequest {
     pub resource_id: String,
     pub expected_content_digest: String,
     pub expected_metadata_digest: String,
-    #[schema(max_length = 24576)]
+    #[schema(max_length = 131072)]
     pub proposed_content: String,
     pub service_action: ServiceAction,
     pub idempotency_key: String,
@@ -249,7 +250,7 @@ impl ManagedConfigPlanRequest {
         if self.operation_type != MANAGED_CONFIG_OPERATION {
             return Err("operation_type");
         }
-        validate_identifier(&self.resource_id, "ngc_", "resource_id")?;
+        validate_managed_resource_id(&self.resource_id)?;
         validate_digest(&self.expected_content_digest)?;
         validate_digest(&self.expected_metadata_digest)?;
         if self.proposed_content.len() > MANAGED_CONFIG_MAX_BYTES {
@@ -258,7 +259,9 @@ impl ManagedConfigPlanRequest {
         if !managed_config_bytes_supported(self.proposed_content.as_bytes()) {
             return Err("invalid_encoding");
         }
-        if nginx_management_config(self.proposed_content.as_bytes()) {
+        if self.resource_id.starts_with("ngc_")
+            && nginx_management_config(self.proposed_content.as_bytes())
+        {
             return Err("protected_content");
         }
         if self.service_action != ServiceAction::Reload {
@@ -270,6 +273,16 @@ impl ManagedConfigPlanRequest {
             IDEMPOTENCY_KEY_MAX_BYTES,
             "idempotency_key",
         )
+    }
+}
+
+fn validate_managed_resource_id(value: &str) -> Result<(), &'static str> {
+    if value.starts_with("ngc_") {
+        validate_identifier(value, "ngc_", "resource_id")
+    } else if value.starts_with("php_") {
+        validate_identifier(value, "php_", "resource_id")
+    } else {
+        Err("resource_id")
     }
 }
 
@@ -613,7 +626,7 @@ impl OpsRequest {
             OpsRequestBody::PlanCertbotRenewTest { plan, .. } => plan.validate(),
             OpsRequestBody::PlanCertbotAttach { plan, .. } => plan.validate(),
             OpsRequestBody::ReadManagedConfig { resource_id, .. } => {
-                validate_identifier(resource_id, "ngc_", "resource_id")
+                validate_managed_resource_id(resource_id)
             }
             OpsRequestBody::PlanNginxSiteState { plan, .. } => plan.validate(),
             OpsRequestBody::PlanManagedConfig { plan, .. } => plan.validate(),

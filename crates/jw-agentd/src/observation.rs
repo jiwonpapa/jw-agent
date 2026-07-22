@@ -4,8 +4,8 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use jw_contracts::{
-    AssuranceLevel, AssuranceView, DiskObservation, HostObservation, MANAGED_CONFIG_MAX_BYTES,
-    MANAGED_CONFIG_OPERATION, MemoryObservation, NGINX_CONFIG_ADAPTER_ID, NGINX_LAYOUT_ID,
+    AssuranceLevel, AssuranceView, DiskObservation, HostObservation, MANAGED_CONFIG_OPERATION,
+    MemoryObservation, NGINX_CONFIG_ADAPTER_ID, NGINX_LAYOUT_ID, NGINX_MANAGED_CONFIG_MAX_BYTES,
     NGINX_SITE_STATE_OPERATION, NginxSiteObservation, NginxSitesView, OPERATION_SCHEMA_VERSION,
     ObservationStatus, RollbackSupport, managed_config_bytes_supported, nginx_config_resource_id,
     nginx_enabled_state_digest, nginx_internal_temporary_name, nginx_management_config,
@@ -242,7 +242,7 @@ fn inspect_nginx_preconditions(
         }
     }
     let managed_config_supported = enabled
-        && bytes.len() <= MANAGED_CONFIG_MAX_BYTES
+        && bytes.len() <= NGINX_MANAGED_CONFIG_MAX_BYTES
         && managed_config_bytes_supported(&bytes)
         && managed_mode_supported(&metadata);
     Ok((

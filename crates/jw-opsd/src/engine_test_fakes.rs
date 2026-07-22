@@ -67,6 +67,27 @@ impl FakeRunner {
         }
     }
 
+    pub(crate) fn php_fpm_success() -> Self {
+        Self {
+            results: Mutex::new(VecDeque::from([
+                (CommandClass::PhpFpm83ConfigTest, true),
+                (CommandClass::PhpFpm83Reload, true),
+                (CommandClass::PhpFpm83Active, true),
+            ])),
+        }
+    }
+
+    pub(crate) fn php_fpm_syntax_failure_then_rollback() -> Self {
+        Self {
+            results: Mutex::new(VecDeque::from([
+                (CommandClass::PhpFpm83ConfigTest, false),
+                (CommandClass::PhpFpm83ConfigTest, true),
+                (CommandClass::PhpFpm83Reload, true),
+                (CommandClass::PhpFpm83Active, true),
+            ])),
+        }
+    }
+
     pub(crate) fn certbot_timer_success(count: usize) -> Self {
         let mut results = VecDeque::new();
         for _ in 0..count {

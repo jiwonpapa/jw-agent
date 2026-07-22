@@ -25,9 +25,9 @@ Ubuntu 24.04 표준 layout에서 service adapter가 등록한 텍스트 설정 r
 - Assurance target: `G2 REVERSIBLE_CONFIG`
 - 최초 지원 adapter: `nginx/ubuntu-standard-v1`
 - 최초 profile: exact `sites-enabled` symlink로 활성화된 root:root regular file
-- inline UTF-8 body 최대: `24 KiB`; service action은 `reload`만 허용
-- JSON request envelope: `64 KiB`; NUL과 layout whitespace 외 ASCII control 거부
-- PHP-FPM·Redis는 adapter별 fixture와 VM evidence 전 `UNSUPPORTED`
+- inline UTF-8 body 최대는 adapter가 소유하며 Nginx는 `24 KiB`, PHP-FPM은 `128 KiB`입니다. service action은 현재 `reload`만 허용합니다.
+- managed-config plan JSON request와 ops IPC envelope: `256 KiB`; 다른 API body는 `64 KiB`를 유지하며 NUL과 layout whitespace 외 ASCII control을 거부합니다.
+- Redis는 adapter별 fixture와 VM evidence 전 `UNSUPPORTED`입니다.
 
 resource registry는 logical ID, supported package/layout, root-owned canonical path, 최대 byte, encoding, syntax command class, service action, health verifier, protected 여부를 소유합니다. API는 canonical root path를 identity로 받지 않습니다.
 
@@ -112,4 +112,4 @@ executable, argv, cwd, environment allowlist, timeout, output cap은 adapter reg
 - desktop/tablet/mobile UI shows G2 scope, diff, service action and exclusions before approval
 - selected-resource syntax diagnostic가 안전하게 추출되면 오류 줄을 editor gutter에 표시하고, 위치가 없으면 추측하지 않음
 
-Nginx active-resource profile은 `0.2.0~p2.2`에서 `VM_PASS + G2`를 획득했습니다. 다른 adapter와 비활성 resource는 계속 `UNSUPPORTED`입니다.
+Nginx active-resource profile은 `0.2.0~p2.2`에서 `VM_PASS + G2`를 획득했습니다. PHP-FPM profile은 [OPS-PHP-FPM-CONFIG-V1](php-fpm-config-v1.md)의 별도 범위와 증거를 따르며, 다른 adapter와 비활성 resource는 계속 `UNSUPPORTED`입니다.

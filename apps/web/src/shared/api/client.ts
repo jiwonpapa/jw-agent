@@ -41,6 +41,7 @@ import type {
   OperationListView,
   OperationReceiptView,
   OperationStageEvidenceView,
+  PhpFpmView,
   ProblemDetails,
   ReauthView,
   SessionView,
@@ -147,6 +148,14 @@ export async function getNginxSites(signal?: AbortSignal): Promise<NginxSitesVie
 
 export async function getServices(signal?: AbortSignal): Promise<ServicesView> {
   const { data, error, response } = await api.GET("/api/v1/services", {
+    signal: signal ?? null,
+  });
+  if (data !== undefined) return data;
+  throw new ApiError(error, response);
+}
+
+export async function getPhpFpm(signal?: AbortSignal): Promise<PhpFpmView> {
+  const { data, error, response } = await api.GET("/api/v1/services/php-fpm", {
     signal: signal ?? null,
   });
   if (data !== undefined) return data;

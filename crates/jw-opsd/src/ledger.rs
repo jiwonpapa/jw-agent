@@ -23,7 +23,7 @@ use crate::config::OpsPaths;
 use crate::digest::ledger_event_digest;
 use crate::error::OpsError;
 use crate::managed_config::{
-    MANAGED_CONFIG_IMPACT, MANAGED_CONFIG_RECOVERY_PATH, ManagedConfigPlanPayload,
+    ManagedConfigPlanPayload, managed_config_adapter, managed_config_masked_path,
 };
 use crate::nginx::{NGINX_IMPACT, NGINX_RECOVERY_PATH};
 use crate::snapshot::SnapshotRecord;
@@ -491,6 +491,11 @@ impl Ledger {
             .last()
             .map(|stage| stage.recorded_at.clone())
             .ok_or(OpsError::ForensicLockdown)?;
+        let recovery_path = if operation.stage == OperationStage::RecoveryRequired {
+            recovery_path_for(&operation.plan)
+        } else {
+            Vec::new()
+        };
         Ok(OperationReceiptView {
             schema_version: OPERATION_SCHEMA_VERSION,
             operation_type: operation.plan.operation_type.clone(),
@@ -506,11 +511,7 @@ impl Ledger {
             stages,
             assurance: operation.plan.assurance,
             rollback_result: operation.rollback_result,
-            recovery_path: if operation.stage == OperationStage::RecoveryRequired {
-                recovery_path_for(&operation.plan.operation_type)
-            } else {
-                Vec::new()
-            },
+            recovery_path,
         })
     }
 
@@ -560,6 +561,7 @@ impl Ledger {
             .managed_config
             .as_ref()
             .ok_or(OpsError::ForensicLockdown)?;
+        let adapter = managed_config_adapter(&plan.site_id)?;
         Ok(ManagedConfigPlanView {
             schema_version: OPERATION_SCHEMA_VERSION,
             operation_type: plan.operation_type.clone(),
@@ -568,10 +570,10 @@ impl Ledger {
             created_at: format_time(plan.created_at_ms)?,
             expires_at: format_time(plan.expires_at_ms)?,
             actor: plan.actor.clone(),
-            adapter_id: String::from(jw_contracts::NGINX_CONFIG_ADAPTER_ID),
+            adapter_id: String::from(adapter.adapter_id()),
             resource_id: plan.site_id.clone(),
             display_name: plan.display_name.clone(),
-            masked_path: format!("…/sites-available/{}", plan.display_name),
+            masked_path: managed_config_masked_path(adapter, &plan.display_name),
             current_content_digest: plan.available_digest.clone(),
             proposed_content_digest: payload.proposed_content_digest.clone(),
             metadata_digest: plan.enabled_state_digest.clone(),
@@ -581,11 +583,9 @@ impl Ledger {
             removed_lines: payload.removed_lines,
             diff_summary: payload.diff_summary.clone(),
             service_action: payload.service_action,
-            impact: MANAGED_CONFIG_IMPACT
-                .iter()
-                .map(ToString::to_string)
-                .collect(),
-            recovery_path: MANAGED_CONFIG_RECOVERY_PATH
+            impact: adapter.impact().iter().map(ToString::to_string).collect(),
+            recovery_path: adapter
+                .recovery_path()
                 .iter()
                 .map(ToString::to_string)
                 .collect(),
@@ -1110,14 +1110,15 @@ fn migrate(connection: &Connection) -> Result<(), OpsError> {
     Ok(())
 }
 
-fn recovery_path_for(operation_type: &str) -> Vec<String> {
-    let values: &[&str] = if operation_type == MANAGED_CONFIG_OPERATION {
-        &MANAGED_CONFIG_RECOVERY_PATH
-    } else if operation_type == CERTBOT_ISSUE_OPERATION {
+fn recovery_path_for(plan: &StoredPlan) -> Vec<String> {
+    let values: &[&str] = if plan.operation_type == MANAGED_CONFIG_OPERATION {
+        managed_config_adapter(&plan.site_id)
+            .map_or(&[] as &[&str], |adapter| adapter.recovery_path())
+    } else if plan.operation_type == CERTBOT_ISSUE_OPERATION {
         &CERTBOT_ISSUE_RECOVERY_PATH
-    } else if operation_type == jw_contracts::CERTBOT_RENEW_TEST_OPERATION {
+    } else if plan.operation_type == jw_contracts::CERTBOT_RENEW_TEST_OPERATION {
         &CERTBOT_RENEW_RECOVERY_PATH
-    } else if operation_type == CERTBOT_ATTACH_OPERATION {
+    } else if plan.operation_type == CERTBOT_ATTACH_OPERATION {
         &CERTBOT_ATTACH_RECOVERY_PATH
     } else {
         &NGINX_RECOVERY_PATH

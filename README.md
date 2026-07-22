@@ -2,7 +2,7 @@
 
 Ubuntu 24.04 LTS 서버의 **범용 서비스 설정·유지보수 작업을 안전하게 수행하는 단일 서버 우선 관리 콘솔**입니다.
 
-현재 단계는 `P2 Safe local operations`입니다. durable safety kernel, Nginx G2 작업, Certbot one-shot 경계·인증서 조회·G1 갱신 dry-run, guided 발급의 안전한 CA 실패 경로, 보호 vhost 인증서 연결 G2, non-root terminal G1과 home-scoped SFTP read G0/create·replace G1을 Ubuntu VM에서 검증했습니다. 공인 CA 발급 성공, 범용 SFTP 쓰기와 P2 전체 완료는 아직 주장하지 않습니다.
+현재 단계는 `P2 Safe local operations`입니다. durable safety kernel, Nginx와 PHP 8.3 FPM 설정 G2 작업, Certbot one-shot 경계·인증서 조회·G1 갱신 dry-run, guided 발급의 안전한 CA 실패 경로, 보호 vhost 인증서 연결 G2, non-root terminal G1과 home-scoped SFTP read G0/create·replace G1을 Ubuntu VM에서 검증했습니다. 공인 CA 발급 성공, 범용 SFTP 쓰기와 P2 전체 완료는 아직 주장하지 않습니다.
 
 이 저장소의 P1 기준점은 공개 개발 스냅샷이며 아직 오픈소스 릴리스가 아닙니다. `LICENSE`가 추가되기 전에는 사용·수정·재배포 권한을 부여하지 않으며, 정식 라이선스는 P3 release 준비에서 명시적으로 결정합니다.
 
@@ -20,7 +20,7 @@ Ubuntu 24.04 LTS 서버의 **범용 서비스 설정·유지보수 작업을 안
 - Rust `agentd` 비-root / `authd`·`opsd` root·networkless 분리
 - React + TypeScript + Bun + Vite + Tailwind CSS CLI + shadcn/ui
 - desktop·tablet·mobile 반응형 웹
-- 호스트·Nginx 관찰, typed site state, 활성 allowlisted Nginx 설정 편집
+- 호스트·Nginx·PHP-FPM 관찰, typed site state, 활성 allowlisted Nginx와 표준 PHP 8.3 FPM `php.ini` 설정 편집
 - sanitized 인증서 inventory, 갱신 dry-run, DNS·webroot preflight 기반 Certbot 발급 계획·PAM 승인, 보호 vhost TLS 연결·원복
 - 기존 OpenSSH 기반 non-root 웹 터미널, 홈 한정 파일 탐색·미리보기·다운로드와 계획된 일반 파일 생성·교체
 - 계획→snapshot→적용→검증→자동 원복, 비동기 실행과 SSE 진행 증거

@@ -2,11 +2,14 @@ use std::fs::{File, OpenOptions};
 use std::io::{Read, Write};
 #[cfg(unix)]
 use std::os::unix::fs::MetadataExt;
+use std::path::{Path, PathBuf};
 
 use jw_contracts::{
-    MANAGED_CONFIG_MAX_BYTES, ManagedConfigResourceView, NGINX_CONFIG_ADAPTER_ID, NGINX_LAYOUT_ID,
-    NginxSiteState, OPERATION_SCHEMA_VERSION, ServiceAction, managed_config_bytes_supported,
-    nginx_config_resource_id, nginx_internal_temporary_name, nginx_site_id, sha256_digest,
+    AssuranceLevel, AssuranceView, MANAGED_CONFIG_MAX_BYTES, ManagedConfigResourceView,
+    NGINX_CONFIG_ADAPTER_ID, NGINX_LAYOUT_ID, NGINX_MANAGED_CONFIG_MAX_BYTES, NginxSiteState,
+    OPERATION_SCHEMA_VERSION, PHP_FPM_CONFIG_ADAPTER_ID, PHP_FPM_CONFIG_MAX_BYTES, RollbackSupport,
+    ServiceAction, managed_config_bytes_supported, nginx_config_resource_id,
+    nginx_internal_temporary_name, nginx_site_id, php_fpm_config_resource_id, sha256_digest,
 };
 use serde::{Deserialize, Serialize};
 
@@ -16,26 +19,215 @@ use crate::nginx::{
     discover_site, read_available_content, safe_basename, validate_available_metadata,
     validate_root,
 };
+use crate::nginx_diagnostic::nginx_config_failure_code;
+use crate::php_fpm_diagnostic::{php_fpm_config_failure_code, php_fpm_config_test_succeeded};
+use crate::runner::{CommandClass, CommandEvidence};
 use crate::snapshot::{
     prepare_private_root, require_capacity, set_file_mode, set_mode, validate_private_directory,
 };
 
-pub(crate) const MANAGED_CONFIG_IMPACT: [&str; 3] = [
+const NGINX_MANAGED_CONFIG_IMPACT: [&str; 3] = [
     "등록된 Nginx 설정 파일 하나의 bytes·owner·mode를 교체합니다.",
     "nginx -t가 성공한 경우에만 nginx.service reload를 실행합니다.",
     "문법·reload·active·read-back 실패 시 직전 파일을 자동 복원합니다.",
 ];
-pub(crate) const MANAGED_CONFIG_RECOVERY_PATH: [&str; 4] = [
+const NGINX_MANAGED_CONFIG_RECOVERY_PATH: [&str; 4] = [
     "SSH로 서버에 접속합니다.",
     "JW Agent receipt의 operation ID와 snapshot 상태를 확인합니다.",
     "대상 Nginx 설정 파일을 검토하고 nginx -t를 실행합니다.",
     "검증 성공 후 nginx.service를 reload합니다.",
 ];
 
+const PHP_FPM_MANAGED_CONFIG_IMPACT: [&str; 3] = [
+    "Ubuntu PHP 8.3 FPM의 표준 php.ini bytes·owner·mode를 교체합니다.",
+    "php-fpm8.3 -t가 성공한 경우에만 php8.3-fpm.service reload를 실행합니다.",
+    "문법·reload·active·read-back 실패 시 직전 php.ini를 자동 복원합니다.",
+];
+const PHP_FPM_MANAGED_CONFIG_RECOVERY_PATH: [&str; 4] = [
+    "SSH로 서버에 접속합니다.",
+    "JW Agent receipt의 operation ID와 snapshot 상태를 확인합니다.",
+    "/etc/php/8.3/fpm/php.ini를 검토하고 php-fpm8.3 -t를 실행합니다.",
+    "검증 성공 후 php8.3-fpm.service를 reload합니다.",
+];
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ManagedConfigAdapter {
+    Nginx,
+    PhpFpm83,
+}
+
+impl ManagedConfigAdapter {
+    #[must_use]
+    pub const fn adapter_id(self) -> &'static str {
+        match self {
+            Self::Nginx => NGINX_CONFIG_ADAPTER_ID,
+            Self::PhpFpm83 => PHP_FPM_CONFIG_ADAPTER_ID,
+        }
+    }
+
+    #[must_use]
+    pub const fn maximum_bytes(self) -> usize {
+        match self {
+            Self::Nginx => NGINX_MANAGED_CONFIG_MAX_BYTES,
+            Self::PhpFpm83 => PHP_FPM_CONFIG_MAX_BYTES,
+        }
+    }
+
+    #[must_use]
+    pub const fn impact(self) -> &'static [&'static str] {
+        match self {
+            Self::Nginx => &NGINX_MANAGED_CONFIG_IMPACT,
+            Self::PhpFpm83 => &PHP_FPM_MANAGED_CONFIG_IMPACT,
+        }
+    }
+
+    #[must_use]
+    pub const fn recovery_path(self) -> &'static [&'static str] {
+        match self {
+            Self::Nginx => &NGINX_MANAGED_CONFIG_RECOVERY_PATH,
+            Self::PhpFpm83 => &PHP_FPM_MANAGED_CONFIG_RECOVERY_PATH,
+        }
+    }
+
+    #[must_use]
+    pub const fn config_test(self) -> CommandClass {
+        match self {
+            Self::Nginx => CommandClass::NginxConfigTest,
+            Self::PhpFpm83 => CommandClass::PhpFpm83ConfigTest,
+        }
+    }
+
+    #[must_use]
+    pub const fn reload(self) -> CommandClass {
+        match self {
+            Self::Nginx => CommandClass::NginxReload,
+            Self::PhpFpm83 => CommandClass::PhpFpm83Reload,
+        }
+    }
+
+    #[must_use]
+    pub const fn active(self) -> CommandClass {
+        match self {
+            Self::Nginx => CommandClass::NginxActive,
+            Self::PhpFpm83 => CommandClass::PhpFpm83Active,
+        }
+    }
+
+    #[must_use]
+    pub const fn config_valid_code(self) -> &'static str {
+        match self {
+            Self::Nginx => "nginx_config_valid",
+            Self::PhpFpm83 => "php_fpm_config_valid",
+        }
+    }
+
+    #[must_use]
+    pub const fn reloaded_code(self) -> &'static str {
+        match self {
+            Self::Nginx => "nginx_reloaded",
+            Self::PhpFpm83 => "php_fpm_reloaded",
+        }
+    }
+}
+
+pub fn managed_config_adapter(resource_id: &str) -> Result<ManagedConfigAdapter, OpsError> {
+    if resource_id.starts_with("ngc_") {
+        Ok(ManagedConfigAdapter::Nginx)
+    } else if resource_id == php_fpm_config_resource_id(PHP_FPM_CONFIG_ADAPTER_ID) {
+        Ok(ManagedConfigAdapter::PhpFpm83)
+    } else {
+        Err(OpsError::Rejected("resource_missing"))
+    }
+}
+
+#[must_use]
+pub fn managed_config_test_succeeded(
+    adapter: ManagedConfigAdapter,
+    evidence: &CommandEvidence,
+) -> bool {
+    match adapter {
+        ManagedConfigAdapter::Nginx => evidence.success,
+        ManagedConfigAdapter::PhpFpm83 => php_fpm_config_test_succeeded(evidence),
+    }
+}
+
+#[must_use]
+pub fn managed_config_failure_code(
+    adapter: ManagedConfigAdapter,
+    evidence: &CommandEvidence,
+    basename: &str,
+) -> String {
+    match adapter {
+        ManagedConfigAdapter::Nginx => nginx_config_failure_code(evidence, basename),
+        ManagedConfigAdapter::PhpFpm83 => php_fpm_config_failure_code(evidence),
+    }
+}
+
+#[must_use]
+pub fn managed_config_masked_path(adapter: ManagedConfigAdapter, display_name: &str) -> String {
+    match adapter {
+        ManagedConfigAdapter::Nginx => format!("…/sites-available/{display_name}"),
+        ManagedConfigAdapter::PhpFpm83 => String::from("…/php/8.3/fpm/php.ini"),
+    }
+}
+
+#[must_use]
+pub fn managed_config_assurance(adapter: ManagedConfigAdapter) -> AssuranceView {
+    let (scope, excluded_effects, apply_verifier, rollback_verifier) = match adapter {
+        ManagedConfigAdapter::Nginx => (
+            "등록된 Nginx 설정 파일 하나의 bytes·owner·mode와 검증된 reload",
+            vec![
+                String::from("include된 다른 파일과 active connection"),
+                String::from("Nginx process의 과거 in-memory 상태"),
+                String::from("제품 밖 root 사용자의 동시 변경"),
+            ],
+            vec![
+                String::from("atomic replace와 content·metadata read-back"),
+                String::from("nginx -t"),
+                String::from("reload 후 nginx.service active"),
+            ],
+            vec![
+                String::from("이전 bytes·owner·mode 복원"),
+                String::from("nginx -t와 reload 후 active 확인"),
+            ],
+        ),
+        ManagedConfigAdapter::PhpFpm83 => (
+            "Ubuntu PHP 8.3 FPM의 표준 php.ini bytes·owner·mode와 검증된 reload",
+            vec![
+                String::from("pool 설정·CLI/Apache SAPI 설정과 extension package"),
+                String::from("기존 request와 PHP process의 과거 in-memory 상태"),
+                String::from("제품 밖 root 사용자의 동시 변경"),
+            ],
+            vec![
+                String::from("atomic replace와 content·metadata read-back"),
+                String::from("php-fpm8.3 -t와 php.ini syntax warning 부재"),
+                String::from("reload 후 php8.3-fpm.service active"),
+            ],
+            vec![
+                String::from("이전 php.ini bytes·owner·mode 복원"),
+                String::from("php-fpm8.3 -t와 reload 후 active 확인"),
+            ],
+        ),
+    };
+    AssuranceView {
+        level: AssuranceLevel::G2ReversibleConfig,
+        rollback_support: RollbackSupport::AutomaticBounded,
+        operation_available: true,
+        scope: vec![String::from(scope)],
+        excluded_effects,
+        apply_verifier,
+        rollback_verifier,
+        reason: None,
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ManagedConfigResource {
+    pub adapter: ManagedConfigAdapter,
     pub resource_id: String,
     pub basename: String,
+    pub display_name: String,
+    pub root: PathBuf,
     pub content: String,
     pub content_digest: String,
     pub metadata_digest: String,
@@ -51,14 +243,14 @@ impl ManagedConfigResource {
     ) -> Result<ManagedConfigResourceView, OpsError> {
         Ok(ManagedConfigResourceView {
             schema_version: OPERATION_SCHEMA_VERSION,
-            adapter_id: String::from(NGINX_CONFIG_ADAPTER_ID),
+            adapter_id: String::from(self.adapter.adapter_id()),
             resource_id: self.resource_id.clone(),
-            display_name: self.basename.clone(),
-            masked_path: format!("…/sites-available/{}", self.basename),
+            display_name: self.display_name.clone(),
+            masked_path: managed_config_masked_path(self.adapter, &self.basename),
             content: self.content.clone(),
             content_digest: self.content_digest.clone(),
             metadata_digest: self.metadata_digest.clone(),
-            max_bytes: u32::try_from(MANAGED_CONFIG_MAX_BYTES)
+            max_bytes: u32::try_from(self.adapter.maximum_bytes())
                 .map_err(|_| OpsError::Storage(String::from("config size overflow")))?,
             allowed_service_actions: vec![ServiceAction::Reload],
             assurance,
@@ -94,12 +286,20 @@ pub struct DiffStats {
 }
 
 pub fn cleanup_internal_temporaries(paths: &OpsPaths) -> Result<(), OpsError> {
-    if !paths.nginx_available.exists() {
+    cleanup_temporaries_in_root(&paths.nginx_available, paths.enforce_root_ownership)?;
+    if let Some(root) = paths.php_fpm_ini.parent() {
+        cleanup_temporaries_in_root(root, paths.enforce_root_ownership)?;
+    }
+    Ok(())
+}
+
+fn cleanup_temporaries_in_root(root: &Path, enforce_root_ownership: bool) -> Result<(), OpsError> {
+    if !root.exists() {
         return Ok(());
     }
-    validate_root(&paths.nginx_available, paths.enforce_root_ownership)?;
-    let entries = std::fs::read_dir(&paths.nginx_available)
-        .map_err(|error| OpsError::Filesystem(error.to_string()))?;
+    validate_root(root, enforce_root_ownership)?;
+    let entries =
+        std::fs::read_dir(root).map_err(|error| OpsError::Filesystem(error.to_string()))?;
     let mut removed = false;
     for entry_result in entries {
         let entry = entry_result.map_err(|error| OpsError::Filesystem(error.to_string()))?;
@@ -115,7 +315,7 @@ pub fn cleanup_internal_temporaries(paths: &OpsPaths) -> Result<(), OpsError> {
             return Err(OpsError::ForensicLockdown);
         }
         #[cfg(unix)]
-        if metadata.nlink() != 1 || (paths.enforce_root_ownership && metadata.uid() != 0) {
+        if metadata.nlink() != 1 || (enforce_root_ownership && metadata.uid() != 0) {
             return Err(OpsError::ForensicLockdown);
         }
         std::fs::remove_file(entry.path())
@@ -123,7 +323,7 @@ pub fn cleanup_internal_temporaries(paths: &OpsPaths) -> Result<(), OpsError> {
         removed = true;
     }
     if removed {
-        File::open(&paths.nginx_available)
+        File::open(root)
             .and_then(|directory| directory.sync_all())
             .map_err(|error| OpsError::Filesystem(error.to_string()))?;
     }
@@ -131,6 +331,16 @@ pub fn cleanup_internal_temporaries(paths: &OpsPaths) -> Result<(), OpsError> {
 }
 
 pub fn discover_managed_config(
+    paths: &OpsPaths,
+    requested_resource_id: &str,
+) -> Result<ManagedConfigResource, OpsError> {
+    match managed_config_adapter(requested_resource_id)? {
+        ManagedConfigAdapter::Nginx => discover_nginx_managed_config(paths, requested_resource_id),
+        ManagedConfigAdapter::PhpFpm83 => discover_php_fpm_managed_config(paths),
+    }
+}
+
+fn discover_nginx_managed_config(
     paths: &OpsPaths,
     requested_resource_id: &str,
 ) -> Result<ManagedConfigResource, OpsError> {
@@ -157,7 +367,7 @@ pub fn discover_managed_config(
         if site.state != NginxSiteState::Enabled {
             return Err(OpsError::Rejected("resource_not_active"));
         }
-        if bytes.len() > MANAGED_CONFIG_MAX_BYTES {
+        if bytes.len() > NGINX_MANAGED_CONFIG_MAX_BYTES {
             return Err(OpsError::Rejected("size_limit"));
         }
         if !managed_config_bytes_supported(&bytes) {
@@ -171,7 +381,10 @@ pub fn discover_managed_config(
         let content_digest = sha256_digest(content.as_bytes());
         let metadata_digest = managed_metadata_digest(mode, uid, gid);
         return Ok(ManagedConfigResource {
+            adapter: ManagedConfigAdapter::Nginx,
             resource_id,
+            display_name: basename.clone(),
+            root: paths.nginx_available.clone(),
             basename,
             content,
             content_digest,
@@ -182,6 +395,50 @@ pub fn discover_managed_config(
         });
     }
     Err(OpsError::Rejected("resource_missing"))
+}
+
+fn discover_php_fpm_managed_config(paths: &OpsPaths) -> Result<ManagedConfigResource, OpsError> {
+    let root = paths
+        .php_fpm_ini
+        .parent()
+        .ok_or(OpsError::Rejected("unsupported_layout"))?;
+    validate_root(root, paths.enforce_root_ownership)
+        .map_err(|_| OpsError::Rejected("unsupported_layout"))?;
+    let metadata = std::fs::symlink_metadata(&paths.php_fpm_ini)
+        .map_err(|_| OpsError::Rejected("resource_missing"))?;
+    validate_available_metadata(&metadata, paths.enforce_root_ownership)?;
+    validate_managed_metadata(&metadata, paths.enforce_root_ownership)?;
+    if metadata.len()
+        > u64::try_from(PHP_FPM_CONFIG_MAX_BYTES).map_or(u64::MAX, std::convert::identity)
+    {
+        return Err(OpsError::Rejected("size_limit"));
+    }
+    let mut bytes = Vec::with_capacity(
+        usize::try_from(metadata.len()).map_err(|_| OpsError::Rejected("size_limit"))?,
+    );
+    File::open(&paths.php_fpm_ini)
+        .and_then(|mut source| source.read_to_end(&mut bytes))
+        .map_err(|error| OpsError::Filesystem(error.to_string()))?;
+    if !managed_config_bytes_supported(&bytes) {
+        return Err(OpsError::Rejected("invalid_encoding"));
+    }
+    let content = String::from_utf8(bytes).map_err(|_| OpsError::Rejected("invalid_encoding"))?;
+    let mode = metadata_mode(&metadata);
+    let uid = metadata_uid(&metadata);
+    let gid = metadata_gid(&metadata);
+    Ok(ManagedConfigResource {
+        adapter: ManagedConfigAdapter::PhpFpm83,
+        resource_id: php_fpm_config_resource_id(PHP_FPM_CONFIG_ADAPTER_ID),
+        basename: String::from("php.ini"),
+        display_name: String::from("PHP 8.3 FPM · php.ini"),
+        root: root.to_path_buf(),
+        content_digest: sha256_digest(content.as_bytes()),
+        metadata_digest: managed_metadata_digest(mode, uid, gid),
+        content,
+        mode,
+        uid,
+        gid,
+    })
 }
 
 pub fn discover_protected_config(
@@ -195,7 +452,7 @@ pub fn discover_protected_config(
     let (bytes, metadata, protected) = read_available_content(paths, &site.basename)?;
     validate_available_metadata(&metadata, paths.enforce_root_ownership)?;
     validate_managed_metadata(&metadata, paths.enforce_root_ownership)?;
-    if !protected || bytes.len() > MANAGED_CONFIG_MAX_BYTES {
+    if !protected || bytes.len() > NGINX_MANAGED_CONFIG_MAX_BYTES {
         return Err(OpsError::Rejected("protected_resource_required"));
     }
     if !managed_config_bytes_supported(&bytes) {
@@ -206,7 +463,10 @@ pub fn discover_protected_config(
     let uid = metadata_uid(&metadata);
     let gid = metadata_gid(&metadata);
     Ok(ManagedConfigResource {
+        adapter: ManagedConfigAdapter::Nginx,
         resource_id: site.site_id,
+        display_name: site.basename.clone(),
+        root: paths.nginx_available.clone(),
         basename: site.basename,
         content_digest: sha256_digest(content.as_bytes()),
         metadata_digest: managed_metadata_digest(mode, uid, gid),
@@ -323,14 +583,14 @@ pub fn replace_managed_config(
     {
         return Err(OpsError::Rejected("stale_resource"));
     }
-    if content.len() > MANAGED_CONFIG_MAX_BYTES {
+    if content.len() > expected.adapter.maximum_bytes() {
         return Err(OpsError::Rejected("size_limit"));
     }
     if !managed_config_bytes_supported(content.as_bytes()) {
         return Err(OpsError::Rejected("invalid_encoding"));
     }
     atomic_replace(
-        paths,
+        &expected.root,
         &expected.basename,
         content,
         expected.mode,
@@ -349,14 +609,11 @@ pub fn restore_managed_config(
     uid: u32,
     gid: u32,
 ) -> Result<ManagedConfigResource, OpsError> {
-    if nginx_config_resource_id(NGINX_CONFIG_ADAPTER_ID, basename) != resource_id {
+    let current = discover_managed_config(paths, resource_id)?;
+    if current.basename != basename || content.len() > current.adapter.maximum_bytes() {
         return Err(OpsError::Rejected("resource_identity_mismatch"));
     }
-    validate_root(&paths.nginx_available, paths.enforce_root_ownership)?;
-    let (_bytes, metadata, _protected) = read_available_content(paths, basename)?;
-    validate_available_metadata(&metadata, paths.enforce_root_ownership)?;
-    validate_managed_metadata(&metadata, paths.enforce_root_ownership)?;
-    atomic_replace(paths, basename, content, mode, uid, gid)?;
+    atomic_replace(&current.root, basename, content, mode, uid, gid)?;
     discover_managed_config(paths, resource_id)
 }
 
@@ -372,14 +629,14 @@ pub fn replace_protected_config(
     {
         return Err(OpsError::Rejected("stale_resource"));
     }
-    if content.len() > MANAGED_CONFIG_MAX_BYTES
+    if content.len() > NGINX_MANAGED_CONFIG_MAX_BYTES
         || !managed_config_bytes_supported(content.as_bytes())
         || !jw_contracts::nginx_management_config(content.as_bytes())
     {
         return Err(OpsError::Rejected("protected_config_invalid"));
     }
     atomic_replace(
-        paths,
+        &expected.root,
         &expected.basename,
         content,
         expected.mode,
@@ -402,7 +659,7 @@ pub fn restore_protected_config(
     if current.basename != basename || !jw_contracts::nginx_management_config(content.as_bytes()) {
         return Err(OpsError::Rejected("resource_identity_mismatch"));
     }
-    atomic_replace(paths, basename, content, mode, uid, gid)?;
+    atomic_replace(&current.root, basename, content, mode, uid, gid)?;
     let restored = discover_protected_config(paths, site_id)?;
     if restored.mode == mode && restored.uid == uid && restored.gid == gid {
         Ok(restored)
@@ -412,7 +669,7 @@ pub fn restore_protected_config(
 }
 
 fn atomic_replace(
-    paths: &OpsPaths,
+    root: &Path,
     basename: &str,
     content: &str,
     mode: u32,
@@ -420,9 +677,7 @@ fn atomic_replace(
     gid: u32,
 ) -> Result<(), OpsError> {
     let suffix = random_suffix()?;
-    let temporary = paths
-        .nginx_available
-        .join(format!(".jw-agent-{suffix}.tmp"));
+    let temporary = root.join(format!(".jw-agent-{suffix}.tmp"));
     let mut file = OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -443,12 +698,12 @@ fn atomic_replace(
         let _cleanup = std::fs::remove_file(&temporary);
         return Err(OpsError::Filesystem(error.to_string()));
     }
-    let destination = paths.nginx_available.join(basename);
+    let destination = root.join(basename);
     if let Err(error) = std::fs::rename(&temporary, &destination) {
         let _cleanup = std::fs::remove_file(&temporary);
         return Err(OpsError::Filesystem(error.to_string()));
     }
-    File::open(&paths.nginx_available)
+    File::open(root)
         .and_then(|directory| directory.sync_all())
         .map_err(|error| OpsError::Filesystem(error.to_string()))?;
     Ok(())
@@ -592,7 +847,10 @@ fn set_file_owner(_file: &File, _uid: u32, _gid: u32) -> Result<(), OpsError> {
 mod tests {
     use std::fs;
 
-    use jw_contracts::{NGINX_CONFIG_ADAPTER_ID, nginx_config_resource_id};
+    use jw_contracts::{
+        NGINX_CONFIG_ADAPTER_ID, PHP_FPM_CONFIG_ADAPTER_ID, nginx_config_resource_id,
+        php_fpm_config_resource_id,
+    };
 
     use crate::config::OpsPaths;
 
@@ -633,6 +891,28 @@ mod tests {
         assert_eq!(stats.removed_lines, 1);
         assert_eq!(stats.added_lines, 1);
         assert_eq!(stats.summary, vec![String::from("-b"), String::from("+x")]);
+    }
+
+    #[test]
+    fn discovers_and_replaces_php_fpm_php_ini_without_widening_nginx_profile() -> Result<(), String>
+    {
+        let root = test_root("php-fpm-replace")?;
+        let paths = OpsPaths::for_test(&root);
+        let parent = paths
+            .php_fpm_ini
+            .parent()
+            .ok_or_else(|| String::from("php parent missing"))?;
+        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+        fs::write(&paths.php_fpm_ini, "memory_limit = 128M\n")
+            .map_err(|error| error.to_string())?;
+        let id = php_fpm_config_resource_id(PHP_FPM_CONFIG_ADAPTER_ID);
+        let before = discover_managed_config(&paths, &id).map_err(|error| error.to_string())?;
+        assert_eq!(before.adapter.adapter_id(), PHP_FPM_CONFIG_ADAPTER_ID);
+        let after = replace_managed_config(&paths, &before, "memory_limit = 256M\n")
+            .map_err(|error| error.to_string())?;
+        assert_eq!(after.content, "memory_limit = 256M\n");
+        assert_eq!(after.root, parent);
+        fs::remove_dir_all(root).map_err(|error| error.to_string())
     }
 
     #[test]

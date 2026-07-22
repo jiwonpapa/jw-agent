@@ -19,6 +19,7 @@ import { Route as AuthenticatedOverviewRouteImport } from './routes/_authenticat
 import { Route as AuthenticatedTerminalRouteImport } from './routes/_authenticated.terminal'
 import { Route as AuthenticatedServicesIndexRouteImport } from './routes/_authenticated.services.index'
 import { Route as AuthenticatedServicesNginxRouteImport } from './routes/_authenticated.services.nginx'
+import { Route as AuthenticatedServicesPhpFpmRouteImport } from './routes/_authenticated.services.php-fpm'
 import { Route as AuthenticatedSessionReauthRouteImport } from './routes/_authenticated.session.reauth'
 import { Route as AuthenticatedSettingsAccessRouteImport } from './routes/_authenticated.settings.access'
 
@@ -75,6 +76,12 @@ const AuthenticatedServicesNginxRoute =
     path: '/services/nginx',
     getParentRoute: () => AuthenticatedRoute,
   } as any)
+const AuthenticatedServicesPhpFpmRoute =
+  AuthenticatedServicesPhpFpmRouteImport.update({
+    id: '/services/php-fpm',
+    path: '/services/php-fpm',
+    getParentRoute: () => AuthenticatedRoute,
+  } as any)
 const AuthenticatedSessionReauthRoute =
   AuthenticatedSessionReauthRouteImport.update({
     id: '/session/reauth',
@@ -97,6 +104,7 @@ export interface FileRoutesByFullPath {
   '/overview': typeof AuthenticatedOverviewRoute
   '/terminal': typeof AuthenticatedTerminalRoute
   '/services/nginx': typeof AuthenticatedServicesNginxRoute
+  '/services/php-fpm': typeof AuthenticatedServicesPhpFpmRoute
   '/session/reauth': typeof AuthenticatedSessionReauthRoute
   '/settings/access': typeof AuthenticatedSettingsAccessRoute
   '/services/': typeof AuthenticatedServicesIndexRoute
@@ -110,6 +118,7 @@ export interface FileRoutesByTo {
   '/overview': typeof AuthenticatedOverviewRoute
   '/terminal': typeof AuthenticatedTerminalRoute
   '/services/nginx': typeof AuthenticatedServicesNginxRoute
+  '/services/php-fpm': typeof AuthenticatedServicesPhpFpmRoute
   '/session/reauth': typeof AuthenticatedSessionReauthRoute
   '/settings/access': typeof AuthenticatedSettingsAccessRoute
   '/services': typeof AuthenticatedServicesIndexRoute
@@ -125,6 +134,7 @@ export interface FileRoutesById {
   '/_authenticated/overview': typeof AuthenticatedOverviewRoute
   '/_authenticated/terminal': typeof AuthenticatedTerminalRoute
   '/_authenticated/services/nginx': typeof AuthenticatedServicesNginxRoute
+  '/_authenticated/services/php-fpm': typeof AuthenticatedServicesPhpFpmRoute
   '/_authenticated/session/reauth': typeof AuthenticatedSessionReauthRoute
   '/_authenticated/settings/access': typeof AuthenticatedSettingsAccessRoute
   '/_authenticated/services/': typeof AuthenticatedServicesIndexRoute
@@ -140,6 +150,7 @@ export interface FileRouteTypes {
     | '/overview'
     | '/terminal'
     | '/services/nginx'
+    | '/services/php-fpm'
     | '/session/reauth'
     | '/settings/access'
     | '/services/'
@@ -153,6 +164,7 @@ export interface FileRouteTypes {
     | '/overview'
     | '/terminal'
     | '/services/nginx'
+    | '/services/php-fpm'
     | '/session/reauth'
     | '/settings/access'
     | '/services'
@@ -167,6 +179,7 @@ export interface FileRouteTypes {
     | '/_authenticated/overview'
     | '/_authenticated/terminal'
     | '/_authenticated/services/nginx'
+    | '/_authenticated/services/php-fpm'
     | '/_authenticated/session/reauth'
     | '/_authenticated/settings/access'
     | '/_authenticated/services/'
@@ -250,6 +263,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedServicesNginxRouteImport
       parentRoute: typeof AuthenticatedRoute
     }
+    '/_authenticated/services/php-fpm': {
+      id: '/_authenticated/services/php-fpm'
+      path: '/services/php-fpm'
+      fullPath: '/services/php-fpm'
+      preLoaderRoute: typeof AuthenticatedServicesPhpFpmRouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
     '/_authenticated/session/reauth': {
       id: '/_authenticated/session/reauth'
       path: '/session/reauth'
@@ -274,6 +294,7 @@ interface AuthenticatedRouteChildren {
   AuthenticatedOverviewRoute: typeof AuthenticatedOverviewRoute
   AuthenticatedTerminalRoute: typeof AuthenticatedTerminalRoute
   AuthenticatedServicesNginxRoute: typeof AuthenticatedServicesNginxRoute
+  AuthenticatedServicesPhpFpmRoute: typeof AuthenticatedServicesPhpFpmRoute
   AuthenticatedSessionReauthRoute: typeof AuthenticatedSessionReauthRoute
   AuthenticatedSettingsAccessRoute: typeof AuthenticatedSettingsAccessRoute
   AuthenticatedServicesIndexRoute: typeof AuthenticatedServicesIndexRoute
@@ -286,6 +307,7 @@ const AuthenticatedRouteChildren: AuthenticatedRouteChildren = {
   AuthenticatedOverviewRoute: AuthenticatedOverviewRoute,
   AuthenticatedTerminalRoute: AuthenticatedTerminalRoute,
   AuthenticatedServicesNginxRoute: AuthenticatedServicesNginxRoute,
+  AuthenticatedServicesPhpFpmRoute: AuthenticatedServicesPhpFpmRoute,
   AuthenticatedSessionReauthRoute: AuthenticatedSessionReauthRoute,
   AuthenticatedSettingsAccessRoute: AuthenticatedSettingsAccessRoute,
   AuthenticatedServicesIndexRoute: AuthenticatedServicesIndexRoute,
