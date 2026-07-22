@@ -55,6 +55,19 @@ pub fn gate_source_size_ratchet(root: &Path, _timeout: std::time::Duration) -> R
     }
 }
 
+pub fn contains_standalone_call(line: &str, name: &str) -> bool {
+    let needle = format!("{name}(");
+    let mut remaining = line;
+    while let Some(index) = remaining.find(&needle) {
+        let preceding = remaining[..index].chars().next_back();
+        if preceding.is_none_or(|value| !value.is_alphanumeric() && value != '_') {
+            return true;
+        }
+        remaining = &remaining[index + needle.len()..];
+    }
+    false
+}
+
 fn source_files(root: &Path) -> Result<Vec<PathBuf>, String> {
     let mut files = Vec::new();
     let mut pending: Vec<PathBuf> = SOURCE_ROOTS.iter().map(|path| root.join(path)).collect();

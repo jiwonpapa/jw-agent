@@ -72,9 +72,9 @@ P1 public profile 범위는 existing certificate와 administrator-owned opt-in t
 
 현재 기준선:
 
-- `p2-local` 22개, `p2-browser` 8개 gate와 Playwright 31개 scenario가 PASS했습니다.
-- `p2-vm` 23개 gate에서 Nginx fault matrix, forensic lockdown, Certbot lifecycle, non-root OpenSSH terminal과 home-scoped SFTP G0/G1을 검증했습니다.
-- Ubuntu 24.04 VM에 `jw-agent_0.2.0~p2.11_amd64.deb`를 설치했고 SHA-256은 `f1f4719ccd0d73071f7a46cdf1c3dd2d373028a0b463ae054798c7b4c39f5186`입니다.
+- `p2-local` 22개, `p2-browser` 8개 gate와 Playwright 35개 scenario가 PASS했습니다.
+- `p2-vm` 24개 gate에서 서비스 인벤토리, Nginx fault matrix, forensic lockdown, Certbot lifecycle, non-root OpenSSH terminal과 home-scoped SFTP G0/G1을 검증했습니다.
+- Ubuntu 24.04 VM에 `jw-agent_0.2.0~p2.12_amd64.deb`를 설치했고 SHA-256은 `c1346207c97aa457bf8e371239bc81ce8a3493d7057bee52a57f37774e502a2e`입니다.
 - 제품 관리 vhost는 파일명과 무관하게 content marker/include로 보호되며 plan 단계에서 변경을 거부합니다.
 - 승인 API는 `202 Accepted` 뒤 durable operation을 실행하고 SSE sequence replay와 canonical receipt 조회를 제공합니다.
 

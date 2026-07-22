@@ -24,6 +24,10 @@ Last reviewed: 2026-07-22
 - [AUTH-PAM-LOGIN-V1](auth/pam-login-v1.md) — Accepted
 - [AUTH-TOTP-STEP-UP-V1](auth/totp-step-up-v1.md) — Accepted, implementation follows safety kernel and secret-storage gate
 
+## Observability specs
+
+- [OBS-SERVICE-INVENTORY-V1](observability/service-inventory-v1.md) — Accepted, Ubuntu 24.04 주요 서비스 template 기반 G0 inventory
+
 ## UI specs
 
 - [UI-OVERVIEW-V1](ui/overview-v1.md) — Accepted

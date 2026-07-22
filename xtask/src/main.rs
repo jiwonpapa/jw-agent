@@ -3,6 +3,7 @@
 mod process;
 mod source_policy;
 mod vm;
+mod web;
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::env;
@@ -129,6 +130,7 @@ const REQUIRED_FOUNDATION_PATHS: &[&str] = &[
     "docs/90-specs/access/openssh-sftp-atomic-upload-v1.md",
     "docs/90-specs/auth/pam-login-v1.md",
     "docs/90-specs/auth/totp-step-up-v1.md",
+    "docs/90-specs/observability/service-inventory-v1.md",
     "docs/90-specs/ui/overview-v1.md",
     "docs/90-specs/ui/login-session-v1.md",
     "docs/90-specs/ui/responsive-shell-v1.md",
@@ -184,6 +186,7 @@ const P1_REQUIRED_PATHS: &[&str] = &[
 ];
 
 const P2_REQUIRED_PATHS: &[&str] = &[
+    "apps/web/src/features/services/services-screen.tsx",
     "apps/web/src/features/files/files-screen.tsx",
     "apps/web/src/routes/_authenticated.files.tsx",
     "apps/web/src/features/terminal/terminal-screen.tsx",
@@ -195,6 +198,7 @@ const P2_REQUIRED_PATHS: &[&str] = &[
     "crates/jw-agentd/src/askpass.rs",
     "crates/jw-agentd/src/file_session.rs",
     "crates/jw-agentd/src/openssh.rs",
+    "crates/jw-agentd/src/service_inventory.rs",
     "crates/jw-agentd/src/sftp_protocol.rs",
     "crates/jw-agentd/src/terminal.rs",
     "crates/jw-agentd/src/terminal_session.rs",
@@ -202,6 +206,7 @@ const P2_REQUIRED_PATHS: &[&str] = &[
     "crates/jw-contracts/src/files.rs",
     "crates/jw-contracts/src/operation.rs",
     "crates/jw-contracts/src/terminal.rs",
+    "crates/jw-agentd/service-catalog/ubuntu-24.04-v1.json",
     "crates/jw-opsd/migrations/0001_initial.sql",
     "crates/jw-opsd/migrations/0002_managed_config.sql",
     "crates/jw-opsd/migrations/0005_certbot_attach.sql",
@@ -438,7 +443,7 @@ const GATES: &[Gate] = &[
         timeout_seconds: 120,
         evidence: "ESLint passed with warnings denied",
         failure_policy: "fail lane on lint finding or timeout",
-        run: gate_web_lint,
+        run: web::gate_web_lint,
     },
     Gate {
         id: "WEB-UNIT",
@@ -449,7 +454,7 @@ const GATES: &[Gate] = &[
         timeout_seconds: 120,
         evidence: "Vitest suite passed",
         failure_policy: "fail lane on unit failure or timeout",
-        run: gate_web_unit,
+        run: web::gate_web_unit,
     },
     Gate {
         id: "WEB-BUILD",
@@ -460,7 +465,7 @@ const GATES: &[Gate] = &[
         timeout_seconds: 180,
         evidence: "production bundle built",
         failure_policy: "fail lane on asset generation, bundle error, or timeout",
-        run: gate_web_build,
+        run: web::gate_web_build,
     },
     Gate {
         id: "WEB-SESSION-BROWSER",
@@ -471,7 +476,7 @@ const GATES: &[Gate] = &[
         timeout_seconds: 300,
         evidence: "Playwright session, accessibility, and viewport scenarios passed",
         failure_policy: "fail lane and preserve configured failure artifacts",
-        run: gate_web_browser,
+        run: web::gate_web_browser,
     },
     Gate {
         id: "VM-PREFLIGHT",
@@ -516,6 +521,17 @@ const GATES: &[Gate] = &[
         evidence: "valid TLS, exact boundary, HTTP redirect, deep link, and recovery passed",
         failure_policy: "fail lane on public plaintext, bad headers, exposed recovery, or lost SSH path",
         run: vm::gate_public_recovery,
+    },
+    Gate {
+        id: "VM-P2-SERVICE-INVENTORY",
+        owner: "Service Maintainer",
+        scope: "read-only systemd service discovery, template classification, and failed-unit visibility",
+        inputs: "installed P2 package, public TLS API, PAM fixture, Nginx, and disposable systemd fixture",
+        lanes: P2_VM_LANES,
+        timeout_seconds: 90,
+        evidence: "Nginx, JW Agent internal unit, and failed local custom unit classifications passed",
+        failure_policy: "fail lane on missing installed unit, wrong visibility/support, hidden failure, mutation surface, or raw systemctl leakage",
+        run: vm::service_inventory::gate_p2_service_inventory,
     },
     Gate {
         id: "VM-P2-NGINX-OPERATION",
@@ -1429,7 +1445,7 @@ fn gate_web_source_policy(root: &Path, _timeout: Duration) -> Result<(), String>
         }
         let content = read_text(&file)?;
         for (line_index, line) in content.lines().enumerate() {
-            if contains_standalone_call(line, "fetch") {
+            if source_policy::contains_standalone_call(line, "fetch") {
                 failures.push(format!(
                     "{}:{} contains direct fetch",
                     display_relative(root, &file),
@@ -1452,35 +1468,6 @@ fn gate_web_source_policy(root: &Path, _timeout: Duration) -> Result<(), String>
     } else {
         Err(failures.join("; "))
     }
-}
-
-fn contains_standalone_call(line: &str, name: &str) -> bool {
-    let needle = format!("{name}(");
-    let mut remaining = line;
-    while let Some(index) = remaining.find(&needle) {
-        let preceding = remaining[..index].chars().next_back();
-        if preceding.is_none_or(|value| !value.is_alphanumeric() && value != '_') {
-            return true;
-        }
-        remaining = &remaining[index + needle.len()..];
-    }
-    false
-}
-
-fn gate_web_lint(root: &Path, timeout: Duration) -> Result<(), String> {
-    run_command(&root.join("apps/web"), "bun", ["run", "lint"], timeout)
-}
-
-fn gate_web_unit(root: &Path, timeout: Duration) -> Result<(), String> {
-    run_command(&root.join("apps/web"), "bun", ["run", "test"], timeout)
-}
-
-fn gate_web_build(root: &Path, timeout: Duration) -> Result<(), String> {
-    run_command(&root.join("apps/web"), "bun", ["run", "build"], timeout)
-}
-
-fn gate_web_browser(root: &Path, timeout: Duration) -> Result<(), String> {
-    run_command(&root.join("apps/web"), "bun", ["run", "test:e2e"], timeout)
 }
 
 fn run_command<I, S>(

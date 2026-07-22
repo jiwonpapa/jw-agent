@@ -4462,30 +4462,120 @@
           "restart"
         ]
       },
+      "ServiceCategory": {
+        "type": "string",
+        "enum": [
+          "web",
+          "runtime",
+          "database",
+          "cache",
+          "access",
+          "security",
+          "certificate",
+          "container",
+          "monitoring",
+          "custom",
+          "system",
+          "other"
+        ]
+      },
+      "ServiceRuntimeState": {
+        "type": "string",
+        "enum": [
+          "running",
+          "active",
+          "failed",
+          "stopped",
+          "transitioning",
+          "unknown"
+        ]
+      },
       "ServiceSummary": {
         "type": "object",
         "required": [
-          "service",
-          "status",
-          "readOnly"
+          "serviceId",
+          "unitName",
+          "displayName",
+          "purpose",
+          "category",
+          "runtimeState",
+          "activeState",
+          "subState",
+          "visibility",
+          "support",
+          "readOnly",
+          "hiddenByDefault"
         ],
         "properties": {
+          "activeState": {
+            "type": "string"
+          },
+          "category": {
+            "$ref": "#/components/schemas/ServiceCategory"
+          },
+          "displayName": {
+            "type": "string"
+          },
+          "hiddenByDefault": {
+            "type": "boolean"
+          },
+          "purpose": {
+            "type": "string"
+          },
           "readOnly": {
             "type": "boolean"
           },
-          "service": {
+          "runtimeState": {
+            "$ref": "#/components/schemas/ServiceRuntimeState"
+          },
+          "serviceId": {
             "type": "string"
           },
-          "status": {
-            "$ref": "#/components/schemas/ObservationStatus"
+          "subState": {
+            "type": "string"
+          },
+          "support": {
+            "$ref": "#/components/schemas/ServiceSupport"
+          },
+          "unitFileState": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "unitName": {
+            "type": "string"
+          },
+          "visibility": {
+            "$ref": "#/components/schemas/ServiceVisibility"
           }
         }
+      },
+      "ServiceSupport": {
+        "type": "string",
+        "enum": [
+          "supported_observe",
+          "known_read_only",
+          "discovered_read_only",
+          "system_internal"
+        ]
+      },
+      "ServiceVisibility": {
+        "type": "string",
+        "enum": [
+          "primary",
+          "discovered",
+          "system"
+        ]
       },
       "ServicesView": {
         "type": "object",
         "required": [
           "observedAt",
-          "services"
+          "status",
+          "templateProfile",
+          "services",
+          "truncated"
         ],
         "properties": {
           "observedAt": {
@@ -4496,6 +4586,15 @@
             "items": {
               "$ref": "#/components/schemas/ServiceSummary"
             }
+          },
+          "status": {
+            "$ref": "#/components/schemas/ObservationStatus"
+          },
+          "templateProfile": {
+            "type": "string"
+          },
+          "truncated": {
+            "type": "boolean"
           }
         }
       },

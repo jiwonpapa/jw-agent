@@ -11,6 +11,7 @@ import { Skeleton } from "../../shared/ui/skeleton";
 import { StatusMark, type StatusTone } from "../../shared/ui/status-mark";
 import { SurfaceState } from "../../shared/ui/surface-state";
 import { WorkspaceHeader } from "../../shared/ui/workspace-header";
+import { ServiceOverview } from "../services/service-overview";
 
 const observationTone = {
   observed: "success",
@@ -154,6 +155,8 @@ export function OverviewScreen() {
           </div>
         )}
       </section>
+
+      <ServiceOverview />
 
       <section className="border-t border-border py-7" aria-labelledby="nginx-heading">
         <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">

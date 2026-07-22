@@ -17,6 +17,7 @@ import { Route as AuthenticatedFilesRouteImport } from './routes/_authenticated.
 import { Route as AuthenticatedIntegrationsRouteImport } from './routes/_authenticated.integrations'
 import { Route as AuthenticatedOverviewRouteImport } from './routes/_authenticated.overview'
 import { Route as AuthenticatedTerminalRouteImport } from './routes/_authenticated.terminal'
+import { Route as AuthenticatedServicesIndexRouteImport } from './routes/_authenticated.services.index'
 import { Route as AuthenticatedServicesNginxRouteImport } from './routes/_authenticated.services.nginx'
 import { Route as AuthenticatedSessionReauthRouteImport } from './routes/_authenticated.session.reauth'
 import { Route as AuthenticatedSettingsAccessRouteImport } from './routes/_authenticated.settings.access'
@@ -62,6 +63,12 @@ const AuthenticatedTerminalRoute = AuthenticatedTerminalRouteImport.update({
   path: '/terminal',
   getParentRoute: () => AuthenticatedRoute,
 } as any)
+const AuthenticatedServicesIndexRoute =
+  AuthenticatedServicesIndexRouteImport.update({
+    id: '/services/',
+    path: '/services/',
+    getParentRoute: () => AuthenticatedRoute,
+  } as any)
 const AuthenticatedServicesNginxRoute =
   AuthenticatedServicesNginxRouteImport.update({
     id: '/services/nginx',
@@ -92,6 +99,7 @@ export interface FileRoutesByFullPath {
   '/services/nginx': typeof AuthenticatedServicesNginxRoute
   '/session/reauth': typeof AuthenticatedSessionReauthRoute
   '/settings/access': typeof AuthenticatedSettingsAccessRoute
+  '/services/': typeof AuthenticatedServicesIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -104,6 +112,7 @@ export interface FileRoutesByTo {
   '/services/nginx': typeof AuthenticatedServicesNginxRoute
   '/session/reauth': typeof AuthenticatedSessionReauthRoute
   '/settings/access': typeof AuthenticatedSettingsAccessRoute
+  '/services': typeof AuthenticatedServicesIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -118,6 +127,7 @@ export interface FileRoutesById {
   '/_authenticated/services/nginx': typeof AuthenticatedServicesNginxRoute
   '/_authenticated/session/reauth': typeof AuthenticatedSessionReauthRoute
   '/_authenticated/settings/access': typeof AuthenticatedSettingsAccessRoute
+  '/_authenticated/services/': typeof AuthenticatedServicesIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -132,6 +142,7 @@ export interface FileRouteTypes {
     | '/services/nginx'
     | '/session/reauth'
     | '/settings/access'
+    | '/services/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -144,6 +155,7 @@ export interface FileRouteTypes {
     | '/services/nginx'
     | '/session/reauth'
     | '/settings/access'
+    | '/services'
   id:
     | '__root__'
     | '/'
@@ -157,6 +169,7 @@ export interface FileRouteTypes {
     | '/_authenticated/services/nginx'
     | '/_authenticated/session/reauth'
     | '/_authenticated/settings/access'
+    | '/_authenticated/services/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -223,6 +236,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedTerminalRouteImport
       parentRoute: typeof AuthenticatedRoute
     }
+    '/_authenticated/services/': {
+      id: '/_authenticated/services/'
+      path: '/services'
+      fullPath: '/services/'
+      preLoaderRoute: typeof AuthenticatedServicesIndexRouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
     '/_authenticated/services/nginx': {
       id: '/_authenticated/services/nginx'
       path: '/services/nginx'
@@ -256,6 +276,7 @@ interface AuthenticatedRouteChildren {
   AuthenticatedServicesNginxRoute: typeof AuthenticatedServicesNginxRoute
   AuthenticatedSessionReauthRoute: typeof AuthenticatedSessionReauthRoute
   AuthenticatedSettingsAccessRoute: typeof AuthenticatedSettingsAccessRoute
+  AuthenticatedServicesIndexRoute: typeof AuthenticatedServicesIndexRoute
 }
 
 const AuthenticatedRouteChildren: AuthenticatedRouteChildren = {
@@ -267,6 +288,7 @@ const AuthenticatedRouteChildren: AuthenticatedRouteChildren = {
   AuthenticatedServicesNginxRoute: AuthenticatedServicesNginxRoute,
   AuthenticatedSessionReauthRoute: AuthenticatedSessionReauthRoute,
   AuthenticatedSettingsAccessRoute: AuthenticatedSettingsAccessRoute,
+  AuthenticatedServicesIndexRoute: AuthenticatedServicesIndexRoute,
 }
 
 const AuthenticatedRouteWithChildren = AuthenticatedRoute._addFileChildren(

@@ -39,7 +39,8 @@ use jw_contracts::{
     NginxSiteStatePlanRequest, NginxSiteStatePlanView, NginxSitesView, ObservationStatus,
     OperationAcceptedView, OperationApprovalRequest, OperationReceiptView,
     OperationStageEvidenceView, ProblemDetails, ReauthPurpose, ReauthRequest, ReauthView, Role,
-    RollbackSupport, ServiceAction, ServiceSummary, ServicesView, SessionView, Subject,
+    RollbackSupport, ServiceAction, ServiceCategory, ServiceRuntimeState, ServiceSummary,
+    ServiceSupport, ServiceVisibility, ServicesView, SessionView, Subject,
     TERMINAL_MAX_FRAME_BYTES, TERMINAL_MAX_OUTPUT_BUFFER_BYTES, TerminalCapabilityView,
     TerminalLimitsView, TerminalTicketRequest, TerminalTicketView, UpdateAdditionalAuthRequest,
 };
@@ -52,6 +53,7 @@ use crate::file_session::{FileBroker, FileSessionError, FileSessionIssue};
 use crate::integration_catalog::{IntegrationObservationProfile, observe_integrations};
 use crate::observation::{ObservationProfile, observe_host, observe_nginx_with_mutation_gate};
 use crate::ops_client::OpsBrokerError;
+use crate::service_inventory::{ServiceObservationProfile, observe_services};
 use crate::session::{OperationClaimError, PolicyUpdateError};
 use crate::terminal::{
     TerminalBroker, TerminalTicketError, TerminalTicketIssue, terminal_runtime_available,
@@ -192,6 +194,8 @@ impl AppState {
         ManagedConfigApprovalRequest,
         jw_contracts::ManagedConfigApprovalIntent,
         ServiceAction,
+        ServiceCategory,
+        ServiceRuntimeState,
         OperationAcceptedView,
         OperationApprovalRequest,
         OperationReceiptView,
@@ -213,6 +217,8 @@ impl AppState {
         ReauthView,
         jw_contracts::Role,
         ServiceSummary,
+        ServiceSupport,
+        ServiceVisibility,
         ServicesView,
         SessionView,
         jw_contracts::Subject,
@@ -1352,23 +1358,14 @@ async fn services(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<Json<ServicesView>, ApiProblem> {
-    let (_, session) = current_session(&state, &headers, unix_milliseconds()?)?;
+    let _session = current_session(&state, &headers, unix_milliseconds()?)?;
     let observed_at = now_rfc3339()?;
-    let mutation_reason =
-        nginx_mutation_gate_reason(&state, &session.subject, session.additional_auth_policy).await;
-    let nginx = observe_nginx_with_mutation_gate(
-        &ObservationProfile::default(),
-        observed_at.clone(),
-        mutation_reason.as_deref(),
-    );
-    Ok(Json(ServicesView {
-        observed_at,
-        services: vec![ServiceSummary {
-            service: "nginx".to_owned(),
-            status: nginx.status,
-            read_only: mutation_reason.is_some(),
-        }],
-    }))
+    tokio::task::spawn_blocking(move || {
+        observe_services(&ServiceObservationProfile::default(), observed_at)
+    })
+    .await
+    .map(Json)
+    .map_err(|_| ApiProblem::internal())
 }
 
 #[utoipa::path(get, path = "/api/v1/services/nginx/sites", responses(

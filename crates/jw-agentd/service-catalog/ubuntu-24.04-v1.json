@@ -1,0 +1,175 @@
+{
+  "schemaVersion": 1,
+  "profile": "ubuntu-24.04-v1",
+  "templates": [
+    {
+      "id": "nginx",
+      "displayName": "Nginx",
+      "purpose": "웹 요청을 처리하고 다른 애플리케이션으로 전달하는 웹 서버·리버스 프록시입니다.",
+      "category": "web",
+      "support": "supported_observe",
+      "unitPatterns": ["nginx.service"]
+    },
+    {
+      "id": "apache-httpd",
+      "displayName": "Apache HTTP Server",
+      "purpose": "웹사이트와 웹 애플리케이션의 HTTP 요청을 처리합니다.",
+      "category": "web",
+      "support": "known_read_only",
+      "unitPatterns": ["apache2.service"]
+    },
+    {
+      "id": "caddy",
+      "displayName": "Caddy",
+      "purpose": "자동 HTTPS를 지원하는 웹 서버·리버스 프록시입니다.",
+      "category": "web",
+      "support": "known_read_only",
+      "unitPatterns": ["caddy.service"]
+    },
+    {
+      "id": "php-fpm",
+      "displayName": "PHP-FPM",
+      "purpose": "Nginx나 Apache에서 전달된 PHP 애플리케이션 코드를 실행합니다.",
+      "category": "runtime",
+      "support": "supported_observe",
+      "unitPatterns": ["php*-fpm.service"]
+    },
+    {
+      "id": "mysql",
+      "displayName": "MySQL",
+      "purpose": "웹 애플리케이션의 관계형 데이터를 저장하고 조회하는 데이터베이스입니다.",
+      "category": "database",
+      "support": "supported_observe",
+      "unitPatterns": ["mysql.service"]
+    },
+    {
+      "id": "mariadb",
+      "displayName": "MariaDB",
+      "purpose": "MySQL 호환 관계형 데이터를 저장하고 조회하는 데이터베이스입니다.",
+      "category": "database",
+      "support": "supported_observe",
+      "unitPatterns": ["mariadb.service"]
+    },
+    {
+      "id": "postgresql",
+      "displayName": "PostgreSQL",
+      "purpose": "정합성과 확장 기능을 제공하는 관계형 데이터베이스입니다.",
+      "category": "database",
+      "support": "known_read_only",
+      "unitPatterns": ["postgresql.service", "postgresql@*.service"]
+    },
+    {
+      "id": "redis",
+      "displayName": "Redis",
+      "purpose": "캐시, 세션과 작업 상태를 메모리에 빠르게 저장합니다.",
+      "category": "cache",
+      "support": "supported_observe",
+      "unitPatterns": ["redis.service", "redis-server.service"]
+    },
+    {
+      "id": "memcached",
+      "displayName": "Memcached",
+      "purpose": "반복 조회 데이터를 메모리에 임시 저장하는 캐시 서비스입니다.",
+      "category": "cache",
+      "support": "known_read_only",
+      "unitPatterns": ["memcached.service"]
+    },
+    {
+      "id": "openssh",
+      "displayName": "OpenSSH",
+      "purpose": "관리자가 서버에 원격 로그인하고 파일을 전송할 수 있게 합니다.",
+      "category": "access",
+      "support": "supported_observe",
+      "unitPatterns": ["ssh.service", "sshd.service"]
+    },
+    {
+      "id": "ufw",
+      "displayName": "UFW",
+      "purpose": "Ubuntu 방화벽 규칙을 부팅 시 적용합니다.",
+      "category": "security",
+      "support": "supported_observe",
+      "unitPatterns": ["ufw.service"]
+    },
+    {
+      "id": "certbot",
+      "displayName": "Certbot",
+      "purpose": "TLS 인증서를 발급하고 정기 갱신 작업을 예약합니다.",
+      "category": "certificate",
+      "support": "supported_observe",
+      "unitPatterns": ["certbot.service", "certbot.timer"]
+    },
+    {
+      "id": "fail2ban",
+      "displayName": "Fail2ban",
+      "purpose": "반복되는 비정상 로그인 시도를 탐지하고 임시 차단합니다.",
+      "category": "security",
+      "support": "known_read_only",
+      "unitPatterns": ["fail2ban.service"]
+    },
+    {
+      "id": "docker",
+      "displayName": "Docker Engine",
+      "purpose": "애플리케이션 컨테이너를 실행하고 관리하는 런타임입니다.",
+      "category": "container",
+      "support": "known_read_only",
+      "unitPatterns": ["docker.service"]
+    },
+    {
+      "id": "containerd",
+      "displayName": "containerd",
+      "purpose": "Docker와 Kubernetes 등이 사용하는 저수준 컨테이너 런타임입니다.",
+      "category": "container",
+      "support": "known_read_only",
+      "unitPatterns": ["containerd.service"]
+    },
+    {
+      "id": "node-exporter",
+      "displayName": "Prometheus Node Exporter",
+      "purpose": "서버 자원과 운영체제 지표를 Prometheus 형식으로 제공합니다.",
+      "category": "monitoring",
+      "support": "known_read_only",
+      "unitPatterns": ["prometheus-node-exporter.service", "node_exporter.service"]
+    },
+    {
+      "id": "grafana",
+      "displayName": "Grafana",
+      "purpose": "수집된 지표와 로그를 대시보드로 시각화합니다.",
+      "category": "monitoring",
+      "support": "known_read_only",
+      "unitPatterns": ["grafana-server.service"]
+    }
+  ],
+  "productUnitPatterns": ["jw-*.service"],
+  "systemUnitPatterns": [
+    "systemd-*.service",
+    "systemd-*.timer",
+    "dbus.service",
+    "dbus-*.service",
+    "getty@*.service",
+    "serial-getty@*.service",
+    "user@*.service",
+    "cron.service",
+    "rsyslog.service",
+    "polkit.service",
+    "ModemManager.service",
+    "multipathd.service",
+    "qemu-guest-agent.service",
+    "udisks2.service",
+    "unattended-upgrades.service",
+    "apt-*.service",
+    "apt-*.timer",
+    "apport*.service",
+    "cloud-*.service",
+    "e2scrub*.service",
+    "fstrim.service",
+    "fstrim.timer",
+    "logrotate.service",
+    "logrotate.timer",
+    "man-db.service",
+    "man-db.timer",
+    "motd-news.service",
+    "motd-news.timer",
+    "fwupd*.service",
+    "snapd*.service"
+  ]
+}

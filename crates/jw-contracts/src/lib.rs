@@ -47,8 +47,8 @@ pub use integration::{
 };
 pub use observation::{
     CapabilityStatus, CapabilityView, DiskObservation, HealthStatus, HealthView, HostObservation,
-    MemoryObservation, NginxSiteObservation, NginxSitesView, ObservationStatus, ServiceSummary,
-    ServicesView,
+    MemoryObservation, NginxSiteObservation, NginxSitesView, ObservationStatus, ServiceCategory,
+    ServiceRuntimeState, ServiceSummary, ServiceSupport, ServiceVisibility, ServicesView,
 };
 pub use operation::{
     IDEMPOTENCY_KEY_MAX_BYTES, IDEMPOTENCY_KEY_MIN_BYTES, MANAGED_CONFIG_MAX_BYTES,

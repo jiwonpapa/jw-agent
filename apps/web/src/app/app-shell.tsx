@@ -4,6 +4,7 @@ import {
   Activity,
   BadgeCheck,
   GlobeLock,
+  ListTree,
   FolderOpen,
   LogOut,
   Menu,
@@ -26,6 +27,7 @@ import { StatusMark } from "../shared/ui/status-mark";
 
 const navigationIcons = {
   overview: Activity,
+  services: ListTree,
   nginx: Server,
   certificates: BadgeCheck,
   integrations: PackageSearch,

@@ -1,3 +1,12 @@
+jw-agent (0.2.0~p2.12) noble; urgency=medium
+
+  * Add a bounded Ubuntu 24.04 systemd service inventory and catalog.
+  * Classify major, discovered, and internal units without exposing mutation.
+  * Surface failures and plain-language roles in responsive service lists.
+  * Verify parsing, accessibility, and disposable VM failure evidence.
+
+ -- JW Agent Maintainers <maintainers@example.invalid>  Wed, 22 Jul 2026 12:49:15 +0900
+
 jw-agent (0.2.0~p2.11) noble; urgency=medium
 
   * Clear command environments and bound operation output.

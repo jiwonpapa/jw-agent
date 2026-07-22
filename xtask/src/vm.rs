@@ -1,5 +1,7 @@
 #![forbid(unsafe_code)]
 
+pub(crate) mod service_inventory;
+
 use std::env;
 use std::ffi::{OsStr, OsString};
 use std::fs::{self, OpenOptions};
@@ -116,12 +118,10 @@ class Ws:
             pass
         self.stream.close()
 
-
 def tls_stream():
     raw = socket.create_connection((cfg["address"], 443), timeout=10)
     context = ssl.create_default_context(cafile=cfg["ca"])
     return context.wrap_socket(raw, server_hostname=cfg["host"])
-
 
 def read_http(stream):
     buffered = bytearray()

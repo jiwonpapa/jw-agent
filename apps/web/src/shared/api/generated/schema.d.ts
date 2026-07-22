@@ -1197,14 +1197,35 @@ export interface components {
         RollbackSupport: "not_applicable" | "not_guaranteed" | "automatic_bounded" | "restore_validated";
         /** @enum {string} */
         ServiceAction: "reload" | "restart";
+        /** @enum {string} */
+        ServiceCategory: "web" | "runtime" | "database" | "cache" | "access" | "security" | "certificate" | "container" | "monitoring" | "custom" | "system" | "other";
+        /** @enum {string} */
+        ServiceRuntimeState: "running" | "active" | "failed" | "stopped" | "transitioning" | "unknown";
         ServiceSummary: {
+            activeState: string;
+            category: components["schemas"]["ServiceCategory"];
+            displayName: string;
+            hiddenByDefault: boolean;
+            purpose: string;
             readOnly: boolean;
-            service: string;
-            status: components["schemas"]["ObservationStatus"];
+            runtimeState: components["schemas"]["ServiceRuntimeState"];
+            serviceId: string;
+            subState: string;
+            support: components["schemas"]["ServiceSupport"];
+            unitFileState?: string | null;
+            unitName: string;
+            visibility: components["schemas"]["ServiceVisibility"];
         };
+        /** @enum {string} */
+        ServiceSupport: "supported_observe" | "known_read_only" | "discovered_read_only" | "system_internal";
+        /** @enum {string} */
+        ServiceVisibility: "primary" | "discovered" | "system";
         ServicesView: {
             observedAt: string;
             services: components["schemas"]["ServiceSummary"][];
+            status: components["schemas"]["ObservationStatus"];
+            templateProfile: string;
+            truncated: boolean;
         };
         SessionView: {
             absoluteExpiresAt: string;

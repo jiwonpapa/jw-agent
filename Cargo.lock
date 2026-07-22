@@ -421,6 +421,7 @@ dependencies = [
  "jw-contracts",
  "nix",
  "rusqlite",
+ "serde",
  "serde_json",
  "sha2",
  "subtle",

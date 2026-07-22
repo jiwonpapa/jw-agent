@@ -9,6 +9,7 @@ pub mod integration_catalog;
 pub mod observation;
 mod openssh;
 pub mod ops_client;
+pub mod service_inventory;
 pub mod session;
 pub mod sftp_protocol;
 pub mod terminal;

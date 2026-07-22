@@ -5,6 +5,7 @@ export const PRODUCT = {
 
 export const NAV_ITEMS = [
   { href: "/overview", label: "개요", key: "overview" },
+  { href: "/services", label: "서비스", key: "services" },
   { href: "/services/nginx", label: "Nginx", key: "nginx" },
   { href: "/certificates", label: "인증서", key: "certificates" },
   { href: "/integrations", label: "통합 카탈로그", key: "integrations" },
@@ -40,6 +41,37 @@ export const OBSERVATION_LABELS = {
   partial: "부분 관찰",
   not_installed: "설치되지 않음",
   unsupported_platform: "지원하지 않음",
+} as const;
+
+export const SERVICE_STATE_LABELS = {
+  running: "실행 중",
+  active: "활성",
+  failed: "실패",
+  stopped: "중지",
+  transitioning: "전환 중",
+  unknown: "알 수 없음",
+} as const;
+
+export const SERVICE_SUPPORT_LABELS = {
+  supported_observe: "관리 지원 · 현재 읽기 전용",
+  known_read_only: "알려진 서비스 · 읽기 전용",
+  discovered_read_only: "발견된 서비스 · 읽기 전용",
+  system_internal: "시스템 내부",
+} as const;
+
+export const SERVICE_CATEGORY_LABELS = {
+  web: "웹",
+  runtime: "애플리케이션 실행",
+  database: "데이터베이스",
+  cache: "캐시",
+  access: "원격 접속",
+  security: "보안",
+  certificate: "인증서",
+  container: "컨테이너",
+  monitoring: "모니터링",
+  custom: "사용자 정의",
+  system: "시스템",
+  other: "기타",
 } as const;
 
 export const POLICY_LABELS = {

@@ -43,6 +43,7 @@ import type {
   ProblemDetails,
   ReauthView,
   SessionView,
+  ServicesView,
   TerminalCapabilityView,
   TerminalTicketRequest,
   TerminalTicketView,
@@ -137,6 +138,14 @@ export async function getHost(signal?: AbortSignal): Promise<HostObservation> {
 
 export async function getNginxSites(signal?: AbortSignal): Promise<NginxSitesView> {
   const { data, error, response } = await api.GET("/api/v1/services/nginx/sites", {
+    signal: signal ?? null,
+  });
+  if (data !== undefined) return data;
+  throw new ApiError(error, response);
+}
+
+export async function getServices(signal?: AbortSignal): Promise<ServicesView> {
+  const { data, error, response } = await api.GET("/api/v1/services", {
     signal: signal ?? null,
   });
   if (data !== undefined) return data;

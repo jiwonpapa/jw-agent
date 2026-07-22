@@ -14,8 +14,9 @@ base64 = { workspace = true, features = ["std"] }
 getrandom.workspace = true
 futures-core.workspace = true
 jw-contracts = { path = "../jw-contracts" }
-nix = { workspace = true, features = ["fs", "term"] }
+nix = { workspace = true, features = ["fs", "process", "signal", "term"] }
 rusqlite.workspace = true
+serde = { workspace = true, features = ["derive", "std"] }
 serde_json = { workspace = true, features = ["std"] }
 sha2.workspace = true
 subtle = { workspace = true, features = ["std"] }
