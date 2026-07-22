@@ -51,6 +51,7 @@ Last reviewed: 2026-07-22
 - [ADR-0011 One-shot Certbot network runner](adr/0011-certbot-network-runner.md) — Accepted
 - [ADR-0012 One-shot loopback TLS verifier](adr/0012-loopback-tls-verifier.md) — Accepted
 - [ADR-0013 System OpenSSH client](adr/0013-system-openssh-client.md) — Accepted
+- [ADR-0014 CodeMirror managed config editor](adr/0014-codemirror-config-editor.md) — Accepted
 
 ## Spec template requirements
 

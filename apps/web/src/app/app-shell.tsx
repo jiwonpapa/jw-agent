@@ -18,6 +18,8 @@ import {
 import { useState, type ReactNode } from "react";
 
 import { logout } from "../shared/api/client";
+import { FileSessionProvider } from "../features/files/file-session";
+import { TerminalSessionProvider } from "../features/terminal/terminal-session";
 import { hostQueryOptions, sessionQueryOptions } from "../shared/api/queries";
 import { CATALOG_NAV_ITEM, NAV_GROUPS, PRODUCT, ROLE_LABELS } from "../shared/content/copy";
 import { formatDateTime } from "../shared/domain/format";
@@ -115,7 +117,9 @@ export function AppShell({ children }: { children: ReactNode }) {
   const observedAt = host.data?.observedAt;
 
   return (
-    <div className="app-shell">
+    <TerminalSessionProvider>
+      <FileSessionProvider>
+        <div className="app-shell">
       <a
         href="#main-content"
         className="fixed left-3 top-3 z-50 -translate-y-20 rounded-control bg-action px-3 py-2 text-sm font-semibold text-action-foreground focus:translate-y-0"
@@ -229,7 +233,9 @@ export function AppShell({ children }: { children: ReactNode }) {
           {logoutPending ? "로그아웃 중" : "로그아웃"}
         </Button>
       </Sheet>
-    </div>
+        </div>
+      </FileSessionProvider>
+    </TerminalSessionProvider>
   );
 }
 

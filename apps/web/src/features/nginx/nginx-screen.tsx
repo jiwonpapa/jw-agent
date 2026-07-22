@@ -14,7 +14,7 @@ import {
   TriangleAlert,
   XCircle,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState, type SyntheticEvent } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState, type SyntheticEvent } from "react";
 
 import {
   ApiError,
@@ -39,8 +39,13 @@ import type {
   OperationStage,
 } from "../../shared/api/types";
 import { formatDateTime } from "../../shared/domain/format";
+import {
+  nginxSyntaxDiagnosticLine,
+  operationResultLabel,
+} from "../../shared/domain/managed-config-diagnostic";
 import { AssuranceDetails, AssuranceMark } from "../../shared/ui/assurance";
 import { Button } from "../../shared/ui/button";
+import { CodeEditor } from "../../shared/ui/code-editor";
 import { Input } from "../../shared/ui/input";
 import { Sheet } from "../../shared/ui/sheet";
 import { Skeleton } from "../../shared/ui/skeleton";
@@ -67,6 +72,11 @@ interface NginxRowView {
   managedConfigSchemaVersion: number | null;
   assurance: NginxSiteObservation["assurance"];
 }
+
+const CodeDiff = lazy(async () => {
+  const module = await import("../../shared/ui/code-diff");
+  return { default: module.CodeDiff };
+});
 
 const STAGE_LABELS: Record<OperationStage, string> = {
   PLANNED: "계획 생성",
@@ -120,6 +130,7 @@ export function NginxScreen() {
   const [configResource, setConfigResource] = useState<ManagedConfigResourceView | null>(null);
   const [configPlan, setConfigPlan] = useState<ManagedConfigPlanView | null>(null);
   const [configDraft, setConfigDraft] = useState("");
+  const [configDiagnosticLine, setConfigDiagnosticLine] = useState<number | null>(null);
   const [configMode, setConfigMode] = useState(false);
   const [loadingConfig, setLoadingConfig] = useState(false);
   const [accepted, setAccepted] = useState<OperationAcceptedView | null>(null);
@@ -146,6 +157,7 @@ export function NginxScreen() {
           const current = await getOperationReceipt(operation.operationId, controller.signal);
           setReceipt(current);
           if (isTerminalStage(current.terminalState)) {
+            setConfigDiagnosticLine(nginxSyntaxDiagnosticLine(current.stages));
             closeStream();
             setAccepted(null);
             await queryClient.invalidateQueries({ queryKey: queryKeys.nginxSites });
@@ -176,6 +188,7 @@ export function NginxScreen() {
     setConfigResource(null);
     setConfigPlan(null);
     setConfigDraft("");
+    setConfigDiagnosticLine(null);
     setConfigMode(false);
     setAccepted(null);
     setReceipt(null);
@@ -196,6 +209,7 @@ export function NginxScreen() {
       const resource = await getManagedConfigResource(row.managedConfigResourceId);
       setConfigResource(resource);
       setConfigDraft(resource.content);
+      setConfigDiagnosticLine(null);
       setConfigPlan(null);
       setConfigMode(true);
       approvalKey.current = null;
@@ -435,7 +449,11 @@ export function NginxScreen() {
             planning={planning}
             executing={executing}
             errorMessage={errorMessage}
-            onDraftChange={setConfigDraft}
+            diagnosticLine={configDiagnosticLine}
+            onDraftChange={(value) => {
+              setConfigDiagnosticLine(null);
+              setConfigDraft(value);
+            }}
             onBack={() => {
               setConfigMode(false);
               setConfigPlan(null);
@@ -445,6 +463,13 @@ export function NginxScreen() {
             }}
             onCreatePlan={() => void createConfigPlan(selected)}
             onApprove={approveConfigPlan}
+            onRevise={(line) => {
+              setConfigDiagnosticLine(line);
+              setConfigPlan(null);
+              setAccepted(null);
+              setReceipt(null);
+              setErrorMessage(null);
+            }}
           />
         ) : selected ? (
           <SiteInspector
@@ -656,10 +681,12 @@ function ManagedConfigEditor({
   planning,
   executing,
   errorMessage,
+  diagnosticLine,
   onDraftChange,
   onBack,
   onCreatePlan,
   onApprove,
+  onRevise,
 }: {
   resource: ManagedConfigResourceView;
   draft: string;
@@ -669,12 +696,16 @@ function ManagedConfigEditor({
   planning: boolean;
   executing: boolean;
   errorMessage: string | null;
+  diagnosticLine: number | null;
   onDraftChange: (value: string) => void;
   onBack: () => void;
   onCreatePlan: () => void;
   onApprove: (password: string) => Promise<void>;
+  onRevise: (line: number | null) => void;
 }) {
-  if (receipt !== null) return <OperationResult receipt={receipt} />;
+  if (receipt !== null) {
+    return <OperationResult receipt={receipt} onRevise={onRevise} />;
+  }
   if (accepted !== null) {
     return (
       <div aria-live="polite" className="flex items-start gap-3">
@@ -694,6 +725,8 @@ function ManagedConfigEditor({
     return (
       <ManagedConfigOperationPlan
         plan={plan}
+        original={resource.content}
+        modified={draft}
         executing={executing}
         errorMessage={errorMessage}
         onApprove={onApprove}
@@ -730,15 +763,21 @@ function ManagedConfigEditor({
         </div>
       </section>
 
-      <label htmlFor="managed-config-content" className="mt-5 block text-sm font-medium text-text">
+      <p className="mt-5 text-sm font-medium text-text">
         Nginx 설정 내용
-      </label>
-      <textarea
-        id="managed-config-content"
-        className="mt-2 min-h-80 w-full resize-y rounded-control border border-border bg-subtle px-3 py-3 font-mono text-[13px] leading-6 text-text outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/20"
-        spellCheck={false}
+      </p>
+      <CodeEditor
+        ariaLabel="Nginx 설정 내용"
+        className="mt-2"
+        language="nginx"
         value={draft}
-        onChange={(event) => onDraftChange(event.currentTarget.value)}
+        diagnosticLine={diagnosticLine}
+        diagnosticMessage={
+          diagnosticLine === null
+            ? "서버 문법검사가 이 줄에서 실패했습니다."
+            : `nginx -t가 선택한 설정의 ${String(diagnosticLine)}번째 줄을 지목했습니다.`
+        }
+        onChange={onDraftChange}
       />
       <div className="mt-2 flex items-center justify-between gap-3 text-xs text-muted">
         <span>{unchanged ? "변경 없음" : "편집 내용은 아직 서버에 적용되지 않음"}</span>
@@ -776,11 +815,15 @@ function ManagedConfigEditor({
 
 function ManagedConfigOperationPlan({
   plan,
+  original,
+  modified,
   executing,
   errorMessage,
   onApprove,
 }: {
   plan: ManagedConfigPlanView;
+  original: string;
+  modified: string;
   executing: boolean;
   errorMessage: string | null;
   onApprove: (password: string) => Promise<void>;
@@ -833,9 +876,21 @@ function ManagedConfigOperationPlan({
         <h4 id="config-diff-heading" className="text-xs font-semibold text-muted">
           제한된 diff 미리보기
         </h4>
-        <pre className="mt-2 max-h-64 overflow-auto rounded-control border border-border bg-subtle p-3 text-xs leading-5 text-text">
-          {plan.diffSummary.length > 0 ? plan.diffSummary.join("\n") : "내용 변경 없음"}
-        </pre>
+        <Suspense fallback={<Skeleton className="mt-2 h-64 w-full" />}>
+          <CodeDiff
+            ariaLabel="Nginx 설정 변경 diff"
+            className="mt-2"
+            language="nginx"
+            original={original}
+            modified={modified}
+          />
+        </Suspense>
+        <details className="mt-3 text-xs text-muted">
+          <summary className="cursor-pointer font-medium text-action">텍스트 diff 요약</summary>
+          <pre className="mt-2 max-h-40 overflow-auto rounded-control bg-subtle p-3 leading-5 text-text">
+            {plan.diffSummary.length > 0 ? plan.diffSummary.join("\n") : "내용 변경 없음"}
+          </pre>
+        </details>
       </section>
 
       <section className="mt-5 border-y border-border py-4">
@@ -1025,12 +1080,19 @@ function OperationPlan({
   );
 }
 
-function OperationResult({ receipt }: { receipt: OperationReceiptView }) {
+function OperationResult({
+  receipt,
+  onRevise,
+}: {
+  receipt: OperationReceiptView;
+  onRevise?: (line: number | null) => void;
+}) {
   const failure = receipt.terminalState === "RECOVERY_REQUIRED";
   const rolledBack = receipt.terminalState === "ROLLED_BACK";
   const succeeded = receipt.terminalState === "SUCCEEDED";
   const terminal = isTerminalStage(receipt.terminalState);
   const managedConfig = receipt.operationType === "service.config_file.set/v1";
+  const diagnosticLine = nginxSyntaxDiagnosticLine(receipt.stages);
   return (
     <div aria-live="polite">
       <div className="flex items-start gap-3">
@@ -1063,6 +1125,15 @@ function OperationResult({ receipt }: { receipt: OperationReceiptView }) {
         </div>
       </div>
 
+      {diagnosticLine !== null ? (
+        <section className="mt-5 rounded-panel border border-danger/35 bg-danger/5 p-4" role="alert">
+          <h4 className="text-sm font-semibold text-text">선택한 설정 {diagnosticLine}번째 줄에서 문법 오류</h4>
+          <p className="mt-1 text-sm leading-6 text-muted">
+            서비스는 reload하지 않았고 이전 설정 복원과 재검증을 마쳤습니다. 편집기로 돌아가 표시된 줄을 수정하세요.
+          </p>
+        </section>
+      ) : null}
+
       <ol className="mt-6 border-y border-border py-2">
         {receipt.stages.map((stage) => (
           <li key={stage.sequence} className="flex gap-3 py-3 text-sm">
@@ -1070,7 +1141,7 @@ function OperationResult({ receipt }: { receipt: OperationReceiptView }) {
             <div className="min-w-0">
               <p className="font-medium text-text">{STAGE_LABELS[stage.stage]}</p>
               <p className="mt-1 break-words text-xs text-muted">
-                {formatDateTime(stage.recordedAt)} · {stage.resultCode}
+                {formatDateTime(stage.recordedAt)} · {operationResultLabel(stage.resultCode)}
               </p>
             </div>
           </li>
@@ -1087,6 +1158,12 @@ function OperationResult({ receipt }: { receipt: OperationReceiptView }) {
       <div className="mt-5">
         <AssuranceDetails assurance={receipt.assurance} />
       </div>
+      {managedConfig && rolledBack && onRevise !== undefined ? (
+        <Button className="mt-5 w-full" onClick={() => onRevise(diagnosticLine)}>
+          <FilePenLine aria-hidden="true" className="size-4" />
+          {diagnosticLine === null ? "편집 내용 다시 검토" : `${String(diagnosticLine)}번째 줄 수정`}
+        </Button>
+      ) : null}
     </div>
   );
 }

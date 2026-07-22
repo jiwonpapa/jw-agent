@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 pub(crate) mod public_recovery;
+mod receipt;
 pub(crate) mod service_inventory;
 
 use std::env;
@@ -13,6 +14,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::process::{Captured, run_capture, safe_output};
+use receipt::contains_nginx_config_failure_result;
 
 const RECOVERY_HOST: &str = "127.0.0.1:8787";
 const RECOVERY_ORIGIN: &str = "http://127.0.0.1:8787";
@@ -1859,7 +1861,7 @@ pub fn gate_p2_managed_config(_root: &Path, timeout: Duration) -> Result<(), Str
             "ROLLED_BACK",
             "managed config syntax rollback",
         )?;
-        if !syntax_rollback.contains("\"resultCode\":\"nginx_config_test_failed\"") {
+        if !contains_nginx_config_failure_result(&syntax_rollback) {
             return Err(String::from(
                 "managed config syntax receipt omitted failure evidence",
             ));

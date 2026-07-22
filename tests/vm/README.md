@@ -25,9 +25,9 @@ JW_VM_PUBLIC_ADDRESS=192.168.0.142
 JW_VM_CA_CERT=/path/to/test-ca.crt
 JW_VM_ADMIN_USER=jwvmadmin
 JW_VM_PASSWORD_FILE=/path/to/mode-0600-fixture-password
-JW_VM_REMOTE_PACKAGE=/home/neojins/jw-agent_0.2.0~p2.13_amd64.deb
-JW_VM_EXPECTED_PACKAGE_SHA256=49b0b10d5f13e89b6990b1ed7f665132e4cd8ab81fe146fa43d4aff181469b48
-JW_VM_EXPECTED_VERSION=0.2.0~p2.13
+JW_VM_REMOTE_PACKAGE=/home/neojins/jw-agent_0.2.0~p2.14_amd64.deb
+JW_VM_EXPECTED_PACKAGE_SHA256=0c7b251139acc520ba08b3e21a7407c913162619eda15e6aa536c7b11ec8bc9b
+JW_VM_EXPECTED_VERSION=0.2.0~p2.14
 cargo xtask verify p2-vm
 ```
 
@@ -41,8 +41,8 @@ certificate를 VM management edge에 설치합니다.
 ## Current VM evidence
 
 - domain: `jw-agent-p1`, Ubuntu 24.04.4 LTS, kernel `6.8.0-136-generic`
-- package: `jw-agent 0.2.0~p2.13`, SHA-256 `49b0b10d5f13e89b6990b1ed7f665132e4cd8ab81fe146fa43d4aff181469b48`, package/runtime gate clean
-- lanes: `p2-local` 22 PASS, `p2-browser` 8 PASS with 35 browser scenarios, `p2-vm` 24 PASS
+- package: `jw-agent 0.2.0~p2.14`, SHA-256 `0c7b251139acc520ba08b3e21a7407c913162619eda15e6aa536c7b11ec8bc9b`, package/runtime gate clean
+- lanes: `p2-local` 22 PASS, `p2-browser` 8 PASS with 37 browser scenarios, `p2-vm` 24 PASS
 - service inventory: real Nginx and JW Agent internal classification plus a disposable failed custom unit surfaced as discovered read-only
 - automated VM scenarios: installed PAM fixture equality, no `pam_faillock`, `jw-authd → libpam.so.0`, `jw-agentd → libsqlite3.so.0`, repeated product-login failures followed by unchanged Linux password state and working OpenSSH key recovery
 - automated P2 faults: success, verified no-op, syntax failure rollback, injected reload failure rollback, 1 MiB snapshot filesystem cancellation before apply, deleted checkpoint lockdown and restoration
@@ -57,7 +57,7 @@ certificate를 VM management edge에 설치합니다.
 - automated P2D SFTP G1: PAM-planned create/replace, `0600` create and existing-mode preservation, fsync/atomic rename, size/SHA-256 read-back, stale target·symlink·directory·traversal·digest·wrong-Origin·replay denial, metadata-only audit and temp cleanup
 - package runtime: opsd private network namespace, exact `CAP_NET_BIND_SERVICE`, ephemeral Nginx test logs, no listening IP socket, root-owned `0600` ledger, bounded UDS
 - local console: grouped navigation, explicit non-root Linux identity, responsive resource meters and service-family cards, current-subject typed-operation history
-- real browser: public HTTPS editor, 24 KiB counter, planned-only warning, G2 scope/exclusions and custom-basename protected vhost; internal temp absent and authenticated fresh-session console error 0
+- real browser: p2.14 public HTTPS CodeMirror editor, line numbers, 24 KiB counter, planned-only warning and G2 scope/exclusions; authenticated editor console error 0
 
 This is a private-LAN `.test` host with a dedicated management-edge test CA.
 The Certbot runner boundary, read-only inventory, renewal dry-run, guided issue

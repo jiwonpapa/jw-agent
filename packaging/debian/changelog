@@ -1,3 +1,12 @@
+jw-agent (0.2.0~p2.14) noble; urgency=medium
+
+  * Add CodeMirror Nginx and SFTP editors with a lazy unified diff.
+  * Return the selected Nginx syntax line after a verified rollback.
+  * Keep terminal and SFTP sessions across route navigation within their bounds.
+  * Add regression coverage for session persistence and diagnostic recovery.
+
+ -- JW Agent Maintainers <maintainers@example.invalid>  Wed, 22 Jul 2026 16:30:11 +0900
+
 jw-agent (0.2.0~p2.13) noble; urgency=medium
 
   * Rework the dashboard, service inventory, terminal, and SFTP work surfaces.

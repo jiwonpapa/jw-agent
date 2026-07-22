@@ -110,5 +110,6 @@ executable, argv, cwd, environment allowlist, timeout, output cap은 adapter reg
 - duplicate/idempotency conflict and concurrent resource/service lock
 - rollback failure produces `RECOVERY_REQUIRED` and exact runbook
 - desktop/tablet/mobile UI shows G2 scope, diff, service action and exclusions before approval
+- selected-resource syntax diagnostic가 안전하게 추출되면 오류 줄을 editor gutter에 표시하고, 위치가 없으면 추측하지 않음
 
 Nginx active-resource profile은 `0.2.0~p2.2`에서 `VM_PASS + G2`를 획득했습니다. 다른 adapter와 비활성 resource는 계속 `UNSUPPORTED`입니다.

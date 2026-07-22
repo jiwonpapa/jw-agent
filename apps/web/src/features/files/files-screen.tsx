@@ -15,12 +15,11 @@ import {
   TriangleAlert,
   Upload,
 } from "lucide-react";
-import { type ChangeEvent, useEffect, useRef, useState } from "react";
+import { type ChangeEvent, useState } from "react";
 
 import {
   ApiError,
   applyFileUpload,
-  closeFileSession,
   createFileSession,
   downloadFile,
   listFiles,
@@ -31,12 +30,12 @@ import { fileCapabilityQueryOptions } from "../../shared/api/queries";
 import type {
   FileEntryView,
   FileListView,
-  FileSessionView,
   FileTextView,
   FileUploadPlanView,
 } from "../../shared/api/types";
 import { AssuranceDetails } from "../../shared/ui/assurance";
 import { Button } from "../../shared/ui/button";
+import { CodeEditor } from "../../shared/ui/code-editor";
 import { cn } from "../../shared/ui/cn";
 import { Input } from "../../shared/ui/input";
 import { Skeleton } from "../../shared/ui/skeleton";
@@ -44,6 +43,7 @@ import { Sheet } from "../../shared/ui/sheet";
 import { StatusMark } from "../../shared/ui/status-mark";
 import { SurfaceState } from "../../shared/ui/surface-state";
 import { WorkspaceHeader } from "../../shared/ui/workspace-header";
+import { useFileSession } from "./file-session";
 
 type WorkState = "idle" | "connecting" | "loading" | "planning" | "applying" | "ready" | "error";
 
@@ -53,13 +53,12 @@ type WriteDraft =
 
 export function FilesScreen() {
   const capabilityQuery = useQuery(fileCapabilityQueryOptions);
+  const fileSession = useFileSession();
+  const { adopt, discard, listing, rememberListing, session } = fileSession;
   const [password, setPassword] = useState("");
   const [confirmed, setConfirmed] = useState(false);
-  const [session, setSession] = useState<FileSessionView | null>(null);
-  const sessionRef = useRef<FileSessionView | null>(null);
-  const [listing, setListing] = useState<FileListView | null>(null);
   const [preview, setPreview] = useState<FileTextView | null>(null);
-  const [state, setState] = useState<WorkState>("idle");
+  const [state, setState] = useState<WorkState>(session !== null && listing !== null ? "ready" : "idle");
   const [message, setMessage] = useState<string | null>(null);
   const [writeDraft, setWriteDraft] = useState<WriteDraft | null>(null);
   const [uploadPlan, setUploadPlan] = useState<FileUploadPlanView | null>(null);
@@ -68,17 +67,6 @@ export function FilesScreen() {
   const [overwriteConfirmed, setOverwriteConfirmed] = useState(false);
   const [connectOpen, setConnectOpen] = useState(false);
   const [writeOpen, setWriteOpen] = useState(false);
-
-  useEffect(() => {
-    sessionRef.current = session;
-  }, [session]);
-
-  useEffect(() => {
-    return () => {
-      const active = sessionRef.current;
-      if (active !== null) void closeFileSession(active.sessionToken).catch(() => undefined);
-    };
-  }, []);
 
   if (capabilityQuery.isPending) {
     return (
@@ -111,9 +99,9 @@ export function FilesScreen() {
       const issued = await createFileSession({ password, readOnlyConfirmed: true });
       setPassword("");
       setConnectOpen(false);
-      setSession(issued);
+      adopt(issued);
       const root = await listFiles({ sessionToken: issued.sessionToken, path: "" });
-      setListing(root);
+      rememberListing(root);
       setPreview(null);
       resetWrite();
       setState("ready");
@@ -131,7 +119,7 @@ export function FilesScreen() {
     setMessage(null);
     try {
       const next = await listFiles({ sessionToken: session.sessionToken, path });
-      setListing(next);
+      rememberListing(next);
       setPreview(null);
       resetWrite();
       setState("ready");
@@ -175,8 +163,7 @@ export function FilesScreen() {
 
   function handleOperationError(error: unknown): void {
     if (error instanceof ApiError && (error.status === 401 || error.code === "files_unavailable")) {
-      setSession(null);
-      setListing(null);
+      discard();
       setPreview(null);
       resetWrite();
     }
@@ -185,19 +172,12 @@ export function FilesScreen() {
   }
 
   async function disconnect(): Promise<void> {
-    const active = session;
-    setSession(null);
-    setListing(null);
     setPreview(null);
     resetWrite();
     setState("idle");
     setMessage(null);
-    if (active !== null) {
-      try {
-        await closeFileSession(active.sessionToken);
-      } catch {
-        setMessage("브라우저 세션은 비웠지만 서버 종료 확인에 실패했습니다. 최대 2분 안에 자동 만료됩니다.");
-      }
+    if (!(await fileSession.disconnect())) {
+      setMessage("브라우저 세션은 비웠지만 서버 종료 확인에 실패했습니다. 최대 2분 안에 자동 만료됩니다.");
     }
   }
 
@@ -310,7 +290,7 @@ export function FilesScreen() {
         content: bytes,
       });
       const refreshed = await listFiles({ sessionToken: session.sessionToken, path: listing.path });
-      setListing(refreshed);
+      rememberListing(refreshed);
       setPreview(null);
       resetWrite();
       setState("ready");
@@ -512,13 +492,13 @@ export function FilesScreen() {
             </dl>
             {writeDraft.kind === "text" ? (
               <div className="mt-5">
-                <label htmlFor="file-text-editor" className="text-sm font-semibold text-text">UTF-8 내용</label>
-                <textarea
-                  id="file-text-editor"
-                  className="mt-2 min-h-72 w-full resize-y rounded-control border border-border bg-surface px-3 py-3 font-mono text-sm leading-6 text-text outline-none focus:border-action focus:ring-2 focus:ring-action/20 disabled:opacity-60"
+                <p className="text-sm font-semibold text-text">UTF-8 내용</p>
+                <CodeEditor
+                  ariaLabel="SFTP UTF-8 내용"
+                  className="mt-2"
                   value={writeDraft.text}
-                  disabled={uploadPlan !== null || state === "planning" || state === "applying"}
-                  onChange={(event) => setWriteDraft({ ...writeDraft, text: event.target.value })}
+                  readOnly={uploadPlan !== null || state === "planning" || state === "applying"}
+                  onChange={(text) => setWriteDraft({ ...writeDraft, text })}
                 />
               </div>
             ) : null}

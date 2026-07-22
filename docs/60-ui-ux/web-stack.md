@@ -16,6 +16,7 @@ Last reviewed: 2026-07-21
 - TanStack Query server-state cache
 - generated OpenAPI TypeScript client
 - Playwright browser evidence
+- CodeMirror 6 shared managed-text editor and unified diff
 
 도입 시점에 호환되는 최신 stable 조합을 확인한 뒤 exact pin합니다. manifest와 release 명령에 `latest`를 남기지 않습니다.
 

@@ -54,7 +54,7 @@ SFTP v3 handshake가 두 OpenSSH extension을 광고하지 않으면 write capab
 
 - UTF-8 text preview의 digest를 before state로 사용하고 256 KiB 이하만 편집
 - line ending을 표시하고 저장 시 사용자가 선택하지 않는 한 원문의 LF/CRLF를 유지
-- textarea를 우선 사용하며 Monaco는 별도 build-graph ADR 전 추가하지 않음
+- UTF-8 text는 [ADR-0014](../adr/0014-codemirror-config-editor.md)의 공유 CodeMirror component를 사용하며 binary·대용량 파일은 편집하지 않음
 - 저장도 upload plan/apply를 사용하므로 별도 우회 endpoint가 없음
 
 ## Audit and recovery

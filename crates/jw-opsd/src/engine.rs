@@ -33,6 +33,7 @@ use crate::managed_config::{
     restore_managed_config, restore_protected_config, write_proposal,
 };
 use crate::nginx::{NGINX_IMPACT, NGINX_RECOVERY_PATH, NginxSite, discover_site, set_enabled};
+use crate::nginx_diagnostic::nginx_config_failure_code;
 use crate::runner::{CommandClass, CommandEvidence, OperationRunner};
 use crate::snapshot::{
     CertificateInventorySnapshot, ManagedConfigSnapshot, NginxLinkSnapshot,
@@ -2268,10 +2269,11 @@ impl OpsService {
         };
         let config_digest = command_digest(&config_test)?;
         if !config_test.success {
+            let failure_code = nginx_config_failure_code(&config_test, &preflight.basename);
             return self.rollback_managed_config(
                 ledger,
                 &snapshotted.operation_id,
-                "nginx_config_test_failed",
+                &failure_code,
                 &config_digest,
                 now_ms,
             );

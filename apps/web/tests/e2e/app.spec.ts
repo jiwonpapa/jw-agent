@@ -2,6 +2,7 @@ import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page } from "@playwright/test";
 
 import type { OperationReceiptView } from "../../src/shared/api/types";
+import { registerFeatureRegressionTests } from "./feature-regression-tests";
 import { services } from "./fixtures/service-inventory";
 
 const session = {
@@ -236,6 +237,20 @@ const managedConfigReceipt: OperationReceiptView = {
   planHash: configPlanHash,
   beforeDigest: availableDigest,
   afterDigest: managedConfigPlan.proposedContentDigest,
+};
+
+const managedConfigSyntaxFailureReceipt: OperationReceiptView = {
+  ...managedConfigReceipt,
+  terminalState: "ROLLED_BACK",
+  afterDigest: availableDigest,
+  rollbackResult: "verified",
+  stages: [
+    { sequence: 1, stage: "APPROVED", recordedAt: "2026-07-21T02:12:00Z", resultCode: "approved", evidenceDigest: configPlanHash },
+    { sequence: 2, stage: "SNAPSHOTTED", recordedAt: "2026-07-21T02:12:01Z", resultCode: "snapshot_durable", evidenceDigest: availableDigest },
+    { sequence: 3, stage: "APPLYING", recordedAt: "2026-07-21T02:12:02Z", resultCode: "config_replaced", evidenceDigest: availableDigest },
+    { sequence: 4, stage: "ROLLING_BACK", recordedAt: "2026-07-21T02:12:03Z", resultCode: "nginx_config_test_failed:line=3", evidenceDigest: availableDigest },
+    { sequence: 5, stage: "ROLLED_BACK", recordedAt: "2026-07-21T02:12:04Z", resultCode: "rollback_verified", evidenceDigest: availableDigest },
+  ],
 };
 
 const managedConfigAccepted = {
@@ -652,6 +667,7 @@ async function mockApi(
   healthFixture = health,
   operationOptions: {
     receipt?: OperationReceiptView;
+    configReceipt?: OperationReceiptView;
     onPlan?: (body: unknown) => void;
     onApproval?: (body: unknown) => void;
     onConfigPlan?: (body: unknown) => void;
@@ -668,6 +684,7 @@ async function mockApi(
     onTerminalTicket?: (body: unknown) => void;
     terminalFixture?: Record<string, unknown>;
     onFileSession?: (body: unknown) => void;
+    onFileClose?: () => void;
     onFileList?: (body: unknown) => void;
     onFileUploadPlan?: (body: unknown) => void;
     onFileUpload?: (body: Uint8Array, headers: Record<string, string>) => void;
@@ -737,6 +754,7 @@ async function mockApi(
       });
     }
     if (path === "/api/v1/files/sessions/close" && request.method() === "POST") {
+      operationOptions.onFileClose?.();
       return route.fulfill({ status: 204 });
     }
     if (path === "/api/v1/files/list" && request.method() === "POST") {
@@ -821,7 +839,7 @@ async function mockApi(
     }
     if (path === "/api/v1/operations/service/config-file/approvals" && request.method() === "POST") {
       operationOptions.onConfigApproval?.(request.postDataJSON());
-      activeReceipt = managedConfigReceipt;
+      activeReceipt = operationOptions.configReceipt ?? managedConfigReceipt;
       return route.fulfill({ status: 202, json: managedConfigAccepted });
     }
     if (path === "/api/v1/operations/certbot/renew-test/plans" && request.method() === "POST") {
@@ -876,6 +894,21 @@ async function mockApi(
     return route.fulfill({ status: 404, json: { type: "about:blank", title: "Not found", status: 404, code: "not_found" } });
   });
 }
+
+registerFeatureRegressionTests({
+  setupSftp: (page, callbacks) => mockApi(page, true, health, {
+    onFileSession: callbacks.onSession,
+    onFileClose: callbacks.onClose,
+  }),
+  setupManagedConfig: (page, callbacks) => mockApi(page, true, health, {
+    onConfigPlan: callbacks.onPlan,
+    onConfigApproval: callbacks.onApproval,
+  }),
+  setupManagedConfigSyntaxFailure: (page) => mockApi(page, true, health, {
+    configReceipt: managedConfigSyntaxFailureReceipt,
+  }),
+  configPlanHash,
+});
 
 test("PAM login keeps credentials out of URL and web storage", async ({ page }) => {
   await mockApi(page, false);
@@ -973,6 +1006,7 @@ for (const viewport of [{ width: 320, height: 800 }, { width: 768, height: 1024 
 
 test("terminal ticket keeps password out of URL and browser storage", async ({ page }) => {
   let ticketBody: unknown;
+  let ticketRequests = 0;
   await page.routeWebSocket("**/api/v1/terminal/connect", (socket) => {
     socket.send(JSON.stringify({
       type: "ready",
@@ -982,6 +1016,7 @@ test("terminal ticket keeps password out of URL and browser storage", async ({ p
   });
   await mockApi(page, true, health, {
     onTerminalTicket: (body) => {
+      ticketRequests += 1;
       ticketBody = body;
     },
   });
@@ -991,6 +1026,12 @@ test("terminal ticket keeps password out of URL and browser storage", async ({ p
   await page.getByLabel(/명령은 자동 원복되지 않으며/).check();
   await page.getByRole("button", { name: "재인증 후 연결" }).click();
   await expect(page.getByText(/세션 01234567/)).toBeVisible();
+  await page.getByRole("link", { name: "개요" }).click();
+  await expect(page.getByRole("heading", { name: "서버 개요" })).toBeVisible();
+  await page.getByRole("link", { name: "터미널" }).click();
+  await expect(page.getByText(/세션 01234567/)).toBeVisible();
+  await expect(page.getByRole("button", { name: "세션 종료" })).toBeVisible();
+  expect(ticketRequests).toBe(1);
   expect(ticketBody).toEqual({
     password: "fixture-terminal-password",
     rows: 24,
@@ -1168,61 +1209,6 @@ test("G2 Nginx change discloses rollback scope before exact-plan PAM approval", 
   );
   expect(JSON.stringify(approvalBodies)).not.toContain("fixture-password");
   expect(page.url()).not.toContain("fixture-password");
-  const hasOverflow = await page.evaluate(
-    () => document.documentElement.scrollWidth > document.documentElement.clientWidth,
-  );
-  expect(hasOverflow).toBe(false);
-  const accessibility = await new AxeBuilder({ page }).analyze();
-  expect(
-    accessibility.violations.filter((violation) =>
-      ["critical", "serious"].includes(violation.impact ?? ""),
-    ),
-  ).toEqual([]);
-});
-
-test("managed Nginx editor requires diff, two intents, and exact-plan PAM before reload", async ({
-  page,
-}) => {
-  const planBodies: unknown[] = [];
-  const approvalBodies: unknown[] = [];
-  await page.setViewportSize({ width: 390, height: 844 });
-  await mockApi(page, true, health, {
-    onConfigPlan: (body) => planBodies.push(body),
-    onConfigApproval: (body) => approvalBodies.push(body),
-  });
-  await page.goto("/services/nginx");
-  await page.getByRole("button", { name: "변경 계획 열기" }).first().click();
-  await page.getByRole("button", { name: "설정 파일 편집" }).click();
-
-  const editor = page.getByLabel("Nginx 설정 내용");
-  await expect(editor).toHaveValue(managedConfigResource.content);
-  await expect(page.getByText("저장 버튼으로 즉시 반영하지 않습니다")).toBeVisible();
-  await editor.fill("server {\n  listen 80;\n  client_max_body_size 20m;\n}\n");
-  await page.getByRole("button", { name: "변경 계획 만들기" }).dblclick();
-
-  await expect(page.getByRole("heading", { name: "설정 변경 계획" })).toBeVisible();
-  await expect(page.getByText("+  client_max_body_size 20m;")).toBeVisible();
-  await expect(page.getByText(/include된 다른 파일과 active connection/)).toBeVisible();
-  const approval = page.getByRole("button", { name: "재인증 후 설정 적용" });
-  await page.getByLabel("Linux 계정 비밀번호로 exact plan 승인").fill("fixture-password");
-  await expect(approval).toBeDisabled();
-  await page.getByLabel(/nginx -t를 통과해야만 reload/).check();
-  await expect(approval).toBeDisabled();
-  await page.getByLabel(/nginx.service reload를 수행/).check();
-  await approval.dblclick();
-
-  await expect(page.getByRole("heading", { name: "적용 완료" })).toBeVisible();
-  await expect(page.getByText(/설정 bytes·metadata, 문법, reload, active/)).toBeVisible();
-  expect(planBodies).toHaveLength(1);
-  expect(approvalBodies).toHaveLength(1);
-  const approvalBody = approvalBodies[0] as Record<string, unknown>;
-  expect(approvalBody.planHash).toBe(configPlanHash);
-  expect(approvalBody.approvalIntent).toEqual({
-    validationConfirmed: true,
-    serviceActionConfirmed: true,
-  });
-  expect(JSON.stringify(approvalBodies)).not.toContain("fixture-password");
-  expect(JSON.stringify(approvalBodies)).not.toContain("client_max_body_size");
   const hasOverflow = await page.evaluate(
     () => document.documentElement.scrollWidth > document.documentElement.clientWidth,
   );
