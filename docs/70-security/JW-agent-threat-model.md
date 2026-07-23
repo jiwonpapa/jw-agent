@@ -3,7 +3,7 @@
 Status: Accepted  
 Authority: Security  
 Owner: Security Maintainer  
-Last reviewed: 2026-07-22
+Last reviewed: 2026-07-23
 
 ## Executive summary
 
@@ -14,7 +14,7 @@ Last reviewed: 2026-07-22
 In scope:
 
 - P1 governance와 `p1-local`·`p1-browser` xtask lane
-- opt-in Nginx public 443 UDS template와 loopback SSH recovery listener
+- 비권한 Rustls 9443 public edge, opt-in Nginx 443 호환 UDS template와 loopback SSH recovery listener
 - 구현된 agentd, one-shot authd, ffi-pam, typed-operation opsd
 - Linux PAM local account, Linux group role, server-side session
 - SQLite session/settings, Nginx observation, public ingress packaging basis
@@ -33,8 +33,8 @@ Out of scope:
 
 Key assumptions:
 
-- public mode is explicit opt-in and only Nginx 443 is Internet reachable.
-- Nginx uses a dedicated UDS to agentd; agentd direct public TCP is disabled.
+- public mode is explicit opt-in and `jw-edge` 9443 또는 선택적 Nginx 443만 Internet reachable.
+- 두 public edge는 dedicated UDS를 사용하며 agentd direct public TCP는 disabled.
 - authd and opsd are separate root networkless UDS boundaries.
 - MVP verifies Ubuntu 24.04 local pam_unix only.
 - root web login is denied; explicit Linux groups grant product roles.
@@ -53,7 +53,8 @@ Key assumptions:
 ### Primary components
 
 - Browser: public/recovery login, responsive task UI, session cookie
-- Nginx+Certbot: public TLS, request limits, proxy metadata
+- jw-edge: non-root Rustls public TLS, connection/header limits, proxy metadata
+- Nginx+Certbot: optional 443 TLS compatibility ingress와 certificate lifecycle
 - agentd: non-root REST/SSE, session, observation, UI projection
 - authd+ffi-pam: root one-shot PAM/account/role verification
 - opsd: root typed safety executor; private network namespace 안에서 Nginx config test에 필요한 address family와 `CAP_NET_BIND_SERVICE`만 갖고 외부 interface·listener는 없음
@@ -64,8 +65,8 @@ Key assumptions:
 
 ### Data flows and trust boundaries
 
-- Internet Browser → Nginx: username/password, session cookie, API input over HTTPS; TLS, Host and rate/body/time limits required.
-- Nginx → agentd: rewritten proxy metadata and REST/SSE over dedicated UDS; only this channel may supply trusted remote address.
+- Internet Browser → public edge: username/password, session cookie, API input over HTTPS; TLS, Host and rate/body/time limits required.
+- jw-edge/Nginx → agentd: rewritten proxy metadata and REST/SSE over dedicated UDS; only this channel may supply trusted remote address.
 - SSH Recovery Browser → agentd: 127.0.0.1-only HTTP over encrypted SSH tunnel; proxy headers ignored, separate short recovery session namespace.
 - agentd → authd: password-bearing one-request bounded frame over UDS; peer UID, timeout, zeroize and generic response required.
 - authd → PAM/NSS: password, service name, remote address; authenticate, account check, canonical user and group role.
@@ -79,8 +80,10 @@ Key assumptions:
 
 ```mermaid
 flowchart LR
-    I["Internet browser"] --> N["Nginx TLS"]
+    I["Internet browser"] --> E["jw-edge Rustls"]
+    I --> N["optional Nginx TLS"]
     S["SSH recovery"] --> A["agentd non root"]
+    E --> A
     N --> A
     A --> D["Agent session state"]
     A --> H["authd root one shot"]
@@ -135,7 +138,8 @@ flowchart LR
 
 | Surface | How reached | Trust boundary | Notes | Evidence |
 |---|---|---|---|---|
-| Public Nginx 443 | Internet | browser → edge | TLS, rate, Host, proxy rewrite | `docs/20-architecture/public-ingress.md` |
+| Public jw-edge 9443 | Internet | browser → edge | Rustls, connection/header bound, Host/Origin/client rewrite | `docs/90-specs/adr/0018-independent-rust-management-edge.md` |
+| Optional Nginx 443 | Internet | browser → edge | TLS, rate/body bound, Host, proxy rewrite | `docs/20-architecture/public-ingress.md` |
 | Login/reauth REST | Nginx UDS or loopback | browser → agentd | password, enumeration, CSRF, session | `docs/40-contracts/local-interfaces.md` |
 | authd socket | agentd service UID | agentd → root authd | PAM FFI and credential oracle | `docs/70-security/pam-authentication.md` |
 | opsd socket | agentd service UID | agentd → root opsd | privileged typed operation | `docs/20-architecture/system-context.md` |
@@ -163,6 +167,7 @@ flowchart LR
 10. 악성 package나 signing key로 authd/opsd root code를 정상 update처럼 배포합니다.
 11. 탈취된 session이나 잘못된 재인증으로 비-root terminal·SFTP를 열고 sudo 또는 writable service file을 악용합니다.
 12. Certbot production issuance가 성공한 뒤 attach가 실패하거나 반복 retry되어 CA rate budget과 public TLS 상태가 꼬입니다.
+13. Nginx가 유일한 브라우저 ingress인 상태에서 중지되어 관리 UI가 함께 사라지거나, 공격자가 stale readiness로 self-lockout guard를 우회합니다.
 
 ## Threat model table
 
@@ -173,7 +178,8 @@ flowchart LR
 | TM-003 | PAM/FFI attacker | crafted conversation or unsafe binding flaw | root authd memory/logic compromise | root code execution or credential theft | password, authd, host | isolated `ffi-pam`, bounded single-secret conversation, one-shot authd, no network, zeroizing buffers | independent unsafe review and real PAM adversarial evidence 없음 | audit pointer ownership, run sanitizer/fuzz fixture where supported, VM multi-prompt/timeout/crash cases | authd crash, unsupported conversation and timeout events | medium | high | critical |
 | TM-004 | web attacker/session thief | XSS, CSRF, stolen browser or recovery session | impersonate role or alter access policy | sensitive reads and weakened future policy | session, settings | digest-only opaque sessions, rotation, exact Host/Origin, CSRF, ingress split, CSP/no-store and single-use reauth; real HTTPS browser expiry recovery 검증 | public-disable session revoke와 shared-device cache의 운영 브라우저 증거 없음 | preserve real-edge Playwright regression, verify revoke-on-public-disable before P2 activation | session lifecycle, ingress mismatch, rejected Origin | medium | high | high |
 | TM-005 | distributed login attacker | public PAM endpoint | exhaust product login budget or one-shot auth workers | product login DoS | PAM account, authd availability | edge+app rate limits, 8s broker timeout, no `pam_faillock`, socket activation isolation; repeated-failure VM proof confirms Linux password state and SSH key recovery remain usable | distributed-source and sustained activation pressure not load-tested | preserve no-persistent-lockout policy, add bounded activation/load evidence before public release | activation count, PAM timeout, source diversity | high | medium | high |
-| TM-006 | remote/local requester | proxy/Host trust confusion | spoof source, Host or Origin | rate/origin/audit bypass | proxy metadata, session | dedicated public UDS, header clearing/template rewrite, exact boundary tests and Nginx effective-config/public-port VM proof | alternate proxy/CDN topology unsupported and unverified | keep unsupported topology fail-closed; require a new trust contract before CDN support | rejected Host/source/channel mismatch | medium | high | high |
+| TM-006 | remote/local requester | proxy/Host trust confusion | spoof source, Host or Origin | rate/origin/audit bypass | proxy metadata, session | dedicated public UDS, edge header clearing/rewrite, exact Host·Origin and peer-address policy; 9443 VM runtime proof | alternate proxy/CDN topology unsupported | reject ambiguous transfer framing; require a new trust contract before CDN support | rejected Host/source/channel mismatch | medium | high | high |
+| TM-015 | operator or local fault | Nginx is stopped while it is the only public ingress | remove browser management path or bypass stale readiness | management self-lockout | public ingress, service recovery | independent non-root 9443 edge, live Unix readiness response, plan and apply recheck, SSH recovery; Nginx-down UI/API VM proof | cloud firewall and long-duration edge fault evidence are not included | retain two-phase guard and test edge disappearance races on every lifecycle expansion | edge inactive/readiness missing, blocked stop, ingress continuity | low | high | high |
 | TM-007 | local attacker | access to service UID or runtime socket | invoke authd or flood opsd directly | credential oracle or root parser pressure | password boundary, helper availability | socket modes, SO_PEERCRED, bounded opsd connections and wrong-UID Ubuntu VM rejection | socket replacement and restart-race depth remains limited | retain wrong-UID gate; add race/fault matrix only when mutable P2 opsd exists | peer UID denial and request rejection counts | medium | high | high |
 | TM-008 | P2 authenticated attacker | typed write primitive has path/race flaw | exploit symlink/path/TOCTOU or expose internal temp as a site | arbitrary root path change or unsafe activation | config, host | no user path/argv, no-follow/root ownership, stable IDs, protected marker, active exact symlink, temp namespace exclusion/startup cleanup, VM drift/inactive proof | microsecond concurrent-drift race depth remains limited | retain protected/outside-link/temp regression; add concurrent stress | path-policy denial and unexpected inode/digest | low | high | high |
 | TM-009 | P2 fault actor | durable operation is killed or disk fills | cause repeated apply or failed recovery | service outage or config loss | ledger, snapshot, config | SQLite WAL/FULL, chained events/checkpoint, whole-request opsd serialization, snapshot fsync, read-back, rollback, disk-full cancellation and checkpoint-deletion VM lockdown | every-durable-stage SIGKILL matrix remains incomplete | add restart-at-each-stage matrix before broader adapter rollout | recovery-required, disk and continuity alert | medium | high | critical |

@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+pub(crate) mod independent_edge;
 pub(crate) mod php_fpm;
 pub(crate) mod public_recovery;
 mod receipt;
@@ -365,6 +366,8 @@ test -x /usr/bin/stty
 ldd /usr/lib/jw-agent/jw-authd | grep -q 'libpam\.so\.0'
 ldd /usr/lib/jw-agent/jw-agentd | grep -q 'libsqlite3\.so\.0'
 test -x /usr/lib/jw-agent/jw-certd
+test -x /usr/lib/jw-agent/jw-edge
+test -f /usr/lib/systemd/system/jw-edge.service
 grep -Fq 'client_max_body_size 64k;' "$tmpdir/usr/share/jw-agent/nginx/jw-agent-management.conf.template"
 grep -Fq 'location = /api/v1/files/upload {{' "$tmpdir/usr/share/jw-agent/nginx/jw-agent-management.conf.template"
 grep -Fq 'client_max_body_size 8m;' "$tmpdir/usr/share/jw-agent/nginx/jw-agent-management.conf.template"
@@ -394,6 +397,10 @@ systemctl cat jw-certd@.service | grep -Fq 'RestrictAddressFamilies=AF_UNIX AF_I
 ! systemctl cat jw-certd@.service | grep -Fq 'IPAddressDeny=any'
 systemctl cat jw-authd@.service | grep -Fq 'CollectMode=inactive-or-failed'
 systemctl cat jw-certd@.service | grep -Fq 'CollectMode=inactive-or-failed'
+systemctl cat jw-edge.service | grep -Fq 'User=jw-agent'
+systemctl cat jw-edge.service | grep -Fq 'NoNewPrivileges=yes'
+systemctl cat jw-edge.service | grep -Fq 'ProtectSystem=strict'
+systemctl cat jw-edge.service | grep -Fq 'CapabilityBoundingSet='
 sudo test -S /run/jw-agent/authd.sock
 sudo test -S /run/jw-agent-certd/certd.sock
 sudo test -S /run/jw-agent/opsd.sock
@@ -3295,13 +3302,38 @@ fn public_api_request(
     body: Option<&[u8]>,
     timeout: Duration,
 ) -> Result<HttpResponse, String> {
-    public_api_request_with_origin(
+    api_request_with_origin_on_port(
         config,
         PublicApiTarget {
             method,
             path,
             origin: &format!("https://{}", config.public_host),
         },
+        443,
+        cookie_jar,
+        csrf_token,
+        body,
+        timeout,
+    )
+}
+
+fn independent_edge_api_request(
+    config: &VmConfig,
+    method: &str,
+    path: &str,
+    cookie_jar: &Path,
+    csrf_token: Option<&str>,
+    body: Option<&[u8]>,
+    timeout: Duration,
+) -> Result<HttpResponse, String> {
+    api_request_with_origin_on_port(
+        config,
+        PublicApiTarget {
+            method,
+            path,
+            origin: &format!("https://{}:9443", config.public_host),
+        },
+        9_443,
         cookie_jar,
         csrf_token,
         body,
@@ -3332,8 +3364,23 @@ fn public_api_request_with_origin(
     body: Option<&[u8]>,
     timeout: Duration,
 ) -> Result<HttpResponse, String> {
+    api_request_with_origin_on_port(config, target, 443, cookie_jar, csrf_token, body, timeout)
+}
+
+fn api_request_with_origin_on_port(
+    config: &VmConfig,
+    target: PublicApiTarget<'_>,
+    port: u16,
+    cookie_jar: &Path,
+    csrf_token: Option<&str>,
+    body: Option<&[u8]>,
+    timeout: Duration,
+) -> Result<HttpResponse, String> {
     if !target.path.starts_with("/api/") || !matches!(target.method, "GET" | "POST") {
         return Err(String::from("P2 API request rejected an unsupported shape"));
+    }
+    if !matches!(port, 443 | 9_443) {
+        return Err(String::from("P2 API request rejected an unsupported port"));
     }
     if !target.origin.starts_with("https://") || target.origin.len() > 512 {
         return Err(String::from("P2 API request rejected an invalid Origin"));
@@ -3352,8 +3399,8 @@ fn public_api_request_with_origin(
         OsString::from(timeout.as_secs().min(295).to_string()),
         OsString::from("--resolve"),
         OsString::from(format!(
-            "{}:443:{}",
-            config.public_host, config.public_address
+            "{}:{port}:{}",
+            config.public_host, config.public_address,
         )),
         OsString::from("--cacert"),
         config.ca_certificate.as_os_str().to_owned(),
@@ -3378,9 +3425,14 @@ fn public_api_request_with_origin(
         arguments.push(OsString::from("--data-binary"));
         arguments.push(OsString::from("@-"));
     }
+    let authority = if port == 443 {
+        config.public_host.clone()
+    } else {
+        format!("{}:{port}", config.public_host)
+    };
     arguments.push(OsString::from(format!(
-        "https://{}{}",
-        config.public_host, target.path
+        "https://{authority}{}",
+        target.path
     )));
     let result = run_capture(OsStr::new("curl"), &arguments, body, timeout)?;
     if !result.status.success() || result.stdout_truncated || result.stderr_truncated {
@@ -3743,22 +3795,41 @@ impl VmConfig {
     }
 
     fn public_curl_arguments(&self, suffix: &[&str]) -> Vec<OsString> {
+        self.tls_curl_arguments(443, suffix)
+    }
+
+    fn independent_edge_curl(
+        &self,
+        suffix: &[&str],
+        input: Option<&[u8]>,
+        timeout: Duration,
+    ) -> Result<Captured, String> {
+        let arguments = self.tls_curl_arguments(9_443, suffix);
+        run_capture(OsStr::new("curl"), &arguments, input, timeout)
+    }
+
+    fn tls_curl_arguments(&self, port: u16, suffix: &[&str]) -> Vec<OsString> {
         let mut arguments = vec![
             OsString::from("--silent"),
             OsString::from("--show-error"),
             OsString::from("--max-time"),
             OsString::from("12"),
             OsString::from("--resolve"),
-            OsString::from(format!("{}:443:{}", self.public_host, self.public_address)),
+            OsString::from(format!(
+                "{}:{port}:{}",
+                self.public_host, self.public_address
+            )),
             OsString::from("--cacert"),
             self.ca_certificate.as_os_str().to_owned(),
         ];
         for argument in suffix {
             if is_http_endpoint(argument) {
-                arguments.push(OsString::from(format!(
-                    "https://{}{}",
-                    self.public_host, argument
-                )));
+                let authority = if port == 443 {
+                    self.public_host.clone()
+                } else {
+                    format!("{}:{port}", self.public_host)
+                };
+                arguments.push(OsString::from(format!("https://{authority}{argument}",)));
             } else {
                 arguments.push(OsString::from(argument));
             }
@@ -3950,6 +4021,7 @@ fn is_http_endpoint(value: &str) -> bool {
         || value == "/integrations"
         || value == "/favicon.svg"
         || value == "/login"
+        || value == "/services"
 }
 
 fn json_string(value: &str) -> String {

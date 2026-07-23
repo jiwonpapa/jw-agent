@@ -10,8 +10,9 @@ use super::{
     canonical_digest, command_digest, random_id,
 };
 use crate::service_control::{
-    SERVICE_CONTROL_IMPACT, SERVICE_CONTROL_RECOVERY_PATH, expected_active, registered_service,
-    service_action_digest, service_action_from_digest, service_control_assurance,
+    RegisteredService, SERVICE_CONTROL_IMPACT, SERVICE_CONTROL_RECOVERY_PATH, expected_active,
+    management_edge_ready, registered_service, service_action_digest, service_action_from_digest,
+    service_control_assurance,
 };
 use crate::snapshot::{
     ServiceStateSnapshot, read_service_state_snapshot, write_service_state_snapshot,
@@ -52,6 +53,12 @@ impl OpsService {
                 return Err(OpsError::Rejected("service_inactive"));
             }
             _ => {}
+        }
+        if service == RegisteredService::Nginx
+            && request.action == ManagedServiceAction::Stop
+            && !management_edge_ready(self.runner.as_ref())?
+        {
+            return Err(OpsError::Rejected("management_ingress_dependency"));
         }
         let ttl_ms = i64::try_from(self.policy.plan_ttl.as_millis())
             .map_err(|_| OpsError::Storage(String::from("plan ttl overflow")))?;
@@ -133,6 +140,25 @@ impl OpsService {
     ) -> Result<OperationReceiptView, OpsError> {
         let service = registered_service(&operation.plan.site_id)?;
         let action = service_action_from_digest(&operation.plan.available_digest)?;
+        if service == RegisteredService::Nginx
+            && action == ManagedServiceAction::Stop
+            && !management_edge_ready(self.runner.as_ref())?
+        {
+            let evidence_digest = jw_contracts::sha256_digest(b"management_ingress_dependency");
+            let cancelled = ledger.transition(
+                &operation.operation_id,
+                Transition {
+                    expected: &[OperationStage::Approved],
+                    next: OperationStage::CancelledBeforeApply,
+                    result_code: "management_ingress_dependency",
+                    evidence_digest: &evidence_digest,
+                    after_digest: None,
+                    rollback_result: None,
+                    now_ms,
+                },
+            )?;
+            return ledger.receipt(&cancelled.operation_id);
+        }
         let before_active = self.runner.run(service.active_command())?.success;
         let before_digest = service_state_digest(service.unit_name(), before_active);
         if before_digest != operation.plan.enabled_state_digest

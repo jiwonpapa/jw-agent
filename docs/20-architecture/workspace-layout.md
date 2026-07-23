@@ -14,6 +14,7 @@ crates/
   jw-agentd/      # non-root API, session, observation, UI host
   jw-authd/       # root one-shot PAM broker, no network or DB
   jw-certd/       # root one-shot fixed Certbot runner
+  jw-edge/        # non-root Rustls public management edge
   ffi-pam/        # only workspace crate allowed to contain PAM unsafe FFI
   jw-opsd/        # root networkless safety executor
 xtask/            # sole verification and evidence tool
@@ -23,12 +24,13 @@ tests/vm/         # disposable Ubuntu scenarios and fixtures
 docs/
 ```
 
-현재 workspace member는 `jw-contracts`, `jw-agentd`, `jw-authd`, `jw-certd`, `ffi-pam`, `jw-opsd`, `xtask`입니다. Web은 `apps/web`의 독립 Bun package이며 Rust build graph에 포함하지 않습니다.
+현재 workspace member는 `jw-contracts`, `jw-agentd`, `jw-authd`, `jw-certd`, `jw-edge`, `ffi-pam`,
+`jw-opsd`, `xtask`입니다. Web은 `apps/web`의 독립 Bun package이며 Rust build graph에 포함하지 않습니다.
 
 ## 의존 방향
 
 ```text
-web --HTTPS--> Nginx --UDS REST/SSE--> agentd --> jw-contracts
+web --HTTPS--> jw-edge or Nginx --UDS REST/SSE--> agentd --> jw-contracts
                                            │
                                            ├--one-request UDS--> authd --> jw-contracts
                                            │                         └--> ffi-pam
@@ -47,6 +49,7 @@ managed config --REST----------> agentd --typed UDS-----> opsd (root, allowliste
 - `jw-contracts`는 serde/schema 외 DB·Tokio·Axum·OS 명령을 모릅니다.
 - `jw-authd`는 HTTP·TLS·DB·operation dependency가 없고 PAM 인증 후 종료합니다.
 - `jw-certd`는 HTTP·DB·Nginx mutation을 모르며 fixed Certbot 요청 하나 후 종료합니다.
+- `jw-edge`는 PAM·DB·operation을 모르며 TLS와 bounded HTTP/1.1 stream만 agentd UDS로 전달합니다.
 - `ffi-pam`만 unsafe와 libpam link를 허용합니다.
 - `jw-opsd`는 `jw-agentd`, HTTP, TLS, WebSocket을 의존하지 않습니다.
 - `agentd`는 `authd`·`opsd` 내부 상태를 직접 읽지 않습니다.
@@ -63,4 +66,7 @@ managed config --REST----------> agentd --typed UDS-----> opsd (root, allowliste
 3. 격리해야 하는 FFI/unsafe
 4. 측정된 빌드 병목과 안정된 독립 API
 
-서비스 adapter, DB layer, ledger는 먼저 소유 daemon 내부 module로 둡니다. `authd`와 `ffi-pam`은 root credential 경계와 unsafe FFI라는 제1·3 기준으로, `certd`는 외부 네트워크가 금지된 `opsd`와 분리해야 하는 one-shot network privilege 경계라는 제1 기준으로 허용된 예외입니다.
+서비스 adapter, DB layer, ledger는 먼저 소유 daemon 내부 module로 둡니다. `authd`와 `ffi-pam`은 root
+credential 경계와 unsafe FFI라는 제1·3 기준으로, `certd`는 one-shot network privilege 경계라는 제1
+기준으로 허용된 예외입니다. `jw-edge`는 agentd와 분리된 public TLS·socket 권한 및 독립 장애 경계라는
+제1 기준을 충족합니다.

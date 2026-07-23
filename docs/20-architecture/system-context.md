@@ -3,10 +3,11 @@
 Status: Accepted  
 Authority: Architecture  
 Owner: Architecture Maintainer  
-Last reviewed: 2026-07-21
+Last reviewed: 2026-07-23
 
 ```text
-Public Browser ─HTTPS─> Nginx+Certbot :443 ─UDS─> agentd (non-root)
+Public Browser ─HTTPS─> jw-edge :9443 ─────UDS─> agentd (non-root)
+                    └─> optional Nginx :443 ─UDS─┘
 Recovery Browser ─SSH tunnel─> loopback ────────> agentd
                                                     │
                          password, one request UDS ├──> authd (root, one-shot)
@@ -18,8 +19,8 @@ Recovery Browser ─SSH tunnel─> loopback ────────> agentd
 
 ## 신뢰 경계
 
-1. Internet Browser ↔ Nginx: TLS, Host, request/body/rate limit, forwarded header 재작성
-2. Nginx ↔ agentd: 전용 UDS, trusted proxy metadata, REST/SSE schema
+1. Internet Browser ↔ jw-edge 또는 Nginx: TLS, Host, request/body/rate limit, forwarded header 재작성
+2. public edge ↔ agentd: 전용 UDS, trusted proxy metadata, REST/SSE schema
 3. Recovery Browser ↔ agentd: loopback·SSH, forwarded header 불신
 4. agentd ↔ authd: password-bearing one-request UDS, peer UID, size, timeout, zeroize
 5. authd ↔ PAM/NSS: dedicated PAM service, account·group policy, raw error 비노출
@@ -28,6 +29,7 @@ Recovery Browser ─SSH tunnel─> loopback ────────> agentd
 8. 저장 상태 ↔ runtime: digest, transaction, ledger chain, crash recovery
 9. package ↔ host: signature, checksum, SBOM, maintainer scripts
 10. agentd ↔ OpenSSH: short-lived server ticket, strict host key, Linux user authorization, bounded terminal/SFTP session
+11. jw-edge ↔ TLS key/runtime: root provisioned read-only key, 비권한 listener, readiness와 systemd sandbox
 
 ## 중앙 seam
 
@@ -39,6 +41,7 @@ Recovery Browser ─SSH tunnel─> loopback ────────> agentd
 - Browser가 root credential을 획득하지 않음
 - root 계정은 웹에 로그인할 수 없음
 - Nginx 관리 vhost는 일반 Nginx operation 대상이 아님
+- 독립 edge가 준비되지 않으면 Nginx stop을 노출하거나 실행하지 않음
 - agentd compromise가 arbitrary root primitive로 확대되지 않음
 - unsupported service는 write로 승격되지 않음
 - evidence 손상이 신규 write를 허용하지 않음

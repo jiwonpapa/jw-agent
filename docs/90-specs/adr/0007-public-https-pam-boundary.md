@@ -5,6 +5,8 @@ Authority: Architecture Decision
 Owner: Security Maintainer  
 Last reviewed: 2026-07-21
 
+Public ingress 부분은 [ADR-0018](0018-independent-rust-management-edge.md)이 대체합니다. PAM·authd·opsd 권한 경계는 계속 유효합니다.
+
 ## Context
 
 단일 서버 UI는 공개 접속, Linux PAM ID·비밀번호, mobile·tablet web을 지원해야 합니다. 이는 ADR-0001의 loopback-only 접근과 ADR-0005의 3-crate 구성을 대체합니다.

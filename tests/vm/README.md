@@ -1,6 +1,6 @@
 # Ubuntu 24.04 VM evidence matrix
 
-Status: P2B VM_PASS; P2C lifecycle VM_PASS except public CA success; P2D terminal and SFTP G0/G1 VM_PASS  
+Status: P2B VM_PASS; independent edge VM_PASS; P2C lifecycle VM_PASS except public CA success; P2D terminal and SFTP G0/G1 VM_PASS  
 Authority: Delivery  
 Owner: Verification Maintainer  
 Last reviewed: 2026-07-23
@@ -25,9 +25,9 @@ JW_VM_PUBLIC_ADDRESS=192.168.0.142
 JW_VM_CA_CERT=/path/to/test-ca.crt
 JW_VM_ADMIN_USER=jwvmadmin
 JW_VM_PASSWORD_FILE=/path/to/mode-0600-fixture-password
-JW_VM_REMOTE_PACKAGE=/home/neojins/jw-agent_0.2.0~p2.18_amd64.deb
-JW_VM_EXPECTED_PACKAGE_SHA256=80d7339e379bef72414c2294dcd8399f64818775abbff267577e7d6d50f3e7ba
-JW_VM_EXPECTED_VERSION=0.2.0~p2.18
+JW_VM_REMOTE_PACKAGE=/home/neojins/jw-agent_0.2.0~p2.19_amd64.deb
+JW_VM_EXPECTED_PACKAGE_SHA256=abff57f506c5fb1f1e0041a8319c195ef87d9097171fc14a693d5ca92b85e2c7
+JW_VM_EXPECTED_VERSION=0.2.0~p2.19
 cargo xtask verify p2-vm
 ```
 
@@ -41,8 +41,9 @@ certificate를 VM management edge에 설치합니다.
 ## Current VM evidence
 
 - domain: `jw-agent-p1`, Ubuntu 24.04.4 LTS, kernel `6.8.0-136-generic`
-- package: `jw-agent 0.2.0~p2.18`, SHA-256 `80d7339e379bef72414c2294dcd8399f64818775abbff267577e7d6d50f3e7ba`, package/runtime gate clean
-- lanes: `p2-local` 22 PASS, `p2-browser` 8 PASS with 42 browser scenarios, `p2-vm` 26 PASS
+- package: `jw-agent 0.2.0~p2.19`, SHA-256 `abff57f506c5fb1f1e0041a8319c195ef87d9097171fc14a693d5ca92b85e2c7`, package/runtime gate clean
+- lanes: `p2-local` 23 PASS, `p2-browser` 8 PASS with 42 browser scenarios, `p2-vm` 27 PASS
+- independent edge: non-root Rustls 9443, fixed live Unix readiness, edge-missing Nginx stop denial, Nginx inactive 상태의 authenticated UI·API continuity
 - service inventory: real Nginx and JW Agent internal classification plus a disposable failed custom unit surfaced as discovered read-only
 - automated VM scenarios: installed PAM fixture equality, no `pam_faillock`, `jw-authd → libpam.so.0`, `jw-agentd → libsqlite3.so.0`, repeated product-login failures followed by unchanged Linux password state and working OpenSSH key recovery
 - automated P2 faults: success, verified no-op, syntax failure rollback, injected reload failure rollback, 1 MiB snapshot filesystem cancellation before apply, deleted checkpoint lockdown and restoration
@@ -78,7 +79,7 @@ signed release distribution, delete/move/chmod SFTP operations, or production op
 | peer boundary | only `jw-agent` UID can reach authd/opsd; malformed, oversized and timeout frames rejected |
 | systemd hardening | expected identities, restart behavior, filesystem writes, no authd/opsd network sockets |
 | recovery ingress | loopback-only listener, SSH tunnel access, non-loopback bind refusal, exact Host/Origin |
-| public edge | exact FQDN/TLS, UDS proxy, spoofed forwarding headers cleared, internal ports absent |
+| public edge | exact FQDN/TLS, UDS proxy, spoofed forwarding headers cleared, internal ports absent, Nginx-down 9443 continuity |
 | OpenSSH terminal | loopback-only password policy, fixed client, replay/origin/revoke, bounded PTY and metadata audit |
 | OpenSSH SFTP G0 | fixed read-only subsystem, canonical home, traversal/symlink/size/session negatives and path-digest audit |
 | OpenSSH SFTP G1 | PAM plan, atomic create/replace, mode/size/digest read-back, stale/symlink/type/origin/digest/replay denial and metadata audit |

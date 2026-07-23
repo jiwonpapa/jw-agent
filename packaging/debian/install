@@ -1,6 +1,7 @@
 target/release/jw-agentd usr/lib/jw-agent/
 target/release/jw-authd usr/lib/jw-agent/
 target/release/jw-certd usr/lib/jw-agent/
+target/release/jw-edge usr/lib/jw-agent/
 target/release/jw-opsd usr/lib/jw-agent/
 apps/web/dist/* usr/share/jw-agent/web/
 packaging/default/jw-agent etc/default/
@@ -13,6 +14,7 @@ packaging/systemd/jw-authd.socket usr/lib/systemd/system/
 packaging/systemd/jw-authd@.service usr/lib/systemd/system/
 packaging/systemd/jw-certd.socket usr/lib/systemd/system/
 packaging/systemd/jw-certd@.service usr/lib/systemd/system/
+packaging/systemd/jw-edge.service usr/lib/systemd/system/
 packaging/systemd/jw-opsd.service usr/lib/systemd/system/
 packaging/sysusers/jw-agent.conf usr/lib/sysusers.d/
 packaging/tmpfiles/jw-agent.conf usr/lib/tmpfiles.d/

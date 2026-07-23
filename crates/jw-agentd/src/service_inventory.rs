@@ -36,12 +36,14 @@ const SYSTEMCTL_ARGUMENTS: &[&str] = &[
 #[derive(Clone, Debug)]
 pub struct ServiceObservationProfile {
     pub systemctl: PathBuf,
+    pub edge_ready_path: PathBuf,
 }
 
 impl Default for ServiceObservationProfile {
     fn default() -> Self {
         Self {
             systemctl: PathBuf::from("/usr/bin/systemctl"),
+            edge_ready_path: PathBuf::from("/run/jw-agent-edge/ready"),
         }
     }
 }
@@ -114,10 +116,16 @@ pub fn observe_services(profile: &ServiceObservationProfile, observed_at: String
         }
     };
     let parsed = parse_systemctl_show(&text);
+    let independent_edge_ready = profile.edge_ready_path.is_file()
+        && parsed.units.iter().any(|unit| {
+            unit.unit_name == "jw-edge.service"
+                && unit.active_state == "active"
+                && unit.sub_state == "running"
+        });
     let mut services = parsed
         .units
         .into_iter()
-        .map(|unit| classify_unit(&catalog, unit))
+        .map(|unit| classify_unit(&catalog, unit, independent_edge_ready))
         .collect::<Vec<ServiceSummary>>();
     services.sort_by(service_order);
     let truncated = services.len() > MAX_SERVICES;
@@ -323,7 +331,11 @@ fn valid_fragment_path(value: &str) -> bool {
             .all(|byte| !byte.is_ascii_control() && !byte.is_ascii_whitespace())
 }
 
-fn classify_unit(catalog: &ServiceCatalog, unit: SystemdUnit) -> ServiceSummary {
+fn classify_unit(
+    catalog: &ServiceCatalog,
+    unit: SystemdUnit,
+    independent_edge_ready: bool,
+) -> ServiceSummary {
     let template = catalog.templates.iter().find(|template| {
         template
             .unit_patterns
@@ -382,11 +394,11 @@ fn classify_unit(catalog: &ServiceCatalog, unit: SystemdUnit) -> ServiceSummary 
     );
     let allowed_actions = if controlled {
         if active {
-            vec![
-                ManagedServiceAction::Restart,
-                ManagedServiceAction::Reload,
-                ManagedServiceAction::Stop,
-            ]
+            let mut actions = vec![ManagedServiceAction::Restart, ManagedServiceAction::Reload];
+            if unit.unit_name != "nginx.service" || independent_edge_ready {
+                actions.push(ManagedServiceAction::Stop);
+            }
+            actions
         } else {
             vec![ManagedServiceAction::Start]
         }
@@ -659,7 +671,7 @@ FragmentPath=
         let services = parsed
             .units
             .into_iter()
-            .map(|unit| classify_unit(&catalog, unit))
+            .map(|unit| classify_unit(&catalog, unit, true))
             .collect::<Vec<_>>();
         let nginx = services
             .iter()
@@ -696,5 +708,29 @@ FragmentPath=
         );
         assert!(parsed.units.is_empty());
         assert!(parsed.rejected_records >= 1);
+    }
+
+    #[test]
+    fn nginx_stop_is_hidden_until_independent_edge_is_ready() -> Result<(), String> {
+        let catalog = load_catalog()?;
+        let parsed = parse_systemctl_show(FIXTURE);
+        let nginx_unit = parsed
+            .units
+            .into_iter()
+            .find(|unit| unit.unit_name == "nginx.service")
+            .ok_or_else(|| String::from("nginx fixture missing"))?;
+        let without_edge = classify_unit(&catalog, nginx_unit.clone(), false);
+        assert!(
+            !without_edge
+                .allowed_actions
+                .contains(&jw_contracts::ManagedServiceAction::Stop)
+        );
+        let with_edge = classify_unit(&catalog, nginx_unit, true);
+        assert!(
+            with_edge
+                .allowed_actions
+                .contains(&jw_contracts::ManagedServiceAction::Stop)
+        );
+        Ok(())
     }
 }

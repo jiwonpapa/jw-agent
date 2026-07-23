@@ -221,6 +221,9 @@ function isTerminal(stage: OperationStage): boolean {
 
 function controlErrorCopy(error: unknown): string {
   if (!(error instanceof ApiError)) return "서비스 작업을 완료하지 못했습니다.";
+  if (error.message.includes("management_ingress_dependency")) {
+    return "독립 관리 접속 경로가 준비되지 않아 Nginx 중지를 차단했습니다. JW Edge 상태를 먼저 확인하세요.";
+  }
   if (error.status === 409) return "서비스 상태가 바뀌었거나 다른 작업이 진행 중입니다. 새로 관찰한 뒤 다시 시도하세요.";
   if (error.status === 423) return "감사 원장 무결성 잠금으로 변경이 차단되었습니다.";
   return error.message;

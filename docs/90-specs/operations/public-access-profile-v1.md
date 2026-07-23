@@ -7,9 +7,9 @@ Last reviewed: 2026-07-21
 
 ## Purpose
 
-SSH tunnel recovery에서 검토한 plan으로 공개 HTTPS profile을 활성화·비활성화합니다. 이는 일반 service operation이 아니라 제품 access 설정 operation입니다.
+SSH tunnel recovery에서 검토한 plan으로 독립 `jw-edge` HTTPS profile과 선택적 Nginx 호환 profile을 활성화·비활성화합니다. 이는 일반 service operation이 아니라 제품 access 설정 operation입니다.
 
-이 문서는 P2 계약을 고정합니다. P2 구현 진입은 승인되었지만 P1 runtime은 기존 valid certificate와 administrator-owned opt-in Nginx template만 지원합니다. 아래 typed operation·UFW mutation·자동 rollback은 safety kernel과 첫 Nginx operation의 VM gate 뒤에만 활성화합니다.
+독립 관리 ingress는 [ADR-0018](../adr/0018-independent-rust-management-edge.md)을 따릅니다. Nginx template은 표준 443 호환 경로이며 관리 UI의 필수 의존성이 아닙니다.
 
 ## Operation IDs
 
@@ -25,7 +25,7 @@ SSH tunnel recovery에서 검토한 plan으로 공개 HTTPS profile을 활성화
 
 ## Preconditions
 
-- supported Nginx and Certbot layout
+- supported jw-edge TLS layout 또는 선택적 Nginx·Certbot layout
 - exact FQDN/Host and valid certificate
 - protected management vhost marker와 전용 proxy include 판별 가능
 - proxy UDS permission verified
@@ -38,7 +38,7 @@ SSH tunnel recovery에서 검토한 plan으로 공개 HTTPS profile을 활성화
 
 - current and target access profile
 - domain/certificate identity and expiry
-- exact protected Nginx resource
+- exact jw-edge endpoint와 선택적 protected Nginx resource
 - ports and product-owned firewall delta
 - HTTPS health and Host checks
 - rollback and session revoke behavior
@@ -47,17 +47,17 @@ SSH tunnel recovery에서 검토한 plan으로 공개 HTTPS profile을 활성화
 
 ## Apply and verify
 
-1. snapshot product-owned vhost/access configuration
-2. stage protected vhost and run Nginx syntax check
-3. reload and probe HTTPS through expected Host
-4. verify agentd internal TCP is not public and proxy uses UDS
-5. if UFW is active, add only planned 443 rule last
+1. snapshot product-owned edge/access configuration
+2. verify edge certificate·key permission and bind the planned address
+3. probe edge HTTPS through expected Host and optional protected Nginx vhost
+4. verify agentd internal TCP is not public and both edge paths use UDS
+5. if UFW is active, add only the planned 9443 또는 optional 443 rule last
 6. read back TLS, headers, login form and SSH fallback
 7. commit profile; otherwise restore only product-owned changes
 
 ## Disable
 
-Public disable removes the product vhost/rule, revokes all public sessions and retains loopback SSH recovery. It never disables Nginx, UFW, Certbot, SSH or user-owned rules globally.
+Public disable stops the product edge, removes only product-owned firewall rules, revokes all public sessions and retains loopback SSH recovery. 선택적 Nginx product vhost도 제거할 수 있지만 Nginx, UFW, Certbot, SSH 또는 user-owned rule을 전역 중지하지 않습니다.
 
 ## Failure and acceptance
 

@@ -2,6 +2,12 @@
 JW_AGENT_PUBLIC_HOST=
 # Comma-separated public origin IPs. Required only for guided Certbot issuance.
 JW_AGENT_PUBLIC_ADDRESSES=
+JW_EDGE_LISTEN_ADDRESS=0.0.0.0:9443
+JW_EDGE_CERTIFICATE=/etc/jw-agent/edge/server.crt
+JW_EDGE_PRIVATE_KEY=/etc/jw-agent/edge/server.key
+JW_EDGE_UPSTREAM_SOCKET=/run/jw-agent-proxy/agentd.sock
+JW_EDGE_READY_FILE=/run/jw-agent-edge/ready
+JW_EDGE_READY_SOCKET=/run/jw-agent-edge/ready.sock
 JW_AGENT_RECOVERY_ADDRESS=127.0.0.1:8787
 JW_AGENT_RECOVERY_ORIGIN=http://127.0.0.1:8787
 JW_AGENT_PROXY_SOCKET=/run/jw-agent-proxy/agentd.sock

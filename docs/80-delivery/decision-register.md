@@ -3,15 +3,15 @@
 Status: Accepted  
 Authority: Delivery  
 Owner: Maintainers  
-Last reviewed: 2026-07-22
+Last reviewed: 2026-07-23
 
 ## 고정
 
 - 독립 신규 제품과 clean-room 경계
 - Ubuntu 24.04 LTS amd64 MVP
 - Rust 2024, agentd/opsd 분리
-- five runtime/support crates and one xtask
-- Nginx+Certbot public HTTPS 443 with agentd UDS
+- 권한·프로세스 경계별 runtime crate와 단일 xtask
+- 비권한 Rust `jw-edge` 9443 기본 ingress, 선택적 Nginx+Certbot 443 호환 ingress, agentd UDS
 - loopback UI and SSH tunnel recovery
 - one-shot root authd, ffi-pam, Ubuntu local pam_unix
 - Linux group admin/operator/viewer roles and root web denial
@@ -59,8 +59,9 @@ P2 구현 진입은 2026-07-21 사용자 목표추진 지시와 [ADR-0010](../90
 - opsd는 private network namespace와 `CAP_NET_BIND_SERVICE`만 사용하며 외부 network API나 listening socket을 갖지 않습니다.
 - 제품 관리 vhost는 legacy basename뿐 아니라 versioned content marker와 제품 include로 판정합니다. 보호 resource는 operation type/schema를 노출하지 않고 opsd plan도 재검증합니다.
 - mutation 승인은 `202 Accepted`이며 durable ledger가 실행 상태를 소유합니다. 브라우저 SSE는 durable sequence를 event ID로 사용하고 canonical receipt를 다시 조회합니다.
-- `p2-local` 22개, `p2-browser` 8개, Playwright 42개, `p2-vm` 26개 gate가 PASS했습니다.
-- VM package는 `jw-agent_0.2.0~p2.18_amd64.deb`, SHA-256 `80d7339e379bef72414c2294dcd8399f64818775abbff267577e7d6d50f3e7ba`입니다.
+- `p2-local` 23개, `p2-browser` 8개, Playwright 42개, `p2-vm` 27개 gate가 PASS했습니다.
+- VM package는 `jw-agent_0.2.0~p2.19_amd64.deb`, SHA-256 `abff57f506c5fb1f1e0041a8319c195ef87d9097171fc14a693d5ca92b85e2c7`입니다.
+- `jw-edge`는 non-root Rustls 9443 listener와 agentd proxy UDS만 소유합니다. `opsd`는 fixed Unix readiness 응답을 plan·apply 직전에 확인하며, 없으면 Nginx stop을 거부합니다. 전체 VM lane은 Nginx inactive 상태의 authenticated UI·API 지속성을 검증했습니다.
 - Ubuntu systemd 서비스 목록은 템플릿 주요 서비스, 로컬 발견 unit과 시스템 내부 unit을 G0로 분리하며 failed unit을 숨기지 않습니다.
 - 로컬 콘솔은 Linux UID·non-root 경계를 명시하고 자원 사용률, 서비스 family, 현재 UID의 typed-operation 영수증만 요약합니다. opsd 임의 명령·전체 사용자 감사 조회 권한은 추가하지 않습니다.
 - managed Nginx config는 활성 exact symlink, root:root, UTF-8 24 KiB content와 exact managed-config plan 256 KiB envelope, reload profile만 `VM_PASS + G2`입니다.

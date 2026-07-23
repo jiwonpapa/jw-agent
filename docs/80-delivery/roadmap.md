@@ -72,9 +72,10 @@ P1 public profile 범위는 existing certificate와 administrator-owned opt-in t
 
 현재 기준선:
 
-- `p2-local` 22개, `p2-browser` 8개 gate와 Playwright 42개 scenario가 PASS했습니다.
-- `p2-vm` 26개 gate에서 서비스 인벤토리·lifecycle, Nginx·PHP-FPM fault matrix와 manual restore, forensic lockdown, Certbot lifecycle, non-root OpenSSH terminal, home-scoped SFTP G0/G1과 TOTP step-up을 검증했습니다.
-- Ubuntu 24.04 VM에 `jw-agent_0.2.0~p2.18_amd64.deb`를 설치했고 SHA-256은 `80d7339e379bef72414c2294dcd8399f64818775abbff267577e7d6d50f3e7ba`입니다.
+- `p2-local` 23개, `p2-browser` 8개 gate와 Playwright 42개 scenario가 PASS했습니다.
+- `p2-vm` 27개 gate에서 독립 Rust management edge, 서비스 인벤토리·lifecycle, Nginx·PHP-FPM fault matrix와 manual restore, forensic lockdown, Certbot lifecycle, non-root OpenSSH terminal, home-scoped SFTP G0/G1과 TOTP step-up을 검증했습니다.
+- Ubuntu 24.04 VM에 `jw-agent_0.2.0~p2.19_amd64.deb`를 설치했고 SHA-256은 `abff57f506c5fb1f1e0041a8319c195ef87d9097171fc14a693d5ca92b85e2c7`입니다.
+- `jw-edge`가 비권한 9443 기본 관리 ingress를 소유하며, edge 부재 시 Nginx stop은 차단되고 Nginx 중단 뒤에도 `:9443` UI·API가 유지됩니다.
 - 공개 HTTPS 실브라우저에서 grouped navigation, account drawer, 자원 meter, 서비스 family card, SFTP 3-pane과 terminal-first surface를 확인했습니다.
 - 제품 관리 vhost는 파일명과 무관하게 content marker/include로 보호되며 plan 단계에서 변경을 거부합니다.
 - 승인 API는 `202 Accepted` 뒤 durable operation을 실행하고 SSE sequence replay와 canonical receipt 조회를 제공합니다.

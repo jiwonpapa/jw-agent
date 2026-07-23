@@ -3,16 +3,19 @@
 Status: Accepted  
 Authority: Security  
 Owner: Security Maintainer  
-Last reviewed: 2026-07-21
+Last reviewed: 2026-07-23
 
 ## Process privilege
 
 - `agentd`: dedicated non-root account, public proxy UDS and loopback recovery API
+- `jw-edge`: same dedicated non-root account, Rustls 9443 listener, public proxy UDS client only
 - `authd`: root, systemd socket-activated one-shot, PAM/account/role only
 - `opsd`: root, long-running networkless typed operation executor
 - browser: no root password, SSH key, authd/opsd token
 
-`authd`와 `opsd`는 서로의 socket·protocol·responsibility를 공유하지 않습니다. systemd sandbox directive는 실제 PAM·NSS·service dependency를 Ubuntu VM에서 확인한 뒤 최소화합니다.
+`jw-edge`는 authd·opsd socket과 DB에 접근하지 않습니다. `authd`와 `opsd`는 서로의
+socket·protocol·responsibility를 공유하지 않습니다. systemd sandbox directive는 실제
+PAM·NSS·service dependency를 Ubuntu VM에서 확인한 뒤 최소화합니다.
 
 ## Authentication and authorization
 
@@ -52,7 +55,7 @@ P1 기본값은 `disabled`, UI 권장값은 `risky_operations`입니다. provide
 
 ## Request protection
 
-- exact Host·Origin allowlist, CORS disabled
+- exact Host·Origin allowlist, CORS disabled; 9443 authority는 edge가 canonical public origin으로 정규화
 - session-bound CSRF token and JSON-only mutation
 - login·mutation response `Cache-Control: no-store`
 - CSP self-only, `object-src 'none'`, `base-uri 'none'`, `frame-ancestors 'none'`

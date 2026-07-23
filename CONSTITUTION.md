@@ -93,10 +93,10 @@ Last reviewed: 2026-07-21
 ## 제10조 — 단일 서버와 이중 접근 경로 우선
 
 1. MVP는 한 서버에서 공개 HTTPS와 loopback·SSH 터널 복구 경로를 모두 지원합니다.
-2. 공개 모드는 명시적으로 활성화하며 Nginx+Certbot 443만 인터넷에 노출합니다. agentd 내부 listener와 Unix socket은 공개하지 않습니다.
+2. 공개 모드는 명시적으로 활성화하며 전용 비권한 `jw-edge` HTTPS listener를 기본 관리 ingress로 사용합니다. Nginx 443 proxy는 호환 경로일 뿐 필수 의존성이 아니며 agentd 내부 listener와 Unix socket은 공개하지 않습니다.
 3. HTTP 공개, 유효하지 않은 인증서, CORS 기반 외부 origin, direct agentd public bind를 금지합니다.
-4. 공개 관리용 Nginx resource는 `system-owned/protected`로 분류하여 일반 service operation이 변경하지 못하게 합니다.
-5. Nginx·TLS·DNS 장애에도 SSH 터널 복구와 공개 모드 해제가 가능해야 합니다.
+4. 관리 ingress를 제공하는 Nginx를 중지하려면 독립 `jw-edge` readiness가 먼저 검증되어야 합니다. 공개 관리용 Nginx resource는 `system-owned/protected`로 분류하여 일반 설정 operation이 변경하지 못하게 합니다.
+5. Nginx·TLS·DNS 장애에도 독립 HTTPS edge와 SSH 터널 복구 경로 중 하나 이상이 유지되어야 하며 공개 모드 해제가 가능해야 합니다.
 6. 중앙관제 crate·PostgreSQL·멀티테넌트·원격 작업은 단일 서버 MVP gate가 통과한 뒤 시작합니다.
 7. 중앙 장애나 제품 제거 후에도 서버 서비스와 OpenSSH는 독립적으로 작동해야 합니다.
 

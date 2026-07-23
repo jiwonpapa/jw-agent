@@ -1,8 +1,10 @@
 #![forbid(unsafe_code)]
 
+mod edge_boundary;
 mod process;
 mod sftp_boundary;
 mod source_policy;
+use edge_boundary::gate_p2_independent_edge_boundary;
 use sftp_boundary::gate_p2_sftp_boundary;
 mod vm;
 mod web;
@@ -146,6 +148,7 @@ const REQUIRED_FOUNDATION_PATHS: &[&str] = &[
     "docs/90-specs/adr/0012-loopback-tls-verifier.md",
     "docs/90-specs/adr/0013-system-openssh-client.md",
     "docs/90-specs/adr/0016-totp-crypto-and-enrollment-boundary.md",
+    "docs/90-specs/adr/0018-independent-rust-management-edge.md",
     "tests/spec-fixtures/nginx-site-state-set-v1.json",
 ];
 
@@ -196,6 +199,12 @@ const P2_REQUIRED_PATHS: &[&str] = &[
     "apps/web/src/features/terminal/terminal-screen.tsx",
     "apps/web/src/routes/_authenticated.terminal.tsx",
     "crates/jw-certd/src/lib.rs",
+    "crates/jw-edge/Cargo.toml",
+    "crates/jw-edge/src/config.rs",
+    "crates/jw-edge/src/lib.rs",
+    "crates/jw-edge/src/main.rs",
+    "crates/jw-edge/src/proxy.rs",
+    "crates/jw-edge/src/tls.rs",
     "crates/jw-agentd/migrations/0002_terminal_audit.sql",
     "crates/jw-agentd/migrations/0003_file_audit.sql",
     "crates/jw-agentd/migrations/0004_file_upload_audit.sql",
@@ -226,6 +235,9 @@ const P2_REQUIRED_PATHS: &[&str] = &[
     "crates/jw-opsd/src/nginx.rs",
     "crates/jw-opsd/src/runner.rs",
     "crates/jw-opsd/src/snapshot.rs",
+    "packaging/systemd/jw-edge.service",
+    "xtask/src/edge_boundary.rs",
+    "xtask/src/vm/independent_edge.rs",
     "xtask/src/vm/php_fpm.rs",
     "xtask/src/vm/service_control.rs",
     "tests/spec-fixtures/nginx-site-state-set-v1.json",
@@ -353,6 +365,17 @@ const GATES: &[Gate] = &[
         evidence: "new source stayed within 1250 lines and legacy hotspots did not grow",
         failure_policy: "fail lane when a hotspot grows without an in-owner split",
         run: source_policy::gate_source_size_ratchet,
+    },
+    Gate {
+        id: "P2-INDEPENDENT-EDGE-BOUNDARY",
+        owner: "Access Edge Maintainer",
+        scope: "independent Rust TLS edge, least privilege, and Nginx self-lockout guard",
+        inputs: "Accepted ADR, exact dependency pins, edge sources, systemd sandbox, service inventory, and typed opsd guard",
+        lanes: P2_LOCAL_LANES,
+        timeout_seconds: 3,
+        evidence: "unprivileged 9443 edge, bounded TLS/HTTP proxy, no privileged socket access, and two-phase Nginx stop guard passed",
+        failure_policy: "fail lane on direct agentd public bind, privileged edge, broad helper access, request-smuggling surface, or self-lockout regression",
+        run: gate_p2_independent_edge_boundary,
     },
     Gate {
         id: "P2-TERMINAL-BOUNDARY",
@@ -540,6 +563,17 @@ const GATES: &[Gate] = &[
         evidence: "Nginx, JW Agent internal unit, and failed local custom unit classifications passed",
         failure_policy: "fail lane on missing installed unit, wrong visibility/support, hidden failure, mutation surface, or raw systemctl leakage",
         run: vm::service_inventory::gate_p2_service_inventory,
+    },
+    Gate {
+        id: "VM-P2-INDEPENDENT-EDGE",
+        owner: "Access Edge Maintainer",
+        scope: "Nginx-independent TLS login, typed stop guard, Nginx stop, and management continuity",
+        inputs: "installed P2 package, edge certificate, public 9443 ingress, Nginx compatibility ingress, PAM fixture, and typed lifecycle API",
+        lanes: P2_VM_LANES,
+        timeout_seconds: 180,
+        evidence: "missing-edge stop denial and successful Nginx stop with authenticated 9443 UI/API continuity passed",
+        failure_policy: "fail lane on advertised unsafe stop, bypassed readiness guard, lost 9443 session, privileged edge, or unexpected public agentd listener",
+        run: vm::independent_edge::gate_p2_independent_edge,
     },
     Gate {
         id: "VM-P2-SERVICE-CONTROL",

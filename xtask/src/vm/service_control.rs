@@ -172,7 +172,7 @@ fn operate(
     }
 }
 
-fn service_object<'a>(body: &'a str, unit_name: &str) -> Result<&'a str, String> {
+pub(super) fn service_object<'a>(body: &'a str, unit_name: &str) -> Result<&'a str, String> {
     let marker = format!("\"unitName\":{}", json_string(unit_name));
     let marker_index = body
         .find(&marker)

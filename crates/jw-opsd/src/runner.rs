@@ -1,4 +1,6 @@
 use std::io::Read;
+use std::os::unix::net::UnixStream;
+use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -8,6 +10,9 @@ use sha2::{Digest, Sha256};
 use crate::digest::format_sha256;
 use crate::error::OpsError;
 
+const EDGE_READY_SOCKET: &str = "/run/jw-agent-edge/ready.sock";
+const EDGE_READY_RESPONSE: &[u8] = b"JW-EDGE-READY-V1\n";
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CommandClass {
     NginxConfigTest,
@@ -16,6 +21,8 @@ pub enum CommandClass {
     NginxStop,
     NginxRestart,
     NginxActive,
+    JwEdgeActive,
+    JwEdgeReady,
     PhpFpm83ConfigTest,
     PhpFpm83Reload,
     PhpFpm83Start,
@@ -36,6 +43,8 @@ impl CommandClass {
             Self::NginxStop => "nginx_stop",
             Self::NginxRestart => "nginx_restart",
             Self::NginxActive => "nginx_active",
+            Self::JwEdgeActive => "jw_edge_active",
+            Self::JwEdgeReady => "jw_edge_ready",
             Self::PhpFpm83ConfigTest => "php_fpm_83_config_test",
             Self::PhpFpm83Reload => "php_fpm_83_reload",
             Self::PhpFpm83Start => "php_fpm_83_start",
@@ -58,6 +67,11 @@ impl CommandClass {
                 "/usr/bin/systemctl",
                 &["is-active", "--quiet", "nginx.service"],
             ),
+            Self::JwEdgeActive => (
+                "/usr/bin/systemctl",
+                &["is-active", "--quiet", "jw-edge.service"],
+            ),
+            Self::JwEdgeReady => ("/usr/bin/test", &["-f", "/run/jw-agent-edge/ready"]),
             Self::PhpFpm83ConfigTest => ("/usr/sbin/php-fpm8.3", &["-t"]),
             Self::PhpFpm83Reload => ("/usr/bin/systemctl", &["reload", "php8.3-fpm.service"]),
             Self::PhpFpm83Start => ("/usr/bin/systemctl", &["start", "php8.3-fpm.service"]),
@@ -98,20 +112,29 @@ pub struct CommandEvidence {
 
 pub trait OperationRunner: Send + Sync {
     fn run(&self, class: CommandClass) -> Result<CommandEvidence, OpsError>;
+
+    fn management_edge_ready(&self) -> Result<bool, OpsError> {
+        if !self.run(CommandClass::JwEdgeActive)?.success {
+            return Ok(false);
+        }
+        Ok(self.run(CommandClass::JwEdgeReady)?.success)
+    }
 }
 
 #[derive(Clone, Debug)]
 pub struct FixedCommandRunner {
     timeout: Duration,
     output_cap_bytes: usize,
+    edge_ready_socket: PathBuf,
 }
 
 impl FixedCommandRunner {
     #[must_use]
-    pub const fn new(timeout: Duration, output_cap_bytes: usize) -> Self {
+    pub fn new(timeout: Duration, output_cap_bytes: usize) -> Self {
         Self {
             timeout,
             output_cap_bytes,
+            edge_ready_socket: PathBuf::from(EDGE_READY_SOCKET),
         }
     }
 }
@@ -126,6 +149,28 @@ impl OperationRunner for FixedCommandRunner {
             self.timeout,
             self.output_cap_bytes,
         )
+    }
+
+    fn management_edge_ready(&self) -> Result<bool, OpsError> {
+        probe_edge_readiness(
+            &self.edge_ready_socket,
+            self.timeout.min(Duration::from_secs(1)),
+        )
+    }
+}
+
+fn probe_edge_readiness(path: &Path, timeout: Duration) -> Result<bool, OpsError> {
+    let mut stream = match UnixStream::connect(path) {
+        Ok(value) => value,
+        Err(_) => return Ok(false),
+    };
+    stream
+        .set_read_timeout(Some(timeout))
+        .map_err(|error| OpsError::Command(error.to_string()))?;
+    let mut response = [0_u8; EDGE_READY_RESPONSE.len()];
+    match stream.read_exact(&mut response) {
+        Ok(()) => Ok(response == EDGE_READY_RESPONSE),
+        Err(_) => Ok(false),
     }
 }
 
@@ -310,11 +355,21 @@ fn close_descendants_if_readers_stuck<T, U>(
 #[cfg(test)]
 mod tests {
     use std::io::Cursor;
+    #[cfg(target_os = "linux")]
+    use std::io::Write;
+    #[cfg(target_os = "linux")]
+    use std::os::unix::net::UnixListener;
+    #[cfg(target_os = "linux")]
+    use std::path::PathBuf;
+    #[cfg(target_os = "linux")]
+    use std::thread;
     use std::time::{Duration, Instant};
 
     use jw_contracts::sha256_digest;
 
     use super::{CommandClass, execute_registered, read_bounded};
+    #[cfg(target_os = "linux")]
+    use super::{EDGE_READY_RESPONSE, FixedCommandRunner, OperationRunner};
 
     #[test]
     fn command_registry_is_an_exact_allowlist() {
@@ -426,6 +481,43 @@ mod tests {
         assert!(!evidence.success);
         assert!(started.elapsed() < Duration::from_secs(3));
         Ok(())
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn edge_readiness_requires_a_live_exact_socket_response() -> Result<(), String> {
+        let socket = PathBuf::from(format!(
+            "/tmp/jw-opsd-edge-ready-{}.sock",
+            std::process::id()
+        ));
+        let _stale_cleanup = std::fs::remove_file(&socket);
+        let runner = FixedCommandRunner {
+            timeout: Duration::from_millis(500),
+            output_cap_bytes: 64,
+            edge_ready_socket: socket.clone(),
+        };
+        assert!(
+            !runner
+                .management_edge_ready()
+                .map_err(|error| error.to_string())?
+        );
+
+        let listener = UnixListener::bind(&socket).map_err(|error| error.to_string())?;
+        let server = thread::spawn(move || -> Result<(), String> {
+            let (mut stream, _) = listener.accept().map_err(|error| error.to_string())?;
+            stream
+                .write_all(EDGE_READY_RESPONSE)
+                .map_err(|error| error.to_string())
+        });
+        assert!(
+            runner
+                .management_edge_ready()
+                .map_err(|error| error.to_string())?
+        );
+        server
+            .join()
+            .map_err(|_| String::from("edge readiness test server panicked"))??;
+        std::fs::remove_file(socket).map_err(|error| error.to_string())
     }
 
     #[cfg(target_os = "linux")]

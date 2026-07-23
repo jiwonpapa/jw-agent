@@ -1,3 +1,12 @@
+jw-agent (0.2.0~p2.19) noble; urgency=medium
+
+  * Add an unprivileged Rust TLS management edge independent of Nginx.
+  * Keep the existing Nginx 443 ingress as an optional compatibility path.
+  * Refuse Nginx stop before side effects unless the independent edge is ready.
+  * Normalize trusted Host, Origin, and client-address headers at the new edge.
+
+ -- JW Agent Maintainers <maintainers@example.invalid>  Thu, 23 Jul 2026 15:30:00 +0900
+
 jw-agent (0.2.0~p2.18) noble; urgency=medium
 
   * Add a four-step managed configuration wizard without repeated passwords.

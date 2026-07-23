@@ -1,0 +1,44 @@
+[Unit]
+Description=JW Agent independent HTTPS management edge
+After=network.target jw-agentd.service
+Wants=jw-agentd.service
+StartLimitIntervalSec=0
+ConditionPathExists=/etc/jw-agent/edge/server.crt
+ConditionPathExists=/etc/jw-agent/edge/server.key
+
+[Service]
+Type=simple
+User=jw-agent
+Group=jw-agent
+SupplementaryGroups=jw-agent-proxy
+EnvironmentFile=-/etc/default/jw-agent
+ExecStart=/usr/lib/jw-agent/jw-edge
+Restart=on-failure
+RestartSec=2s
+UMask=0155
+NoNewPrivileges=yes
+PrivateDevices=yes
+PrivateTmp=yes
+ProtectClock=yes
+ProtectControlGroups=yes
+ProtectHome=yes
+ProtectHostname=yes
+ProtectKernelLogs=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+ProtectSystem=strict
+ReadWritePaths=/run/jw-agent-edge
+ReadOnlyPaths=/etc/jw-agent/edge
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+SystemCallArchitectures=native
+LimitNOFILE=512
+TasksMax=64
+MemoryMax=128M
+
+[Install]
+WantedBy=multi-user.target

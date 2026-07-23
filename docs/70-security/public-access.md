@@ -3,17 +3,17 @@
 Status: Accepted  
 Authority: Security  
 Owner: Security Maintainer  
-Last reviewed: 2026-07-21
+Last reviewed: 2026-07-23
 
 ## Exposure rule
 
-Internet에 노출되는 것은 valid TLS의 Nginx 443뿐입니다. 127.0.0.1-only agentd recovery endpoint, agentd proxy UDS, authd socket, opsd socket은 public network에서 도달할 수 없어야 합니다.
+Internet에 노출되는 기본 관리 ingress는 valid TLS의 비권한 `jw-edge` 9443입니다. Nginx 443은 선택적 호환 경로입니다. 127.0.0.1-only agentd recovery endpoint, agentd proxy UDS, authd socket, opsd socket은 public network에서 도달할 수 없어야 합니다.
 
 ## Activation preconditions
 
 - exact FQDN and Host allowlist
 - valid certificate and tested renewal path
-- Nginx config test and HTTPS health probe
+- jw-edge TLS·UDS health probe와 선택적 Nginx config test
 - at least one non-root allowed admin account
 - login budget and bounded authd workers
 - SSH recovery path confirmed
@@ -25,7 +25,7 @@ Internet에 노출되는 것은 valid TLS의 Nginx 443뿐입니다. 127.0.0.1-on
 ## Edge controls
 
 - HTTP login 금지; port 80은 credential을 받지 않고 HTTPS redirect/ACME 용도로만 제한
-- Nginx가 request/body/header/time/rate limits 소유
+- jw-edge가 TLS handshake·connection·header bound와 trusted peer address를 소유하고 agentd가 endpoint별 body·auth budget을 소유
 - forwarded headers are accepted only from dedicated proxy UDS
 - Host confusion, absolute-form target, oversized JSON, slow request fail closed
 - external script/font/CDN/advertisement/telemetry 없음
@@ -34,7 +34,7 @@ Internet에 노출되는 것은 valid TLS의 Nginx 443뿐입니다. 127.0.0.1-on
 
 ## Firewall
 
-- active UFW에서는 제품이 소유한 443 rule만 plan 후 추가
+- active UFW에서는 제품이 소유한 9443 또는 선택적 443 rule만 plan 후 추가
 - inactive UFW를 임의 활성화하지 않음
 - SSH rule과 기존 user rule을 절대 변경하지 않음
 - cloud firewall은 제품 밖의 필요한 작업으로 표시
@@ -42,7 +42,8 @@ Internet에 노출되는 것은 valid TLS의 Nginx 443뿐입니다. 127.0.0.1-on
 
 ## Self-lockout defense
 
-- public management vhost와 certificate mapping은 `system-owned/protected`
+- jw-edge unit·certificate mapping과 public management vhost는 `system-owned/protected`
+- `opsd`가 고정 Unix health socket의 실시간 응답을 받지 못하면 Nginx stop을 side effect 전에 거부
 - Nginx site toggle·bulk operation·일반 config editor에서 제외
 - Nginx/TLS failure banner와 SSH recovery runbook 제공
 - public disable은 공개 session 전부 revoke

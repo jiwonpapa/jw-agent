@@ -3,7 +3,7 @@ use jw_contracts::{
 };
 
 use crate::error::OpsError;
-use crate::runner::CommandClass;
+use crate::runner::{CommandClass, OperationRunner};
 
 pub const SERVICE_CONTROL_IMPACT: [&str; 3] = [
     "등록된 systemd 서비스 하나에 선택한 lifecycle 동작을 실행합니다.",
@@ -78,6 +78,10 @@ pub fn registered_service(service_identifier: &str) -> Result<RegisteredService,
         .into_iter()
         .find(|service| service_id(service.unit_name()) == service_identifier)
         .ok_or(OpsError::Rejected("service_not_managed"))
+}
+
+pub fn management_edge_ready(runner: &dyn OperationRunner) -> Result<bool, OpsError> {
+    runner.management_edge_ready()
 }
 
 #[must_use]

@@ -16,6 +16,12 @@ pub(crate) struct FakeRunner {
 }
 
 impl FakeRunner {
+    pub(crate) fn sequence<const N: usize>(results: [(CommandClass, bool); N]) -> Self {
+        Self {
+            results: Mutex::new(VecDeque::from(results)),
+        }
+    }
+
     pub(crate) fn all_success() -> Self {
         Self {
             results: Mutex::new(VecDeque::from([

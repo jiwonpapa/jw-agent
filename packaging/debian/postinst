@@ -4,6 +4,7 @@ set -e
 if [ "$1" = "configure" ]; then
     systemd-sysusers /usr/lib/sysusers.d/jw-agent.conf
     install -d -o root -g root -m 0755 /etc/jw-agent
+    install -d -o root -g jw-agent -m 0750 /etc/jw-agent/edge
     if [ -r /etc/ssh/ssh_host_ed25519_key.pub ]; then
         known_hosts_temp="$(mktemp /etc/jw-agent/.ssh_known_hosts.XXXXXX)"
         awk 'NF >= 2 { print "jw-agent-loopback " $1 " " $2; exit }' \
