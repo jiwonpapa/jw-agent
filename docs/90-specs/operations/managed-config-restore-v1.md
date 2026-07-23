@@ -32,4 +32,9 @@ Last reviewed: 2026-07-23
 - 복원 성공은 새 operation receipt를 만들고 이전 receipt는 불변입니다.
 - 복원 검증 실패는 복원 직전 현재 파일로 자동 원복합니다.
 - source content와 snapshot path는 REST·로그·브라우저 저장소에 없습니다.
+- Ubuntu VM의 PHP-FPM 관리 리소스에서 변경 성공 receipt를 source로 복원하고 exact bytes·reload·active를 검증합니다.
 
+## Evidence
+
+`jw-agent_0.2.0~p2.18_amd64.deb`의 `VM-P2-MANAGED-CONFIG`이 PHP-FPM 변경 성공
+receipt의 snapshot을 source로 삼아 exact bytes 복원, 문법 검사, reload와 active read-back을 검증했습니다.

@@ -25,9 +25,9 @@ JW_VM_PUBLIC_ADDRESS=192.168.0.142
 JW_VM_CA_CERT=/path/to/test-ca.crt
 JW_VM_ADMIN_USER=jwvmadmin
 JW_VM_PASSWORD_FILE=/path/to/mode-0600-fixture-password
-JW_VM_REMOTE_PACKAGE=/home/neojins/jw-agent_0.2.0~p2.17_amd64.deb
-JW_VM_EXPECTED_PACKAGE_SHA256=283bf2b8d3465e22ac38beb696014a3cea3e0b059b54a71238780aec8b7c3b5f
-JW_VM_EXPECTED_VERSION=0.2.0~p2.17
+JW_VM_REMOTE_PACKAGE=/home/neojins/jw-agent_0.2.0~p2.18_amd64.deb
+JW_VM_EXPECTED_PACKAGE_SHA256=80d7339e379bef72414c2294dcd8399f64818775abbff267577e7d6d50f3e7ba
+JW_VM_EXPECTED_VERSION=0.2.0~p2.18
 cargo xtask verify p2-vm
 ```
 
@@ -41,13 +41,14 @@ certificate를 VM management edge에 설치합니다.
 ## Current VM evidence
 
 - domain: `jw-agent-p1`, Ubuntu 24.04.4 LTS, kernel `6.8.0-136-generic`
-- package: `jw-agent 0.2.0~p2.17`, SHA-256 `283bf2b8d3465e22ac38beb696014a3cea3e0b059b54a71238780aec8b7c3b5f`, package/runtime gate clean
-- lanes: `p2-local` 22 PASS, `p2-browser` 8 PASS with 42 browser scenarios, `p2-vm` 25 PASS
+- package: `jw-agent 0.2.0~p2.18`, SHA-256 `80d7339e379bef72414c2294dcd8399f64818775abbff267577e7d6d50f3e7ba`, package/runtime gate clean
+- lanes: `p2-local` 22 PASS, `p2-browser` 8 PASS with 42 browser scenarios, `p2-vm` 26 PASS
 - service inventory: real Nginx and JW Agent internal classification plus a disposable failed custom unit surfaced as discovered read-only
 - automated VM scenarios: installed PAM fixture equality, no `pam_faillock`, `jw-authd → libpam.so.0`, `jw-agentd → libsqlite3.so.0`, repeated product-login failures followed by unchanged Linux password state and working OpenSSH key recovery
 - automated P2 faults: success, verified no-op, syntax failure rollback, injected reload failure rollback, 1 MiB snapshot filesystem cancellation before apply, deleted checkpoint lockdown and restoration
 - automated P2B config faults: >16 KiB active save/no-op, exact syntax/reload rollback, external drift preservation, inactive denial, private proposal cleanup, internal temp discovery exclusion and startup cleanup
-- automated PHP-FPM config: Ubuntu apt PHP 8.3.6 unit·extension·masked path 관찰, 73 KiB `php.ini` valid save, exit 0 syntax warning detection, reload-before-failure 차단, exact rollback과 service continuity
+- automated service lifecycle: Nginx reload, PHP-FPM restart·stop·start, typed plan·approval·receipt와 public management continuity
+- automated PHP-FPM config: Ubuntu apt PHP 8.3.6 unit·extension·masked path 관찰, 73 KiB `php.ini` valid save, successful receipt snapshot manual restore, exit 0 syntax warning detection, reload-before-failure 차단, exact rollback과 service continuity
 - automated P2C boundary: Ubuntu Certbot 2.9.0, root-only socket, non-root denial, expired request rejection, digest-only renewal dry-run result, one-shot worker and private-config cleanup
 - automated P2C inventory: sanitized SAN·expiry·fingerprint, timer state, masked path, private-key non-disclosure, escaped symlink rejection
 - automated P2C renewal operation: immutable plan, PAM approval, private inventory snapshot, real Ubuntu Certbot dry-run, digest-only receipt, timer-unhealthy rejection, one-shot cleanup
@@ -59,7 +60,7 @@ certificate를 VM management edge에 설치합니다.
 - automated TOTP step-up: recovery-only admin enrollment, two consecutive codes, `risky_operations`, exact-plan PAM+TOTP approval, replay denial, one-time recovery reset, session revoke, mode-0600 wrapping key and encrypted-state cleanup
 - package runtime: opsd private network namespace, exact `CAP_NET_BIND_SERVICE`, ephemeral Nginx test logs, no listening IP socket, root-owned `0600` ledger, bounded UDS
 - local console: grouped navigation, explicit non-root Linux identity, responsive resource meters and service-family cards, current-subject typed-operation history
-- real browser: p2.17 public HTTPS 관리 모드, resource graph, actionable attention, service icon card, recovery-only TOTP boundary와 설정 rollback UX; 42개 mock browser scenario PASS
+- real browser: p2.17 public HTTPS 관리 모드 시각 증거를 유지하며 p2.18 public HTTPS·API와 42개 mock browser scenario PASS
 
 This is a private-LAN `.test` host with a dedicated management-edge test CA.
 The Certbot runner boundary, read-only inventory, renewal dry-run, guided issue
@@ -83,6 +84,7 @@ signed release distribution, delete/move/chmod SFTP operations, or production op
 | OpenSSH SFTP G1 | PAM plan, atomic create/replace, mode/size/digest read-back, stale/symlink/type/origin/digest/replay denial and metadata audit |
 | TOTP step-up | recovery-only enrollment/reset, consecutive codes, exact-plan PAM+TOTP, replay denial, encrypted seed and recovery cleanup |
 | failure recovery | Nginx/TLS failure leaves SSH recovery available and public profile removable |
+| service lifecycle | Nginx reload, PHP-FPM restart·stop·start, final active read-back and management continuity |
 | PHP-FPM managed config | standard PHP 8.3 observation, valid save, syntax line detection, no failed reload, exact rollback, active continuity |
 | secret scan | password/session tokens absent from journal, DB, process arguments, package logs and evidence |
 

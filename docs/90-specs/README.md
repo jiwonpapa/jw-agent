@@ -25,7 +25,7 @@ Last reviewed: 2026-07-22
 ## Authentication specs
 
 - [AUTH-PAM-LOGIN-V1](auth/pam-login-v1.md) — Accepted
-- [AUTH-TOTP-STEP-UP-V1](auth/totp-step-up-v1.md) — Accepted, p2.17 Ubuntu VM evidence
+- [AUTH-TOTP-STEP-UP-V1](auth/totp-step-up-v1.md) — Accepted, p2.18 Ubuntu VM evidence
 - [AUTH-ADMINISTRATIVE-ACCESS-V1](auth/administrative-access-v1.md) — Accepted, non-root admin에서 root typed operation 관리 모드
 
 ## Observability specs

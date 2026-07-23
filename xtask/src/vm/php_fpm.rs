@@ -88,6 +88,25 @@ fn run_scenarios(config: &VmConfig, password: &str, timeout: Duration) -> Result
     }
     require_php_ini_equals(config, valid_content.as_bytes(), timeout)?;
 
+    let restore_plan = plan_restore(
+        &session,
+        config,
+        &resource_id,
+        &json_string_field(&saved, "operationId")?,
+        timeout,
+    )?;
+    let restored = session.approve_managed_config(config, password, &restore_plan, timeout)?;
+    require_php_terminal(&restored, "SUCCEEDED", "PHP-FPM manual restore")?;
+    if !restored.contains("\"operationType\":\"service.config_file.restore/v1\"")
+        || !restored.contains("\"restoreAvailable\":true")
+        || !restored.contains("\"resultCode\":\"config_verified\"")
+    {
+        return Err(String::from(
+            "PHP-FPM restore receipt omitted immutable restore evidence",
+        ));
+    }
+    require_php_ini_equals(config, baseline.as_bytes(), timeout)?;
+
     let invalid_content = format!("{valid_content}\nmemory_limit == broken\n");
     let invalid_plan = plan(
         &session,
@@ -109,7 +128,7 @@ fn run_scenarios(config: &VmConfig, password: &str, timeout: Duration) -> Result
             "PHP-FPM syntax receipt omitted bounded line or verified rollback evidence",
         ));
     }
-    require_php_ini_equals(config, valid_content.as_bytes(), timeout)
+    require_php_ini_equals(config, baseline.as_bytes(), timeout)
 }
 
 struct PlanInput<'a> {
@@ -166,6 +185,56 @@ fn plan(
     }
     Ok(ManagedConfigPlanFields {
         schema_version: input.schema_version,
+        plan_id: json_string_field(&response.body, "planId")?,
+        plan_hash: json_string_field(&response.body, "planHash")?,
+        idempotency_key,
+    })
+}
+
+fn plan_restore(
+    session: &P2ApiSession,
+    config: &VmConfig,
+    resource_id: &str,
+    source_operation_id: &str,
+    timeout: Duration,
+) -> Result<ManagedConfigPlanFields, String> {
+    let resource = session.get(
+        config,
+        &format!("/api/v1/config-resources/{resource_id}"),
+        timeout,
+    )?;
+    expect_http(&resource, 200, "PHP-FPM restore resource refresh")?;
+    let idempotency_key = operation_idempotency_key()?;
+    let body = format!(
+        "{{\"schemaVersion\":1,\"operationType\":\"service.config_file.restore/v1\",\"sourceOperationId\":{},\"expectedContentDigest\":{},\"expectedMetadataDigest\":{},\"idempotencyKey\":{}}}",
+        json_string(source_operation_id),
+        json_string(&json_string_field(&resource.body, "contentDigest")?),
+        json_string(&json_string_field(&resource.body, "metadataDigest")?),
+        json_string(&idempotency_key),
+    );
+    let response = public_api_request(
+        config,
+        "POST",
+        "/api/v1/operations/service/config-file/restore/plans",
+        &session.cookie_jar.path,
+        Some(&session.csrf_token),
+        Some(body.as_bytes()),
+        timeout,
+    )?;
+    expect_http(&response, 200, "PHP-FPM restore plan")?;
+    if !response
+        .body
+        .contains("\"operationType\":\"service.config_file.restore/v1\"")
+        || !response
+            .body
+            .contains("\"rollbackSupport\":\"automatic_bounded\"")
+    {
+        return Err(String::from(
+            "PHP-FPM restore plan omitted the restore type or bounded rollback contract",
+        ));
+    }
+    Ok(ManagedConfigPlanFields {
+        schema_version: 1,
         plan_id: json_string_field(&response.body, "planId")?,
         plan_hash: json_string_field(&response.body, "planHash")?,
         idempotency_key,

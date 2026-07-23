@@ -57,4 +57,4 @@ Last reviewed: 2026-07-23
 - 관리 모드 안의 G2 설정은 반복 비밀번호 없이 승인되며 stop·large deletion은 추가 위험 확인을 요구
 - 개요 default-expanded session panel과 다른 route account drawer
 
-`jw-agent_0.2.0~p2.17_amd64.deb`에서 구현되었으며 Ubuntu 24.04 VM의 전체 `p2-vm` 25개 gate가 관리 모드 진입 뒤 Nginx·PHP-FPM·Certbot typed operation, TOTP 결합, PAM limiter 분리와 secret scan을 검증했습니다. SHA-256은 `283bf2b8d3465e22ac38beb696014a3cea3e0b059b54a71238780aec8b7c3b5f`입니다.
+`jw-agent_0.2.0~p2.18_amd64.deb`에서 구현되었으며 Ubuntu 24.04 VM의 전체 `p2-vm` 26개 gate가 관리 모드 진입 뒤 Nginx·PHP-FPM·Certbot typed operation, TOTP 결합, PAM limiter 분리와 secret scan을 검증했습니다. SHA-256은 `80d7339e379bef72414c2294dcd8399f64818775abbff267577e7d6d50f3e7ba`입니다.

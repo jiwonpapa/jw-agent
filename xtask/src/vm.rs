@@ -3,6 +3,7 @@
 pub(crate) mod php_fpm;
 pub(crate) mod public_recovery;
 mod receipt;
+pub(crate) mod service_control;
 pub(crate) mod service_inventory;
 pub(crate) mod totp;
 
@@ -1139,7 +1140,7 @@ sudo -H -u {admin} chmod 0600 "$fixture/readme.txt" "$fixture/subdirectory/neste
             "\"level\":\"g0_observe_only\"",
             "\"rollbackSupport\":\"not_applicable\"",
             "\"rootLabel\":\"~\"",
-            "\"idleTimeoutSeconds\":120",
+            "\"idleTimeoutSeconds\":0",
             "\"maxLifetimeSeconds\":0",
             "\"maxListEntries\":500",
             "\"maxTextBytes\":262144",
