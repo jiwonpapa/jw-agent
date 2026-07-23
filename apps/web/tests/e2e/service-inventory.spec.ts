@@ -11,6 +11,8 @@ const session = {
   absoluteExpiresAt: "2026-07-21T10:00:00Z",
   csrfToken: "fixture-csrf-token",
   additionalAuthPolicy: "disabled",
+  administrativeAccess: "administrative",
+  administrativeExpiresAt: "2026-07-21T02:25:00Z",
 };
 
 async function mockServiceApi(page: Page): Promise<void> {
@@ -68,4 +70,19 @@ test("service inventory exposes system detail on demand and has no serious acces
       ["critical", "serious"].includes(violation.impact ?? ""),
     ),
   ).toEqual([]);
+});
+
+test("desktop service families use reusable brand assets and multi-column cards", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await mockServiceApi(page);
+  await page.goto("/services");
+  await expect(page.locator('img[src="/service-icons/php.svg"]')).toBeVisible();
+  await expect(page.locator('img[src="/service-icons/nginx.svg"]')).toBeVisible();
+  const cards = page.locator("#primary-services-heading + p + ul > li");
+  await expect(cards.first()).toBeVisible();
+  const first = await cards.nth(0).boundingBox();
+  const second = await cards.nth(1).boundingBox();
+  expect(first).not.toBeNull();
+  expect(second).not.toBeNull();
+  expect(second?.y).toBe(first?.y);
 });

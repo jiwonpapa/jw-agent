@@ -1,11 +1,11 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page } from "@playwright/test";
 
-import type { OperationReceiptView } from "../../src/shared/api/types";
+import type { OperationReceiptView, SessionView } from "../../src/shared/api/types";
 import { registerFeatureRegressionTests } from "./feature-regression-tests";
 import { services } from "./fixtures/service-inventory";
 
-const session = {
+const session: SessionView = {
   subject: { uid: 1001, username: "operator", role: "admin" },
   ingress: "recovery",
   authenticatedAt: "2026-07-21T02:00:00Z",
@@ -13,15 +13,11 @@ const session = {
   absoluteExpiresAt: "2026-07-21T10:00:00Z",
   csrfToken: "fixture-csrf-token",
   additionalAuthPolicy: "disabled",
+  administrativeAccess: "administrative",
+  administrativeExpiresAt: "2026-07-21T02:25:00Z",
 };
 
-const health = {
-  status: "ok",
-  version: "0.1.0",
-  ingress: "recovery",
-  pam: "available",
-  opsd: "available",
-};
+const health = { status: "ok", version: "0.1.0", ingress: "recovery", pam: "available", opsd: "available" };
 
 const host = {
   observedAt: "2026-07-21T02:10:00Z",
@@ -33,6 +29,8 @@ const host = {
   architecture: "x86_64",
   kernelRelease: "6.8.0",
   uptimeSeconds: 172800,
+  logicalCpuCount: 4,
+  cpuUsagePercent: 37.5,
   loadAverageOne: 0.21,
   memory: { totalBytes: 8589934592, availableBytes: 5368709120 },
   rootDisk: { totalBytes: 107374182400, availableBytes: 75161927680 },
@@ -153,7 +151,7 @@ const operationReceipt: OperationReceiptView = {
   operationId: "op_fixture",
   planId: "plan_fixture",
   planHash,
-  actor: session.subject as OperationReceiptView["actor"],
+  actor: session.subject,
   displayName: "example.com 비활성화",
   recordedAt: "2026-07-21T02:12:05Z",
   terminalState: "SUCCEEDED",
@@ -573,7 +571,7 @@ const certbotRenewReceipt: OperationReceiptView = {
   operationId: "op_fixture",
   planId: certbotRenewPlan.planId,
   planHash: certbotRenewPlan.planHash,
-  actor: session.subject as OperationReceiptView["actor"],
+  actor: session.subject,
   displayName: "Certbot 인증서 갱신 시험",
   recordedAt: "2026-07-21T02:12:04Z",
   terminalState: "SUCCEEDED",
@@ -689,9 +687,12 @@ async function mockApi(
     onFileUploadPlan?: (body: unknown) => void;
     onFileUpload?: (body: Uint8Array, headers: Record<string, string>) => void;
     fileFixture?: Record<string, unknown>;
+    sessionFixture?: SessionView;
+    onAdministrativeAccess?: (body: unknown) => void;
   } = {},
 ): Promise<void> {
   let authenticated = initiallyAuthenticated;
+  let currentSession = operationOptions.sessionFixture ?? session;
   let activeReceipt = operationOptions.receipt ?? operationReceipt;
   await page.route("**/api/v1/**", async (route) => {
     const request = route.request();
@@ -699,20 +700,38 @@ async function mockApi(
     if (path === "/api/v1/health") return route.fulfill({ json: healthFixture });
     if (path === "/api/v1/auth/login" && request.method() === "POST") {
       authenticated = true;
-      return route.fulfill({ json: session });
+      return route.fulfill({ json: currentSession });
     }
     if (path === "/api/v1/auth/session") {
       return authenticated
-        ? route.fulfill({ json: session })
+        ? route.fulfill({ json: currentSession })
         : route.fulfill({
             status: 401,
             json: { type: "about:blank", title: "Authentication required", status: 401, code: "unauthorized" },
           });
     }
+    if (path === "/api/v1/auth/administrative-access" && request.method() === "POST") {
+      operationOptions.onAdministrativeAccess?.(request.postDataJSON());
+      currentSession = {
+        ...currentSession,
+        administrativeAccess: "administrative",
+        administrativeExpiresAt: "2026-07-21T02:25:00Z",
+        csrfToken: "rotated-administrative-csrf",
+      };
+      return route.fulfill({ json: currentSession });
+    }
+    if (path === "/api/v1/auth/administrative-access" && request.method() === "DELETE") {
+      currentSession = {
+        ...currentSession,
+        administrativeAccess: "standard",
+        administrativeExpiresAt: null,
+      };
+      return route.fulfill({ json: currentSession });
+    }
     if (path === "/api/v1/auth/reauth" && request.method() === "POST") {
       return route.fulfill({
         json: {
-          session,
+          session: currentSession,
           reauthToken: "reauth_fixture_token_1234567890",
           expiresAt: "2026-07-21T02:14:00Z",
         },
@@ -896,6 +915,14 @@ async function mockApi(
 }
 
 registerFeatureRegressionTests({
+  setupOverview: (page, options) => mockApi(page, true, health, {
+    sessionFixture: options?.standardAccess === true ? {
+      ...session,
+      administrativeAccess: "standard",
+      administrativeExpiresAt: null,
+    } : session,
+    onAdministrativeAccess: options?.onAdministrativeAccess,
+  }),
   setupSftp: (page, callbacks) => mockApi(page, true, health, {
     onFileSession: callbacks.onSession,
     onFileClose: callbacks.onClose,
@@ -954,20 +981,6 @@ test("expired session redirects to login once without nesting returnTo", async (
   expect(location.searchParams.get("returnTo")).toBe("/integrations");
   expect(pageErrors).toEqual([]);
 });
-
-for (const viewport of [{ width: 320, height: 800 }, { width: 390, height: 844 }, { width: 768, height: 1024 }, { width: 1024, height: 768 }, { width: 1440, height: 900 }]) {
-  test(
-    `overview reflows at ${String(viewport.width)}x${String(viewport.height)}`,
-    async ({ page }) => {
-    await page.setViewportSize(viewport);
-    await mockApi(page, true);
-    await page.goto("/overview");
-    await expect(page.getByRole("heading", { name: "서버 개요" })).toBeVisible();
-    const hasOverflow = await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth);
-    expect(hasOverflow).toBe(false);
-    },
-  );
-}
 
 test("access screen states provider limitation without false protection claim", async ({ page }) => {
   await mockApi(page, true);

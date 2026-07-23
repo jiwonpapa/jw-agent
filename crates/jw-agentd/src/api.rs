@@ -22,16 +22,17 @@ use axum::routing::{get, post, put};
 use axum::{Json, Router};
 use futures_core::Stream;
 use jw_contracts::{
-    AccessSettingsView, AdditionalAuthPolicy, AdditionalAuthProviderStatus, AssuranceLevel,
-    AssuranceView, AuthFailureClass, AuthPurpose, AuthRequest, AuthResult,
-    CERTBOT_ATTACH_OPERATION, CERTBOT_ISSUE_OPERATION, CERTBOT_RENEW_TEST_OPERATION,
-    CapabilityStatus, CapabilityView, CertbotAttachApprovalRequest, CertbotAttachPlanRequest,
-    CertbotAttachPlanView, CertbotIssueApprovalRequest, CertbotIssuePlanInput,
-    CertbotIssuePlanRequest, CertbotIssuePlanView, CertbotIssuePreflightEvidence,
-    CertbotRenewTestApprovalRequest, CertbotRenewTestPlanRequest, CertbotRenewTestPlanView,
-    CertificateInventoryView, CertificateSummaryView, FILE_MAX_DOWNLOAD_BYTES,
-    FILE_MAX_UPLOAD_BYTES, FileCapabilityView, FileEntryView, FileKind, FileLimitsView,
-    FileListView, FilePathRequest, FileSessionCloseRequest, FileSessionRequest, FileSessionView,
+    AccessSettingsView, AdditionalAuthPolicy, AdditionalAuthProviderStatus,
+    AdministrativeAccessRequest, AdministrativeAccessState, AssuranceLevel, AssuranceView,
+    AuthFailureClass, AuthPurpose, AuthRequest, AuthResult, CERTBOT_ATTACH_OPERATION,
+    CERTBOT_ISSUE_OPERATION, CERTBOT_RENEW_TEST_OPERATION, CapabilityStatus, CapabilityView,
+    CertbotAttachApprovalRequest, CertbotAttachPlanRequest, CertbotAttachPlanView,
+    CertbotIssueApprovalRequest, CertbotIssuePlanInput, CertbotIssuePlanRequest,
+    CertbotIssuePlanView, CertbotIssuePreflightEvidence, CertbotRenewTestApprovalRequest,
+    CertbotRenewTestPlanRequest, CertbotRenewTestPlanView, CertificateInventoryView,
+    CertificateSummaryView, FILE_MAX_DOWNLOAD_BYTES, FILE_MAX_UPLOAD_BYTES, FileCapabilityView,
+    FileEntryView, FileKind, FileLimitsView, FileListView, FilePathRequest,
+    FileSessionCloseRequest, FileSessionHeartbeatRequest, FileSessionRequest, FileSessionView,
     FileStatView, FileTextView, FileUploadPlanRequest, FileUploadPlanView, FileUploadResultView,
     HealthStatus, HealthView, IPC_PROTOCOL_VERSION, IngressChannel, IntegrationCatalogView,
     LoginRequest, MANAGED_CONFIG_OPERATION, ManagedConfigApprovalRequest, ManagedConfigPlanRequest,
@@ -54,9 +55,7 @@ use zeroize::Zeroizing;
 
 use crate::file_session::{FileBroker, FileSessionError, FileSessionIssue};
 use crate::integration_catalog::{IntegrationObservationProfile, observe_integrations};
-use crate::observation::{ObservationProfile, observe_host, observe_nginx_with_mutation_gate};
 use crate::ops_client::OpsBrokerError;
-use crate::service_inventory::{ServiceObservationProfile, observe_services};
 use crate::session::{OperationClaimError, PolicyUpdateError};
 use crate::terminal::{
     TerminalBroker, TerminalTicketError, TerminalTicketIssue, terminal_runtime_available,
@@ -66,12 +65,24 @@ use crate::{AgentConfig, AuthBroker, OpsBroker, SessionStore};
 
 mod activity;
 use activity::{__path_recent_operations, recent_operations};
+#[path = "api/administrative_access.rs"]
+mod administrative_access_api;
+use administrative_access_api::{
+    __path_enter_administrative_access, __path_leave_administrative_access,
+    enter_administrative_access, leave_administrative_access, require_administrative_access,
+};
 #[path = "api/additional_auth.rs"]
 mod additional_auth_api;
 use additional_auth_api::{access_view, consume_operation_authorization};
 #[path = "api/php_fpm.rs"]
 mod php_fpm_api;
 use php_fpm_api::{__path_php_fpm, php_fpm};
+#[path = "api/observation.rs"]
+mod observation_api;
+use observation_api::{
+    __path_capabilities, __path_host, __path_nginx_sites, __path_services, capabilities, host,
+    nginx_sites, services,
+};
 #[path = "api/totp.rs"]
 mod totp_api;
 use totp_api::{
@@ -101,6 +112,7 @@ pub struct AppState {
     pub terminal: TerminalBroker,
     pub files: FileBroker,
     auth_limiter: AuthLimiter,
+    administrative_limiter: AuthLimiter,
     totp_limiter: AuthLimiter,
 }
 
@@ -122,6 +134,7 @@ impl AppState {
             terminal: TerminalBroker::default(),
             files: FileBroker::default(),
             auth_limiter: AuthLimiter::default(),
+            administrative_limiter: AuthLimiter::default(),
             totp_limiter: AuthLimiter::default(),
         }
     }
@@ -147,6 +160,8 @@ impl AppState {
         logout,
         session,
         reauthenticate,
+        enter_administrative_access,
+        leave_administrative_access,
         host,
         capabilities,
         services,
@@ -179,6 +194,7 @@ impl AppState {
         file_capability,
         create_file_session,
         close_file_session,
+        heartbeat_file_session,
         list_files,
         stat_file,
         read_text_file,
@@ -188,6 +204,8 @@ impl AppState {
     ),
     components(schemas(
         AccessSettingsView,
+        AdministrativeAccessRequest,
+        AdministrativeAccessState,
         AdditionalAuthProviderStatus,
         jw_contracts::AdditionalAuthPolicy,
         CapabilityStatus,
@@ -270,6 +288,7 @@ impl AppState {
         FileSessionRequest,
         FileSessionView,
         FileSessionCloseRequest,
+        FileSessionHeartbeatRequest,
         FilePathRequest,
         FileEntryView,
         FileKind,
@@ -296,12 +315,20 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/v1/auth/logout", post(logout))
         .route("/api/v1/auth/session", get(session))
         .route("/api/v1/auth/reauth", post(reauthenticate))
+        .route(
+            "/api/v1/auth/administrative-access",
+            post(enter_administrative_access).delete(leave_administrative_access),
+        )
         .route("/api/v1/terminal", get(terminal_capability))
         .route("/api/v1/terminal/tickets", post(issue_terminal_ticket))
         .route("/api/v1/terminal/connect", get(connect_terminal))
         .route("/api/v1/files", get(file_capability))
         .route("/api/v1/files/sessions", post(create_file_session))
         .route("/api/v1/files/sessions/close", post(close_file_session))
+        .route(
+            "/api/v1/files/sessions/heartbeat",
+            post(heartbeat_file_session),
+        )
         .route("/api/v1/files/list", post(list_files))
         .route("/api/v1/files/stat", post(stat_file))
         .route("/api/v1/files/read", post(read_text_file))
@@ -549,7 +576,7 @@ async fn reauthenticate(
 
     let issued = state
         .store
-        .issue_session(&subject, state.channel, now)
+        .issue_reauthenticated_session(old_token.as_str(), &subject, state.channel, now)
         .map_err(|_| ApiProblem::internal())?;
     let claim = match state
         .store
@@ -923,7 +950,7 @@ async fn create_file_session(
         .map_err(map_file_session_error)?;
     let view = FileSessionView {
         session_token: issued.token,
-        expires_at: format_unix_ms(issued.expires_at_unix_ms)?,
+        expires_at: session.absolute_expires_at,
         root_label: String::from("~"),
         assurance: file_assurance(None),
         limits: FileLimitsView::default(),
@@ -948,6 +975,32 @@ async fn close_file_session(
     state
         .files
         .close(
+            input.session_token.expose(),
+            jw_session_token.as_str(),
+            state.channel,
+            &origin,
+        )
+        .map_err(map_file_session_error)?;
+    Ok(StatusCode::NO_CONTENT.into_response())
+}
+
+#[utoipa::path(post, path = "/api/v1/files/sessions/heartbeat", request_body = FileSessionHeartbeatRequest, responses(
+    (status = 204, description = "File session and parent login session remain active"),
+    (status = 401, description = "Session rejected or expired", body = ProblemDetails),
+    (status = 403, description = "Origin or CSRF rejected", body = ProblemDetails)
+))]
+async fn heartbeat_file_session(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(input): Json<FileSessionHeartbeatRequest>,
+) -> Result<Response, ApiProblem> {
+    let now = unix_milliseconds()?;
+    let (jw_session_token, _) = current_session(&state, &headers, now)?;
+    require_csrf(&headers, jw_session_token.as_str())?;
+    let origin = require_exact_origin(&state, &headers)?;
+    let _lease = state
+        .files
+        .acquire(
             input.session_token.expose(),
             jw_session_token.as_str(),
             state.channel,
@@ -1401,83 +1454,6 @@ fn map_file_session_error(error: FileSessionError) -> ApiProblem {
     }
 }
 
-#[utoipa::path(get, path = "/api/v1/host", responses(
-    (status = 200, description = "Host observation", body = jw_contracts::HostObservation),
-    (status = 401, description = "Authentication required", body = ProblemDetails)
-))]
-async fn host(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> Result<Json<jw_contracts::HostObservation>, ApiProblem> {
-    let _session = current_session(&state, &headers, unix_milliseconds()?)?;
-    Ok(Json(observe_host(
-        &ObservationProfile::default(),
-        now_rfc3339()?,
-    )))
-}
-
-#[utoipa::path(get, path = "/api/v1/capabilities", responses(
-    (status = 200, description = "Read-only capability view", body = CapabilityView),
-    (status = 401, description = "Authentication required", body = ProblemDetails)
-))]
-async fn capabilities(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> Result<Json<CapabilityView>, ApiProblem> {
-    let _session = current_session(&state, &headers, unix_milliseconds()?)?;
-    let view = match state.ops.capabilities().await {
-        Ok(response) => CapabilityView {
-            opsd: CapabilityStatus::Available,
-            read_only: response.read_only,
-            supported_operations: response.supported_operations,
-            forensic_lockdown: response.forensic_lockdown,
-        },
-        Err(_) => CapabilityView {
-            opsd: CapabilityStatus::Unavailable,
-            read_only: true,
-            supported_operations: Vec::new(),
-            forensic_lockdown: false,
-        },
-    };
-    Ok(Json(view))
-}
-
-#[utoipa::path(get, path = "/api/v1/services", responses(
-    (status = 200, description = "Observed services", body = ServicesView),
-    (status = 401, description = "Authentication required", body = ProblemDetails)
-))]
-async fn services(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> Result<Json<ServicesView>, ApiProblem> {
-    let _session = current_session(&state, &headers, unix_milliseconds()?)?;
-    let observed_at = now_rfc3339()?;
-    tokio::task::spawn_blocking(move || {
-        observe_services(&ServiceObservationProfile::default(), observed_at)
-    })
-    .await
-    .map(Json)
-    .map_err(|_| ApiProblem::internal())
-}
-
-#[utoipa::path(get, path = "/api/v1/services/nginx/sites", responses(
-    (status = 200, description = "Nginx site inventory", body = NginxSitesView),
-    (status = 401, description = "Authentication required", body = ProblemDetails)
-))]
-async fn nginx_sites(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> Result<Json<NginxSitesView>, ApiProblem> {
-    let (_, session) = current_session(&state, &headers, unix_milliseconds()?)?;
-    let mutation_reason =
-        nginx_mutation_gate_reason(&state, &session.subject, session.additional_auth_policy).await;
-    Ok(Json(observe_nginx_with_mutation_gate(
-        &ObservationProfile::default(),
-        now_rfc3339()?,
-        mutation_reason.as_deref(),
-    )))
-}
-
 #[utoipa::path(get, path = "/api/v1/certificates", responses(
     (status = 200, description = "Sanitized Certbot certificate inventory", body = CertificateInventoryView),
     (status = 401, description = "Authentication required", body = ProblemDetails),
@@ -1580,6 +1556,7 @@ async fn plan_certbot_issue(
     let now = unix_milliseconds()?;
     let (token, session) = current_session(&state, &headers, now)?;
     require_csrf(&headers, token.as_str())?;
+    require_administrative_access(&session)?;
     if certbot_issue_gate_reason(&state).await.is_some() {
         return Err(ApiProblem::new(
             StatusCode::CONFLICT,
@@ -1622,6 +1599,7 @@ async fn approve_certbot_issue(
     let now = unix_milliseconds()?;
     let (token, session) = current_session(&state, &headers, now)?;
     require_csrf(&headers, token.as_str())?;
+    require_administrative_access(&session)?;
     consume_operation_authorization(
         &state,
         token.as_str(),
@@ -1682,6 +1660,7 @@ async fn plan_certbot_attach(
     let now = unix_milliseconds()?;
     let (token, session) = current_session(&state, &headers, now)?;
     require_csrf(&headers, token.as_str())?;
+    require_administrative_access(&session)?;
     if certbot_attach_gate_reason(&state).await.is_some() {
         return Err(ApiProblem::new(StatusCode::CONFLICT, "attach_unavailable"));
     }
@@ -1714,6 +1693,7 @@ async fn approve_certbot_attach(
     let now = unix_milliseconds()?;
     let (token, session) = current_session(&state, &headers, now)?;
     require_csrf(&headers, token.as_str())?;
+    require_administrative_access(&session)?;
     consume_operation_authorization(
         &state,
         token.as_str(),
@@ -1866,6 +1846,7 @@ async fn plan_certbot_renew_test(
     let now = unix_milliseconds()?;
     let (token, session) = current_session(&state, &headers, now)?;
     require_csrf(&headers, token.as_str())?;
+    require_administrative_access(&session)?;
     let plan = state
         .ops
         .plan_certbot_renew_test(session.subject, input)
@@ -1892,6 +1873,7 @@ async fn approve_certbot_renew_test(
     let now = unix_milliseconds()?;
     let (token, session) = current_session(&state, &headers, now)?;
     require_csrf(&headers, token.as_str())?;
+    require_administrative_access(&session)?;
     consume_operation_authorization(
         &state,
         token.as_str(),
@@ -1989,6 +1971,7 @@ async fn plan_nginx_site_state(
     let now = unix_milliseconds()?;
     let (token, session) = current_session(&state, &headers, now)?;
     require_csrf(&headers, token.as_str())?;
+    require_administrative_access(&session)?;
     let plan = state
         .ops
         .plan_nginx_site_state(session.subject, input)
@@ -2015,6 +1998,7 @@ async fn approve_nginx_site_state(
     let now = unix_milliseconds()?;
     let (token, session) = current_session(&state, &headers, now)?;
     require_csrf(&headers, token.as_str())?;
+    require_administrative_access(&session)?;
     consume_operation_authorization(
         &state,
         token.as_str(),
@@ -2094,6 +2078,7 @@ async fn plan_managed_config(
     let now = unix_milliseconds()?;
     let (token, session) = current_session(&state, &headers, now)?;
     require_csrf(&headers, token.as_str())?;
+    require_administrative_access(&session)?;
     let plan = state
         .ops
         .plan_managed_config(session.subject, input)
@@ -2120,6 +2105,7 @@ async fn approve_managed_config(
     let now = unix_milliseconds()?;
     let (token, session) = current_session(&state, &headers, now)?;
     require_csrf(&headers, token.as_str())?;
+    require_administrative_access(&session)?;
     consume_operation_authorization(
         &state,
         token.as_str(),

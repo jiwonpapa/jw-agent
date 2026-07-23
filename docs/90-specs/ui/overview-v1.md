@@ -16,7 +16,7 @@ Last reviewed: 2026-07-21
 - write/forensic-lockdown capability
 - canonical Linux subject, role, public/recovery access status
 - attention items
-- resource observations
+- CPU 200ms delta, memory와 root filesystem resource observations
 - Nginx site inventory
 - recent operation receipts
 
@@ -27,11 +27,12 @@ Last reviewed: 2026-07-21
 
 ## Layout
 
-1. identity/freshness/write state line
-2. prioritized Attention Queue
-3. resource status rail
-4. Nginx site table
-5. recent operation ledger
+1. 계정·현재 session과 management mode를 첫 화면에서 펼쳐 표시
+2. CPU·memory·root disk를 숫자, ring과 progress bar로 함께 표시하는 resource card rail
+3. 원인·영향·권장 조치를 함께 표시하며 여러 문제를 숨기지 않는 Attention Queue
+4. catalog 기반 주요 서비스 card grid
+5. Nginx site card grid
+6. 지원되는 typed 관리 작업 진입점과 펼칠 수 있는 최근 operation receipt
 
 ## Required states
 
@@ -62,6 +63,7 @@ Last reviewed: 2026-07-21
 - status text/icon in addition to color
 - focus remains stable after background refresh
 - live updates summarized, not announced per metric
+- 주요 section은 border panel로 분리하고 desktop은 가능한 항목을 2~5열로 배치
 
 ## Playwright acceptance
 
@@ -72,3 +74,5 @@ Last reviewed: 2026-07-21
 - no horizontal overflow at 390×844
 - keyboard reaches every action
 - light/dark snapshots and axe critical/serious 0
+- CPU·memory·root disk의 숫자와 접근 가능한 graph label 일치
+- 최근 receipt를 펼치면 actor, operation type, before/after digest와 stage가 표시

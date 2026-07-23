@@ -18,15 +18,18 @@ import {
 import { useState, type ReactNode } from "react";
 
 import { logout } from "../shared/api/client";
+import {
+  accessModeLabel,
+  AdministrativeAccessProvider,
+  SessionAccessPanel,
+} from "../features/auth/administrative-access";
 import { FileSessionProvider } from "../features/files/file-session";
 import { TerminalSessionProvider } from "../features/terminal/terminal-session";
 import { hostQueryOptions, sessionQueryOptions } from "../shared/api/queries";
 import { CATALOG_NAV_ITEM, NAV_GROUPS, PRODUCT, ROLE_LABELS } from "../shared/content/copy";
-import { formatDateTime } from "../shared/domain/format";
 import { Button } from "../shared/ui/button";
 import { cn } from "../shared/ui/cn";
 import { Sheet } from "../shared/ui/sheet";
-import { StatusMark } from "../shared/ui/status-mark";
 
 const navigationIcons = {
   overview: Activity,
@@ -119,6 +122,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   return (
     <TerminalSessionProvider>
       <FileSessionProvider>
+        <AdministrativeAccessProvider>
         <div className="app-shell">
       <a
         href="#main-content"
@@ -159,7 +163,7 @@ export function AppShell({ children }: { children: ReactNode }) {
           <UserRound aria-hidden="true" className="size-4 shrink-0" />
           <span className="hidden min-w-0 text-left sm:block">
             <span className="block truncate text-sm font-semibold text-text">{session.subject.username}</span>
-            <span className="block truncate text-[0.6875rem] text-muted">JW Agent {ROLE_LABELS[session.subject.role]}</span>
+            <span className="block truncate text-[0.6875rem] text-muted">{accessModeLabel(session)}</span>
           </span>
           <ChevronDown aria-hidden="true" className="hidden size-4 shrink-0 text-muted sm:block" />
         </Button>
@@ -211,18 +215,7 @@ export function AppShell({ children }: { children: ReactNode }) {
         title={session.subject.username}
         description={`JW Agent ${ROLE_LABELS[session.subject.role]} · Linux UID ${String(session.subject.uid)}`}
       >
-        <StatusMark
-          label={session.subject.uid === 0 ? "root 로그인 차단 대상" : "비-root Linux 계정"}
-          tone={session.subject.uid === 0 ? "danger" : "success"}
-        />
-        <dl className="mt-6 divide-y divide-border border-y border-border text-sm">
-          <SessionDetail label="JW Agent 권한" value={ROLE_LABELS[session.subject.role]} />
-          <SessionDetail label="Linux 계정" value={`${session.subject.username} · UID ${String(session.subject.uid)}`} />
-          <SessionDetail label="root 권한" value="웹 root 로그인 없음 · typed opsd 작업만 별도 승인" />
-          <SessionDetail label="접속 경로" value={session.ingress === "public" ? "공개 HTTPS" : "Loopback · SSH 터널"} />
-          <SessionDetail label="세션 만료" value={formatDateTime(session.idleExpiresAt)} />
-          <SessionDetail label="관찰 시각" value={observedAt === undefined ? "확인 중" : formatDateTime(observedAt)} />
-        </dl>
+        <SessionAccessPanel session={session} observedAt={observedAt} showHeading={false} />
         <Button
           className="mt-6 w-full"
           variant="secondary"
@@ -234,16 +227,8 @@ export function AppShell({ children }: { children: ReactNode }) {
         </Button>
       </Sheet>
         </div>
+        </AdministrativeAccessProvider>
       </FileSessionProvider>
     </TerminalSessionProvider>
-  );
-}
-
-function SessionDetail({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="py-4">
-      <dt className="text-xs text-muted">{label}</dt>
-      <dd className="mt-1 leading-6 text-text">{value}</dd>
-    </div>
   );
 }

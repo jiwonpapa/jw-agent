@@ -10,10 +10,10 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use jw_contracts::{
-    FILE_IDLE_TIMEOUT_SECONDS, FILE_MAX_LIFETIME_SECONDS, FILE_MAX_UPLOAD_BYTES,
-    FILE_SESSION_TOKEN_BYTES, FILE_UPLOAD_PLAN_TOKEN_BYTES, FILE_UPLOAD_PLAN_TTL_SECONDS,
-    FileListView, FileStatView, FileTextView, FileUploadTargetState, IngressChannel, SecretString,
-    Subject, sha256_digest, validate_digest,
+    FILE_IDLE_TIMEOUT_SECONDS, FILE_MAX_UPLOAD_BYTES, FILE_SESSION_TOKEN_BYTES,
+    FILE_UPLOAD_PLAN_TOKEN_BYTES, FILE_UPLOAD_PLAN_TTL_SECONDS, FileListView, FileStatView,
+    FileTextView, FileUploadTargetState, IngressChannel, SecretString, Subject, sha256_digest,
+    validate_digest,
 };
 use nix::sys::stat::Mode;
 use nix::unistd::mkfifo;
@@ -31,6 +31,7 @@ const TOKEN_BYTES: usize = 32;
 const MAX_GLOBAL_SESSIONS: usize = 8;
 const AUTH_TIMEOUT: Duration = Duration::from_secs(8);
 const PROCESS_EXIT_TIMEOUT: Duration = Duration::from_secs(2);
+const SESSION_CHECK_INTERVAL: Duration = Duration::from_secs(30);
 
 #[derive(Clone, Default)]
 pub struct FileBroker {
@@ -56,7 +57,6 @@ pub struct FileSessionIssue<'a> {
 pub struct IssuedFileSession {
     pub token: SecretString,
     pub session_id: String,
-    pub expires_at_unix_ms: i64,
 }
 
 pub struct IssuedUploadPlan {
@@ -83,9 +83,9 @@ pub struct FileLease {
 struct FileSession {
     session_id: String,
     jw_session_binding: [u8; 32],
+    jw_session_token: Zeroizing<String>,
     ingress: IngressChannel,
     origin: String,
-    started: Instant,
     last_activity: Mutex<Instant>,
     close_reason: Mutex<String>,
     runtime: tokio::sync::Mutex<SftpRuntime>,
@@ -237,9 +237,9 @@ impl FileBroker {
         let session = Arc::new(FileSession {
             session_id: session_id.clone(),
             jw_session_binding: binding,
+            jw_session_token: Zeroizing::new(issue.jw_session_token.to_owned()),
             ingress: issue.ingress,
             origin: issue.origin,
-            started: Instant::now(),
             last_activity: Mutex::new(Instant::now()),
             close_reason: Mutex::new(String::from("broker_dropped")),
             runtime: tokio::sync::Mutex::new(runtime),
@@ -261,14 +261,9 @@ impl FileBroker {
             state.sessions.insert(token_digest, session);
         }
         self.schedule_expiry(token_digest, &session_id);
-        let expires_at_unix_ms = issue.now_unix_ms.saturating_add(
-            i64::try_from(FILE_MAX_LIFETIME_SECONDS.saturating_mul(1_000))
-                .map_err(|_| FileSessionError::Storage)?,
-        );
         Ok(IssuedFileSession {
             token: SecretString::new(token.to_string()),
             session_id,
-            expires_at_unix_ms,
         })
     }
 
@@ -520,7 +515,7 @@ impl FileBroker {
         let expected_id = session_id.to_owned();
         tokio::spawn(async move {
             loop {
-                tokio::time::sleep(Duration::from_secs(FILE_IDLE_TIMEOUT_SECONDS)).await;
+                tokio::time::sleep(SESSION_CHECK_INTERVAL).await;
                 let mut state = match broker.inner.lock() {
                     Ok(state) => state,
                     Err(_) => return,
@@ -905,12 +900,24 @@ fn cleanup_expired(state: &mut FileState) {
 }
 
 fn session_expired(session: &FileSession) -> bool {
-    if session.started.elapsed() >= Duration::from_secs(FILE_MAX_LIFETIME_SECONDS) {
+    let idle = session.last_activity.lock().map_or(true, |last| {
+        last.elapsed() >= Duration::from_secs(FILE_IDLE_TIMEOUT_SECONDS)
+    });
+    if idle {
         return true;
     }
-    session.last_activity.lock().map_or(true, |last| {
-        last.elapsed() >= Duration::from_secs(FILE_IDLE_TIMEOUT_SECONDS)
-    })
+    let now = match unix_milliseconds() {
+        Ok(now) => now,
+        Err(_) => return true,
+    };
+    !matches!(
+        session.store.authenticate_session(
+            session.jw_session_token.as_str(),
+            session.ingress,
+            now,
+        ),
+        Ok(Some(view)) if view.subject.uid > 0
+    )
 }
 
 fn set_close_reason(session: &FileSession, reason: &str) {

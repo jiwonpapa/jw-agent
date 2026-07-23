@@ -4,11 +4,14 @@ import {
   AlertCircle,
   ArrowRight,
   CheckCircle2,
+  ChevronDown,
   Clock3,
+  Cpu,
   HardDrive,
   MemoryStick,
+  RotateCcw,
   Server,
-  ShieldCheck,
+  SlidersHorizontal,
   Timer,
   TriangleAlert,
 } from "lucide-react";
@@ -21,7 +24,7 @@ import {
   sessionQueryOptions,
 } from "../../shared/api/queries";
 import type { OperationStage } from "../../shared/api/types";
-import { OBSERVATION_LABELS, ROLE_LABELS } from "../../shared/content/copy";
+import { OBSERVATION_LABELS } from "../../shared/content/copy";
 import { formatBytes, formatDateTime, formatDuration } from "../../shared/domain/format";
 import { AssuranceMark } from "../../shared/ui/assurance";
 import { Button } from "../../shared/ui/button";
@@ -29,6 +32,7 @@ import { Skeleton } from "../../shared/ui/skeleton";
 import { StatusMark, type StatusTone } from "../../shared/ui/status-mark";
 import { SurfaceState } from "../../shared/ui/surface-state";
 import { WorkspaceHeader } from "../../shared/ui/workspace-header";
+import { SessionAccessPanel } from "../auth/administrative-access";
 import { ServiceOverview } from "../services/service-overview";
 
 const observationTone = {
@@ -69,17 +73,10 @@ export function OverviewScreen() {
       />
 
       {session === undefined ? null : (
-        <div className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-border py-3 text-xs text-muted">
-          <span className="inline-flex items-center gap-2 font-medium text-text">
-            <ShieldCheck aria-hidden="true" className="size-4 text-action" />
-            {session.subject.username} · JW Agent {ROLE_LABELS[session.subject.role]}
-          </span>
-          <span>Linux UID {String(session.subject.uid)} · 비-root</span>
-          <span>{session.ingress === "public" ? "공개 HTTPS" : "SSH 복구 접속"}</span>
-        </div>
+        <div className="mt-6"><SessionAccessPanel session={session} observedAt={host.data?.observedAt} /></div>
       )}
 
-      <section className="py-7" aria-labelledby="identity-heading">
+      <section className="mt-6 rounded-panel border border-border bg-surface p-5" aria-labelledby="identity-heading">
         <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <h2 id="identity-heading" className="text-sm font-semibold text-text">
@@ -97,7 +94,7 @@ export function OverviewScreen() {
 
         {host.isPending ? (
           <div className="mt-5 grid gap-px overflow-hidden rounded-panel border border-border bg-border sm:grid-cols-2 lg:grid-cols-4">
-            {Array.from({ length: 4 }).map((_, index) => (
+            {Array.from({ length: 5 }).map((_, index) => (
               <div key={index} className="bg-surface p-4">
                 <Skeleton className="h-4 w-20" />
                 <Skeleton className="mt-3 h-6 w-28" />
@@ -112,12 +109,22 @@ export function OverviewScreen() {
             action={{ label: "다시 관찰", onClick: () => void host.refetch() }}
           />
         ) : (
-          <dl className="mt-5 grid gap-px overflow-hidden rounded-panel border border-border bg-border sm:grid-cols-2 lg:grid-cols-4">
+          <dl className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
             <Metric
               icon={Server}
               label="호스트"
               value={host.data.hostname ?? "알 수 없음"}
               detail={host.data.osPrettyName ?? host.data.osId ?? "OS 정보 없음"}
+            />
+            <Metric
+              icon={Cpu}
+              label="CPU"
+              value={host.data.cpuUsagePercent == null ? "알 수 없음" : `${String(Math.round(host.data.cpuUsagePercent))}% 사용`}
+              detail={host.data.logicalCpuCount == null
+                ? "논리 CPU 수 없음"
+                : `${String(host.data.logicalCpuCount)} vCPU · 1분 부하 ${host.data.loadAverageOne?.toFixed(2) ?? "없음"}`}
+              meterValue={host.data.cpuUsagePercent ?? null}
+              meterTone={usageTone(host.data.cpuUsagePercent ?? null, 80, 95)}
             />
             <Metric
               icon={MemoryStick}
@@ -148,16 +155,14 @@ export function OverviewScreen() {
               label="업타임"
               value={formatDuration(host.data.uptimeSeconds)}
               detail={
-                host.data.loadAverageOne === null || host.data.loadAverageOne === undefined
-                  ? "부하 관찰값 없음"
-                  : `1분 부하 ${host.data.loadAverageOne.toFixed(2)}`
+                host.data.kernelRelease ?? "커널 정보 없음"
               }
             />
           </dl>
         )}
       </section>
 
-      <section className="border-t border-border py-7" aria-labelledby="attention-heading">
+      <section className="mt-6 rounded-panel border border-border bg-surface p-5" aria-labelledby="attention-heading">
         <div className="flex items-center gap-3">
           <TriangleAlert aria-hidden="true" className="size-5 text-muted" />
           <div>
@@ -177,14 +182,6 @@ export function OverviewScreen() {
             description="알 수 없는 상태를 정상으로 처리하지 않습니다. 개별 화면에서 다시 관찰해 주세요."
             tone="warning"
           />
-        ) : host.data.status === "partial" ? (
-          <div className="mt-5 flex flex-col gap-4 border-y border-warning/35 py-4 sm:flex-row sm:items-center sm:justify-between">
-            <div>
-              <p className="text-sm font-semibold text-text">호스트 정보가 일부만 관찰되었습니다</p>
-              <p className="mt-1 text-sm text-muted">누락된 항목을 0 또는 정상으로 해석하지 않습니다.</p>
-            </div>
-            <StatusMark label="부분 관찰" tone="warning" />
-          </div>
         ) : host.data.status === "unsupported_platform" ? (
           <div className="mt-5">
             <SurfaceState
@@ -193,32 +190,20 @@ export function OverviewScreen() {
               description="Ubuntu 24.04 LTS 지원 프로필과 일치하지 않아 변경 기능을 제공하지 않습니다."
             />
           </div>
-        ) : diskUsage !== null && diskUsage >= 90 ? (
-          <AttentionItem
-            icon={HardDrive}
-            title={`루트 디스크 사용률 ${String(Math.round(diskUsage))}%`}
-            description="90% 이상입니다. 로그·백업·임시파일 증가 원인을 확인해 주세요."
-            tone="danger"
-          />
-        ) : failedServices.length > 0 ? (
-          <AttentionItem
-            icon={AlertCircle}
-            title={`실패한 서비스 ${String(failedServices.length)}개`}
-            description={failedServices.slice(0, 3).map((service) => service.displayName).join(" · ")}
-            tone="danger"
-            href="/services"
-          />
         ) : (
-          <div className="mt-5 flex items-center gap-2 border-y border-border py-5 text-sm text-muted">
-            <CheckCircle2 aria-hidden="true" className="size-4 text-success" />
-            현재 즉시 확인할 문제가 없습니다.
-          </div>
+          <AttentionQueue
+            partial={host.data.status === "partial"}
+            cpuUsage={host.data.cpuUsagePercent ?? null}
+            memoryUsage={memoryUsage}
+            diskUsage={diskUsage}
+            failedServices={failedServices.map((service) => service.displayName)}
+          />
         )}
       </section>
 
       <ServiceOverview />
 
-      <section className="border-t border-border py-7" aria-labelledby="nginx-heading">
+      <section className="mt-6 rounded-panel border border-border bg-surface p-5" aria-labelledby="nginx-heading">
         <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
           <div>
             <h2 id="nginx-heading" className="text-sm font-semibold text-text">
@@ -261,9 +246,9 @@ export function OverviewScreen() {
         ) : nginx.data.sites.length === 0 ? (
           <SurfaceState kind="empty" title="발견된 사이트가 없습니다" description="Nginx는 관찰됐지만 site 항목이 비어 있습니다." />
         ) : (
-          <div className="mt-5 divide-y divide-border border-y border-border">
+          <div className="mt-5 grid gap-3 sm:grid-cols-2">
             {nginx.data.sites.slice(0, 4).map((site) => (
-              <div key={site.name} className="flex min-h-14 items-center justify-between gap-4 py-3">
+              <div key={site.name} className="flex min-h-16 items-center justify-between gap-4 rounded-control border border-border bg-subtle/35 p-3">
                 <div className="min-w-0">
                   <p className="truncate text-sm font-medium text-text">{site.name}</p>
                   <p className="mt-0.5 text-xs text-muted">
@@ -280,7 +265,7 @@ export function OverviewScreen() {
         )}
       </section>
 
-      <section className="border-t border-border py-7" aria-labelledby="ledger-heading">
+      <section className="mt-6 rounded-panel border border-border bg-surface p-5" aria-labelledby="ledger-heading">
         <div className="flex items-center gap-3">
           <Clock3 aria-hidden="true" className="size-5 text-muted" />
           <div>
@@ -289,6 +274,12 @@ export function OverviewScreen() {
             </h2>
             <p className="mt-1 text-sm text-muted">현재 Linux 계정이 실행한 typed operation의 최신 결과입니다.</p>
           </div>
+        </div>
+        <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4" aria-label="지원되는 관리 작업">
+          <ActionLink to="/services/nginx" title="웹 서버 설정" description="Nginx site 상태·설정 파일" />
+          <ActionLink to="/services/php-fpm" title="PHP runtime 설정" description="php.ini·문법 검사" />
+          <ActionLink to="/certificates" title="TLS 수명 주기" description="인증서 발급·연결·갱신 시험" />
+          <ActionLink to="/files" title="파일 안전 업로드" description="SFTP 홈 조회·원자적 업로드" />
         </div>
         {activity.isPending ? (
           <div className="mt-5 space-y-2">
@@ -305,22 +296,62 @@ export function OverviewScreen() {
         ) : activity.data.operations.length === 0 ? (
           <div className="mt-5 border-y border-border py-5 text-sm text-muted">아직 실행된 typed operation이 없습니다.</div>
         ) : (
-          <ul className="mt-5 divide-y divide-border border-y border-border">
+          <ul className="mt-5 grid gap-3 lg:grid-cols-2">
             {activity.data.operations.map((operation) => (
-              <li key={operation.operationId} className="flex min-h-16 items-center justify-between gap-4 py-3">
-                <div className="min-w-0">
-                  <p className="truncate text-sm font-semibold text-text">{operation.displayName}</p>
-                  <p className="mt-1 truncate text-xs text-muted">
-                    {operation.actor.username} · {formatDateTime(operation.recordedAt)} · {operation.operationType}
-                  </p>
-                </div>
-                <StatusMark label={operationStageLabel(operation.terminalState)} tone={operationStageTone(operation.terminalState)} />
+              <li key={operation.operationId} className="min-w-0 rounded-control border border-border bg-subtle/30">
+                <details className="group">
+                  <summary className="flex min-h-20 cursor-pointer list-none items-center justify-between gap-4 p-4 [&::-webkit-details-marker]:hidden">
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-semibold text-text">{operation.displayName}</p>
+                      <p className="mt-1 truncate text-xs text-muted">
+                        {operation.actor.username} · {formatDateTime(operation.recordedAt)}
+                      </p>
+                    </div>
+                    <div className="flex shrink-0 items-center gap-3">
+                      <StatusMark label={operationStageLabel(operation.terminalState)} tone={operationStageTone(operation.terminalState)} />
+                      <ChevronDown aria-hidden="true" className="size-4 text-muted transition-transform group-open:rotate-180" />
+                    </div>
+                  </summary>
+                  <div className="border-t border-border p-4 text-xs text-muted">
+                    <dl className="grid gap-3 sm:grid-cols-2">
+                      <OperationField label="작업 유형" value={operation.operationType} mono />
+                      <OperationField label="작업 ID" value={operation.operationId} mono />
+                      <OperationField label="변경 전 digest" value={operation.beforeDigest} mono />
+                      <OperationField label="변경 후 digest" value={operation.afterDigest} mono />
+                    </dl>
+                    <ol className="mt-4 space-y-2 border-l border-border pl-4">
+                      {operation.stages.map((stage) => (
+                        <li key={stage.sequence} className="flex items-center justify-between gap-3">
+                          <span>{operationStageLabel(stage.stage)} · {stage.resultCode}</span>
+                          <time className="shrink-0">{formatDateTime(stage.recordedAt)}</time>
+                        </li>
+                      ))}
+                    </ol>
+                    {operation.rollbackResult ? (
+                      <p className="mt-4 flex items-center gap-2 text-warning"><RotateCcw aria-hidden="true" className="size-4" />원복 결과: {operation.rollbackResult}</p>
+                    ) : null}
+                  </div>
+                </details>
               </li>
             ))}
           </ul>
         )}
       </section>
     </div>
+  );
+}
+
+function ActionLink({ to, title, description }: {
+  to: "/services/nginx" | "/services/php-fpm" | "/certificates" | "/files";
+  title: string;
+  description: string;
+}) {
+  return (
+    <Link to={to} aria-label={`${title} 관리 화면`} className="group flex min-h-20 items-center gap-3 rounded-control border border-border bg-subtle/30 p-3 transition-colors hover:border-action/40 hover:bg-action/5">
+      <span className="grid size-9 shrink-0 place-items-center rounded-control bg-surface text-action ring-1 ring-border"><SlidersHorizontal aria-hidden="true" className="size-4" /></span>
+      <span className="min-w-0 flex-1"><span className="block text-sm font-semibold text-text">{title}</span><span className="mt-1 block truncate text-xs text-muted">{description}</span></span>
+      <ArrowRight aria-hidden="true" className="size-4 shrink-0 text-muted transition-transform group-hover:translate-x-0.5 group-hover:text-action" />
+    </Link>
   );
 }
 
@@ -340,13 +371,18 @@ function Metric({
   meterTone?: "info" | "warning" | "danger";
 }) {
   return (
-    <div className="bg-surface p-4">
-      <dt className="flex items-center gap-2 text-xs font-medium text-muted">
-        <Icon aria-hidden="true" className="size-4" />
-        {label}
-      </dt>
-      <dd className="mt-3 truncate text-lg font-semibold text-text">{value}</dd>
-      <p className="mt-1 truncate text-xs text-muted">{detail}</p>
+    <div className="min-w-0 rounded-control border border-border bg-subtle/35 p-4">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <dt className="flex items-center gap-2 text-xs font-medium text-muted">
+            <Icon aria-hidden="true" className="size-4" />
+            {label}
+          </dt>
+          <dd className="mt-3 truncate text-lg font-semibold text-text">{value}</dd>
+          <p className="mt-1 truncate text-xs text-muted">{detail}</p>
+        </div>
+        {meterValue === undefined || meterValue === null ? null : <ResourceRing value={meterValue} tone={meterTone} label={label} />}
+      </div>
       {meterValue === undefined || meterValue === null ? null : (
         <progress
           className="resource-meter mt-3 w-full"
@@ -360,6 +396,41 @@ function Metric({
       )}
     </div>
   );
+}
+
+function ResourceRing({ value, tone, label }: { value: number; tone: "info" | "warning" | "danger"; label: string }) {
+  const bounded = Math.min(100, Math.max(0, value));
+  const circumference = 2 * Math.PI * 18;
+  const color = tone === "danger" ? "text-danger" : tone === "warning" ? "text-warning" : "text-info";
+  return (
+    <div className="relative grid size-12 shrink-0 place-items-center" role="img" aria-label={`${label} ${String(Math.round(bounded))}%`}>
+      <svg viewBox="0 0 44 44" className="size-12 -rotate-90" aria-hidden="true">
+        <circle cx="22" cy="22" r="18" fill="none" stroke="currentColor" strokeWidth="4" className="text-border" />
+        <circle cx="22" cy="22" r="18" fill="none" stroke="currentColor" strokeWidth="4" strokeLinecap="round" strokeDasharray={circumference} strokeDashoffset={circumference * (1 - bounded / 100)} className={color} />
+      </svg>
+      <span className="absolute text-[0.625rem] font-semibold text-text">{Math.round(bounded)}%</span>
+    </div>
+  );
+}
+
+function AttentionQueue({ partial, cpuUsage, memoryUsage, diskUsage, failedServices }: {
+  partial: boolean;
+  cpuUsage: number | null;
+  memoryUsage: number | null;
+  diskUsage: number | null;
+  failedServices: string[];
+}) {
+  const issues = [
+    partial ? { icon: AlertCircle, title: "일부 호스트 정보가 누락됨", description: "원인: 관찰 파일을 읽지 못했습니다. 영향: 누락값을 정상으로 판정할 수 없습니다. 조치: 호스트 상태를 다시 관찰하세요.", tone: "warning" as const } : null,
+    diskUsage !== null && diskUsage >= 80 ? { icon: HardDrive, title: `루트 디스크 ${String(Math.round(diskUsage))}% 사용`, description: diskUsage >= 90 ? "영향: 로그·DB 쓰기 실패로 서비스가 중단될 수 있습니다. 조치: 로그·백업·임시파일 증가 원인을 즉시 확인하세요." : "영향: 여유 공간 감소가 진행 중입니다. 조치: 증가 원인을 확인하고 90% 전에 정리하세요.", tone: diskUsage >= 90 ? "danger" as const : "warning" as const } : null,
+    memoryUsage !== null && memoryUsage >= 88 ? { icon: MemoryStick, title: `메모리 ${String(Math.round(memoryUsage))}% 사용`, description: "영향: swap 증가 또는 OOM 종료 가능성이 있습니다. 조치: 사용량이 큰 프로세스와 최근 부하를 확인하세요.", tone: memoryUsage >= 96 ? "danger" as const : "warning" as const } : null,
+    cpuUsage !== null && cpuUsage >= 80 ? { icon: Cpu, title: `CPU ${String(Math.round(cpuUsage))}% 사용`, description: "영향: 요청 지연과 timeout이 발생할 수 있습니다. 조치: 터미널에서 상위 프로세스와 트래픽 급증 여부를 확인하세요.", tone: cpuUsage >= 95 ? "danger" as const : "warning" as const } : null,
+    failedServices.length > 0 ? { icon: AlertCircle, title: `실패한 서비스 ${String(failedServices.length)}개`, description: `영향: ${failedServices.slice(0, 3).join(" · ")} 기능이 중단됐을 수 있습니다. 조치: 서비스 상세에서 실제 unit 상태를 확인하세요.`, tone: "danger" as const, href: "/services" as const } : null,
+  ].filter((issue) => issue !== null);
+  if (issues.length === 0) {
+    return <div className="mt-5 flex items-center gap-2 rounded-control border border-success/25 bg-success/5 p-4 text-sm text-muted"><CheckCircle2 aria-hidden="true" className="size-4 text-success" />현재 관찰 기준으로 즉시 조치할 문제가 없습니다.</div>;
+  }
+  return <div className="mt-5 grid gap-3 lg:grid-cols-2">{issues.map((issue) => <AttentionItem key={issue.title} {...issue} />)}</div>;
 }
 
 function AttentionItem({
@@ -376,7 +447,7 @@ function AttentionItem({
   href?: "/services";
 }) {
   return (
-    <div className="mt-5 flex flex-col gap-4 border-y border-border py-4 sm:flex-row sm:items-center sm:justify-between">
+    <div className="flex min-w-0 flex-col gap-4 rounded-control border border-border bg-subtle/35 p-4 sm:flex-row sm:items-center sm:justify-between">
       <div className="flex min-w-0 items-start gap-3">
         <Icon aria-hidden="true" className={tone === "danger" ? "mt-0.5 size-5 shrink-0 text-danger" : "mt-0.5 size-5 shrink-0 text-warning"} />
         <div className="min-w-0">
@@ -393,6 +464,10 @@ function AttentionItem({
       )}
     </div>
   );
+}
+
+function OperationField({ label, value, mono = false }: { label: string; value: string; mono?: boolean }) {
+  return <div className="min-w-0"><dt>{label}</dt><dd className={mono ? "mt-1 truncate font-mono text-text" : "mt-1 text-text"}>{value}</dd></div>;
 }
 
 function usagePercent(total: number, available: number): number | null {

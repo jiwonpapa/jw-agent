@@ -63,6 +63,8 @@ pub struct HostObservation {
     pub architecture: String,
     pub kernel_release: Option<String>,
     pub uptime_seconds: Option<u64>,
+    pub logical_cpu_count: Option<u32>,
+    pub cpu_usage_percent: Option<f64>,
     pub load_average_one: Option<f64>,
     pub memory: Option<MemoryObservation>,
     pub root_disk: Option<DiskObservation>,

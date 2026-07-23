@@ -23,6 +23,7 @@ pub struct ObservationProfile {
     pub hostname: PathBuf,
     pub kernel_release: PathBuf,
     pub uptime: PathBuf,
+    pub cpu_stat: PathBuf,
     pub load_average: PathBuf,
     pub meminfo: PathBuf,
     pub nginx_available: PathBuf,
@@ -36,6 +37,7 @@ impl Default for ObservationProfile {
             hostname: PathBuf::from("/etc/hostname"),
             kernel_release: PathBuf::from("/proc/sys/kernel/osrelease"),
             uptime: PathBuf::from("/proc/uptime"),
+            cpu_stat: PathBuf::from("/proc/stat"),
             load_average: PathBuf::from("/proc/loadavg"),
             meminfo: PathBuf::from("/proc/meminfo"),
             nginx_available: PathBuf::from("/etc/nginx/sites-available"),
@@ -44,7 +46,16 @@ impl Default for ObservationProfile {
     }
 }
 
-pub fn observe_host(profile: &ObservationProfile, observed_at: String) -> HostObservation {
+pub async fn observe_host(profile: &ObservationProfile, observed_at: String) -> HostObservation {
+    let first_cpu = read_bounded(&profile.cpu_stat).and_then(|value| parse_cpu_sample(&value));
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    let second_cpu = read_bounded(&profile.cpu_stat).and_then(|value| parse_cpu_sample(&value));
+    let cpu_usage_percent = first_cpu
+        .zip(second_cpu)
+        .and_then(|(first, second)| cpu_usage_percent(first, second));
+    let logical_cpu_count = std::thread::available_parallelism()
+        .ok()
+        .and_then(|value| u32::try_from(value.get()).ok());
     let os = match read_bounded(&profile.os_release) {
         Some(value) => parse_key_values(&value),
         None => BTreeMap::new(),
@@ -80,10 +91,57 @@ pub fn observe_host(profile: &ObservationProfile, observed_at: String) -> HostOb
         architecture: std::env::consts::ARCH.to_owned(),
         kernel_release,
         uptime_seconds,
+        logical_cpu_count,
+        cpu_usage_percent,
         load_average_one,
         memory,
         root_disk,
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct CpuSample {
+    total: u64,
+    idle: u64,
+}
+
+fn parse_cpu_sample(value: &str) -> Option<CpuSample> {
+    let mut values = value.lines().next()?.split_whitespace();
+    if values.next()? != "cpu" {
+        return None;
+    }
+    let user = values.next()?.parse::<u64>().ok()?;
+    let nice = values.next()?.parse::<u64>().ok()?;
+    let system = values.next()?.parse::<u64>().ok()?;
+    let idle = values.next()?.parse::<u64>().ok()?;
+    let io_wait = values.next()?.parse::<u64>().ok()?;
+    let irq = values.next()?.parse::<u64>().ok()?;
+    let soft_irq = values.next()?.parse::<u64>().ok()?;
+    let steal = values
+        .next()
+        .and_then(|item| item.parse::<u64>().ok())
+        .map_or(0, |value| value);
+    let total = user
+        .checked_add(nice)?
+        .checked_add(system)?
+        .checked_add(idle)?
+        .checked_add(io_wait)?
+        .checked_add(irq)?
+        .checked_add(soft_irq)?
+        .checked_add(steal)?;
+    Some(CpuSample {
+        total,
+        idle: idle.checked_add(io_wait)?,
+    })
+}
+
+fn cpu_usage_percent(first: CpuSample, second: CpuSample) -> Option<f64> {
+    let total = second.total.checked_sub(first.total)?;
+    let idle = second.idle.checked_sub(first.idle)?;
+    if total == 0 || idle > total {
+        return None;
+    }
+    Some(((total - idle) as f64 / total as f64) * 100.0)
 }
 
 pub fn observe_nginx_with_mutation_gate(
@@ -414,7 +472,35 @@ mod tests {
         sha256_digest,
     };
 
-    use super::{ObservationProfile, collect_sites, inspect_nginx_preconditions};
+    use super::{
+        CpuSample, ObservationProfile, collect_sites, cpu_usage_percent,
+        inspect_nginx_preconditions, parse_cpu_sample,
+    };
+
+    #[test]
+    fn cpu_usage_uses_bounded_proc_stat_deltas() {
+        let first = parse_cpu_sample("cpu  100 2 30 800 10 3 5 0\n");
+        let second = parse_cpu_sample("cpu  130 2 40 850 10 3 5 0\n");
+        assert_eq!(
+            first,
+            Some(CpuSample {
+                total: 950,
+                idle: 810,
+            })
+        );
+        let percent = first
+            .zip(second)
+            .and_then(|(start, end)| cpu_usage_percent(start, end));
+        assert!(percent.is_some_and(|value| (value - 44.444_444).abs() < 0.001));
+        assert!(parse_cpu_sample("intr 1 2 3\n").is_none());
+        assert!(
+            cpu_usage_percent(
+                CpuSample { total: 1, idle: 1 },
+                CpuSample { total: 1, idle: 1 }
+            )
+            .is_none()
+        );
+    }
 
     #[test]
     fn nginx_inventory_excludes_exact_internal_temporary_files() -> Result<(), String> {

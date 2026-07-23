@@ -135,6 +135,29 @@ export async function logout(): Promise<void> {
   if (!response.ok) throw new ApiError(error, response);
 }
 
+export async function enterAdministrativeAccess(input: {
+  password: string;
+  additionalAuthCode?: string;
+}): Promise<SessionView> {
+  const { data, error, response } = await api.POST("/api/v1/auth/administrative-access", {
+    body: {
+      password: input.password,
+      additionalAuthCode: input.additionalAuthCode ?? null,
+    },
+    headers: mutationHeaders(),
+  });
+  if (data !== undefined) return rememberSession(data);
+  throw new ApiError(error, response);
+}
+
+export async function leaveAdministrativeAccess(): Promise<SessionView> {
+  const { data, error, response } = await api.DELETE("/api/v1/auth/administrative-access", {
+    headers: mutationHeaders(),
+  });
+  if (data !== undefined) return rememberSession(data);
+  throw new ApiError(error, response);
+}
+
 export async function getHost(signal?: AbortSignal): Promise<HostObservation> {
   const { data, error, response } = await api.GET("/api/v1/host", { signal: signal ?? null });
   if (data !== undefined) return data;
@@ -580,6 +603,15 @@ export async function createFileSession(input: FileSessionRequest): Promise<File
 
 export async function closeFileSession(sessionToken: string): Promise<void> {
   const { error, response } = await api.POST("/api/v1/files/sessions/close", {
+    body: { sessionToken },
+    headers: mutationHeaders(),
+  });
+  if (response.ok) return;
+  throw new ApiError(error, response);
+}
+
+export async function heartbeatFileSession(sessionToken: string): Promise<void> {
+  const { error, response } = await api.POST("/api/v1/files/sessions/heartbeat", {
     body: { sessionToken },
     headers: mutationHeaders(),
   });

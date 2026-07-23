@@ -391,6 +391,8 @@ test "$(systemctl show -p MemoryDenyWriteExecute --value jw-opsd.service)" = yes
 systemctl cat jw-opsd.service | grep -Fq 'IPAddressDeny=any'
 systemctl cat jw-certd@.service | grep -Fq 'RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6'
 ! systemctl cat jw-certd@.service | grep -Fq 'IPAddressDeny=any'
+systemctl cat jw-authd@.service | grep -Fq 'CollectMode=inactive-or-failed'
+systemctl cat jw-certd@.service | grep -Fq 'CollectMode=inactive-or-failed'
 sudo test -S /run/jw-agent/authd.sock
 sudo test -S /run/jw-agent-certd/certd.sock
 sudo test -S /run/jw-agent/opsd.sock
@@ -589,6 +591,7 @@ pub fn gate_p2_nginx_operation(_root: &Path, timeout: Duration) -> Result<(), St
         require_success(&syntax, "baseline Nginx syntax", false)?;
 
         let mut session = P2ApiSession::login(&config, &password, timeout)?;
+        session.enter_administrative(&config, &password, timeout)?;
         session.require_management_site_protected(&config, timeout)?;
         let enabled = session.operate(&config, &password, P2_VALID_SITE, "enabled", timeout)?;
         require_terminal(&enabled, "SUCCEEDED", "valid site enable")?;
@@ -784,6 +787,7 @@ pub fn gate_p2_certbot_renew_operation(_root: &Path, timeout: Duration) -> Resul
     wait_for_public_agent(&config, timeout)?;
     let result = (|| {
         let mut session = P2ApiSession::login(&config, &password, timeout)?;
+        session.enter_administrative(&config, &password, timeout)?;
         let success = session.operate_certbot_renew_test(&config, &password, timeout)?;
         require_terminal(&success, "SUCCEEDED", "Certbot renewal dry-run")?;
         for evidence in [
@@ -857,6 +861,7 @@ pub fn gate_p2_certbot_issue_failure(_root: &Path, timeout: Duration) -> Result<
         prepare_certbot_issue_fixture(&config, timeout)?;
         wait_for_public_agent(&config, timeout)?;
         let mut session = P2ApiSession::login(&config, &password, timeout)?;
+        session.enter_administrative(&config, &password, timeout)?;
         let receipt = session.operate_certbot_issue_staging_failure(
             &config,
             &password,
@@ -928,6 +933,7 @@ pub fn gate_p2_certbot_attach_operation(_root: &Path, timeout: Duration) -> Resu
         wait_for_public_agent(&config, timeout)?;
         thread::sleep(Duration::from_secs(7));
         let mut session = P2ApiSession::login(&config, &password, timeout)?;
+        session.enter_administrative(&config, &password, timeout)?;
         let success = session.operate_certbot_attach(&config, &password, timeout)?;
         require_terminal(&success.receipt, "SUCCEEDED", "Certbot Nginx TLS attach")?;
         for expected in [
@@ -1036,8 +1042,8 @@ sudo /usr/sbin/sshd -T -C user={},addr={},laddr={},host=localhost | grep -Fxq 'p
         "\"level\":\"g1_verified_action\"",
         "\"rollbackSupport\":\"not_guaranteed\"",
         "\"ticketTtlSeconds\":30",
-        "\"idleTimeoutSeconds\":300",
-        "\"maxLifetimeSeconds\":1800",
+        "\"idleTimeoutSeconds\":0",
+        "\"maxLifetimeSeconds\":0",
         "\"maxFrameBytes\":16384",
         "\"maxSessionsPerUser\":1",
     ] {
@@ -1134,7 +1140,7 @@ sudo -H -u {admin} chmod 0600 "$fixture/readme.txt" "$fixture/subdirectory/neste
             "\"rollbackSupport\":\"not_applicable\"",
             "\"rootLabel\":\"~\"",
             "\"idleTimeoutSeconds\":120",
-            "\"maxLifetimeSeconds\":600",
+            "\"maxLifetimeSeconds\":0",
             "\"maxListEntries\":500",
             "\"maxTextBytes\":262144",
             "\"maxDownloadBytes\":8388608",
@@ -1799,6 +1805,7 @@ pub fn gate_p2_managed_config(_root: &Path, timeout: Duration) -> Result<(), Str
         }
         install_active_nginx_fixture(&config, P2_MANAGED_SITE, P2_MANAGED_BASELINE, timeout)?;
         let mut session = P2ApiSession::login(&config, &password, timeout)?;
+        session.enter_administrative(&config, &password, timeout)?;
         install_nginx_fixture(
             &config,
             P2_INTERNAL_TEMP,
@@ -2017,6 +2024,38 @@ impl P2ApiSession {
             cookie_jar,
             csrf_token,
         })
+    }
+
+    fn enter_administrative(
+        &mut self,
+        config: &VmConfig,
+        password: &str,
+        timeout: Duration,
+    ) -> Result<(), String> {
+        let body = format!(
+            "{{\"password\":{},\"additionalAuthCode\":null}}",
+            json_string(password)
+        );
+        let response = public_api_request(
+            config,
+            "POST",
+            "/api/v1/auth/administrative-access",
+            &self.cookie_jar.path,
+            Some(&self.csrf_token),
+            Some(body.as_bytes()),
+            timeout,
+        )?;
+        expect_http(&response, 200, "P2 administrative access")?;
+        if !response
+            .body
+            .contains("\"administrativeAccess\":\"administrative\"")
+        {
+            return Err(String::from(
+                "P2 administrative access did not return the bounded access mode",
+            ));
+        }
+        self.csrf_token = json_string_field(&response.body, "csrfToken")?;
+        Ok(())
     }
 
     fn get(

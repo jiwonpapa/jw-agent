@@ -1,3 +1,16 @@
+jw-agent (0.2.0~p2.17) noble; urgency=medium
+
+  * Add bounded PAM and TOTP administrative access for root typed operations.
+  * Add CPU, memory, and root-disk utilization graphics and actionable alerts.
+  * Show exact Linux role and administrative state in the account surfaces.
+  * Rework primary and discovered services into responsive icon cards.
+  * Expose supported typed-operation entry points and expandable recent receipts.
+  * Add SFTP drag-and-drop upload and route-stable terminal and file sessions.
+  * Deduplicate Nginx and PHP-FPM configuration editing and rollback UX.
+  * Collect failed one-shot PAM and Certbot workers instead of polluting service status.
+
+ -- JW Agent Maintainers <maintainers@example.invalid>  Thu, 23 Jul 2026 10:40:00 +0900
+
 jw-agent (0.2.0~p2.16) noble; urgency=medium
 
   * Add recovery-only TOTP enrollment with two consecutive codes.

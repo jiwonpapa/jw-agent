@@ -59,7 +59,7 @@ export function ServicesScreen() {
           <InventorySummary services={services} partial={inventory.data.status === "partial"} />
           {failed.length > 0 ? <FailureNotice services={failed} /> : null}
           <FilterBar value={filter} onChange={setFilter} />
-          <section className="border-t border-border py-7" aria-labelledby="primary-services-heading">
+          <section className="mt-6 rounded-panel border border-border bg-surface p-5" aria-labelledby="primary-services-heading">
             <h2 id="primary-services-heading" className="text-sm font-semibold text-text">주요 서비스</h2>
             <p className="mt-1 text-sm text-muted">같은 서비스의 timer·instance는 한 카드 안에서 확인합니다.</p>
             <PrimaryServiceGrid services={primary} />
@@ -87,7 +87,7 @@ function InventorySummary({ services, partial }: { services: ServiceSummary[]; p
   const failed = services.filter((service) => service.runtimeState === "failed").length;
   const stopped = services.filter((service) => service.runtimeState === "stopped").length;
   return (
-    <section className="py-7" aria-labelledby="service-summary-heading">
+    <section className="mt-6 rounded-panel border border-border bg-surface p-5" aria-labelledby="service-summary-heading">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h2 id="service-summary-heading" className="text-sm font-semibold text-text">관찰 요약</h2>
@@ -95,7 +95,7 @@ function InventorySummary({ services, partial }: { services: ServiceSummary[]; p
         </div>
         <StatusMark label={partial ? "부분 관찰" : "관찰 완료"} tone={partial ? "warning" : "success"} />
       </div>
-      <dl className="mt-5 grid divide-y divide-border border-y border-border sm:grid-cols-4 sm:divide-x sm:divide-y-0">
+      <dl className="mt-5 grid gap-px overflow-hidden rounded-control border border-border bg-border sm:grid-cols-4">
         <SummaryValue label="전체" value={services.length} />
         <SummaryValue label="실행·활성" value={running} />
         <SummaryValue label="실패" value={failed} danger={failed > 0} />
@@ -107,7 +107,7 @@ function InventorySummary({ services, partial }: { services: ServiceSummary[]; p
 
 function SummaryValue({ label, value, danger = false }: { label: string; value: number; danger?: boolean }) {
   return (
-    <div className="px-1 py-4 sm:px-5">
+    <div className="bg-subtle/35 px-4 py-4">
       <dt className="text-xs text-muted">{label}</dt>
       <dd className={cn("mt-1 text-2xl font-semibold text-text", danger && "text-danger")}>{value}</dd>
     </div>
@@ -116,7 +116,7 @@ function SummaryValue({ label, value, danger = false }: { label: string; value: 
 
 function FailureNotice({ services }: { services: ServiceSummary[] }) {
   return (
-    <section className="border-t border-danger/40 py-6" aria-labelledby="failed-services-heading">
+    <section className="mt-5 rounded-panel border border-danger/35 bg-danger/5 p-5" aria-labelledby="failed-services-heading">
       <div className="flex items-start gap-3">
         <AlertTriangle aria-hidden="true" className="mt-0.5 size-5 shrink-0 text-danger" />
         <div>
@@ -131,7 +131,7 @@ function FailureNotice({ services }: { services: ServiceSummary[] }) {
 
 function FilterBar({ value, onChange }: { value: ServiceFilter; onChange: (value: ServiceFilter) => void }) {
   return (
-    <section className="border-t border-border py-5" aria-label="서비스 상태 필터">
+    <section className="mt-5 rounded-panel border border-border bg-surface p-4" aria-label="서비스 상태 필터">
       <div className="flex flex-wrap items-center gap-2">
         <ListFilter aria-hidden="true" className="mr-1 size-4 text-muted" />
         {SERVICE_FILTERS.map((filter) => (
@@ -161,7 +161,7 @@ function SystemServices({ services, search, onSearch }: {
     ? services
     : services.filter((service) => `${service.displayName} ${service.unitName} ${service.purpose}`.toLocaleLowerCase("ko-KR").includes(normalized));
   return (
-    <section className="border-t border-border py-7" aria-labelledby="system-services-heading">
+    <section className="mt-6 rounded-panel border border-border bg-surface p-5" aria-labelledby="system-services-heading">
       <details className="group">
         <summary className="flex min-h-12 cursor-pointer list-none items-center justify-between gap-4 [&::-webkit-details-marker]:hidden">
           <div className="flex items-start gap-3">

@@ -8,14 +8,12 @@ import type { AdditionalAuthPolicy } from "../../shared/api/types";
 import {
   POLICY_LABELS,
   POLICY_PROVIDER_LABELS,
-  ROLE_LABELS,
 } from "../../shared/content/copy";
 import {
   isPolicyDowngrade,
   providerCanApproveMutations,
   RECOMMENDED_ADDITIONAL_AUTH_POLICY,
 } from "../../shared/domain/additional-auth";
-import { formatDateTime } from "../../shared/domain/format";
 import { Button } from "../../shared/ui/button";
 import { AssuranceDetails } from "../../shared/ui/assurance";
 import { Skeleton } from "../../shared/ui/skeleton";
@@ -23,6 +21,7 @@ import { StatusMark } from "../../shared/ui/status-mark";
 import { SurfaceState } from "../../shared/ui/surface-state";
 import { WorkspaceHeader } from "../../shared/ui/workspace-header";
 import { TotpEnrollment } from "./totp-enrollment";
+import { accessModeLabel, SessionAccessPanel } from "../auth/administrative-access";
 
 const policyOrder: AdditionalAuthPolicy[] = ["disabled", "risky_operations", "all_mutations"];
 
@@ -74,13 +73,13 @@ export function AccessScreen() {
         eyebrow="Settings / Access"
         title="접속 및 인증"
         description="현재 접속 경로와 Linux PAM 세션, 추가 인증 정책을 확인합니다. 서버 판정이 최종 권위입니다."
-        action={<StatusMark label={ROLE_LABELS[session.subject.role]} tone={isAdmin ? "info" : "neutral"} />}
+        action={<StatusMark label={accessModeLabel(session)} tone={session.administrativeAccess === "administrative" ? "warning" : isAdmin ? "info" : "neutral"} />}
       />
 
-      <section className="py-7" aria-labelledby="access-path-heading">
+      <section className="mt-6 rounded-panel border border-border bg-surface p-5" aria-labelledby="access-path-heading">
         <h2 id="access-path-heading" className="text-sm font-semibold text-text">접속 경로</h2>
         <p className="mt-1 text-sm text-muted">공개 HTTPS와 SSH 복구 경로를 분리해 유지합니다.</p>
-        <div className="mt-5 divide-y divide-border border-y border-border">
+        <div className="mt-5 grid gap-3 lg:grid-cols-2">
           <AccessRow
             icon={GlobeLock}
             title="공개 HTTPS"
@@ -98,16 +97,9 @@ export function AccessScreen() {
         </div>
       </section>
 
-      <section className="border-t border-border py-7" aria-labelledby="session-heading">
-        <h2 id="session-heading" className="text-sm font-semibold text-text">Linux PAM 세션</h2>
-        <dl className="mt-5 grid gap-px overflow-hidden rounded-panel border border-border bg-border sm:grid-cols-3">
-          <SessionField label="계정" value={session.subject.username} />
-          <SessionField label="권한" value={ROLE_LABELS[session.subject.role]} />
-          <SessionField label="Idle 만료" value={formatDateTime(session.idleExpiresAt)} />
-        </dl>
-      </section>
+      <div className="mt-6"><SessionAccessPanel session={session} /></div>
 
-      <section className="border-t border-border py-7" aria-labelledby="additional-auth-heading">
+      <section className="mt-6 rounded-panel border border-border bg-surface p-5" aria-labelledby="additional-auth-heading">
         <div className="flex items-start gap-3">
           <ShieldCheck aria-hidden="true" className="mt-0.5 size-5 text-action" />
           <div>
@@ -131,12 +123,12 @@ export function AccessScreen() {
 
         <fieldset className="mt-6" disabled={!isAdmin}>
           <legend className="sr-only">추가 인증 수준</legend>
-          <div className="divide-y divide-border border-y border-border">
+          <div className="grid gap-3 lg:grid-cols-3">
             {policyOrder.map((policy) => {
               const copy = POLICY_LABELS[policy];
               const recommended = policy === RECOMMENDED_ADDITIONAL_AUTH_POLICY;
               return (
-                <label key={policy} className="flex min-h-20 cursor-pointer items-start gap-4 py-4 disabled:cursor-not-allowed">
+                <label key={policy} className="flex min-h-24 cursor-pointer items-start gap-4 rounded-control border border-border bg-subtle/30 p-4 disabled:cursor-not-allowed">
                   <input
                     type="radio"
                     name="additional-auth-policy"
@@ -200,7 +192,7 @@ function AccessRow({ icon: Icon, title, value, status, tone }: {
   tone: "success" | "info" | "neutral";
 }) {
   return (
-    <div className="flex flex-col gap-3 py-4 sm:flex-row sm:items-center sm:justify-between">
+    <div className="flex flex-col gap-3 rounded-control border border-border bg-subtle/30 p-4 sm:flex-row sm:items-center sm:justify-between">
       <div className="flex min-w-0 items-start gap-3">
         <Icon aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-muted" />
         <div className="min-w-0">
@@ -209,15 +201,6 @@ function AccessRow({ icon: Icon, title, value, status, tone }: {
         </div>
       </div>
       <StatusMark label={status} tone={tone} />
-    </div>
-  );
-}
-
-function SessionField({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="bg-surface p-4">
-      <dt className="text-xs text-muted">{label}</dt>
-      <dd className="mt-2 truncate text-sm font-semibold text-text">{value}</dd>
     </div>
   );
 }

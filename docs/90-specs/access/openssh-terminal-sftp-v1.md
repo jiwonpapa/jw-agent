@@ -22,7 +22,8 @@ Last reviewed: 2026-07-22
 - UID 0, locked/expired account, denied shell, role-policy mismatch는 거부
 - 세션 생성은 최근 PAM reauth와 정책-required TOTP를 요구
 - server-side single-use ticket은 30초 이내 만료, JW session·user·origin·purpose에 bind
-- terminal/SFTP session은 별도 max lifetime·idle timeout·connection quota를 가짐
+- terminal/SFTP session은 parent JW login session 절대 만료와 connection quota를 따름
+- 활성 app shell은 30초 heartbeat로 route 이동 중에도 연결을 유지하고 SFTP orphan은 2분 뒤 정리
 - SSH 인증 material은 server-side ephemeral boundary에서만 처리하고 browser로 반환하지 않음
 
 초기 지원 인증은 별도 Accepted credential broker 계약 전까지 `UNSUPPORTED`로 유지합니다. Linux password를 재사용한다면 one-shot memory only, strict zeroize, SSH authentication 직후 폐기하며 저장·로그·재전송하지 않습니다. server-managed ephemeral key를 사용한다면 설치·회수·authorized_keys ownership을 별도 typed operation과 spec으로 승인해야 합니다.
@@ -33,7 +34,7 @@ Last reviewed: 2026-07-22
 - command content를 opsd가 해석·승인·원복하지 않음
 - UI는 자동 원복 불가, Linux 사용자 권한, sudo 가능성, session 만료를 연결 전에 표시
 - root login과 product-driven sudo/password prompt automation 금지
-- WSS frame, rows/cols, paste byte, output buffer, connection, idle, total lifetime 제한
+- WSS frame, rows/cols, paste byte, output buffer, connection 제한과 parent session 주기 재검증
 - disconnect 시 PTY/process 종료 정책과 재접속 불가 여부를 명시
 - transcript는 기본 저장하지 않으며 browser storage와 audit ledger에 기록하지 않음
 - authenticated app shell이 terminal·SFTP 연결을 소유하며 route 이동만으로 PTY·WSS·file session을 종료하지 않음
@@ -73,7 +74,7 @@ Rust SSH/SFTP client, xterm, CodeMirror dependency는 exact pin과 최소 featur
 - non-root terminal connect/input/resize/output/exit at desktop/tablet/mobile
 - UID 0, wrong user, expired/locked account, host-key mismatch denial
 - ticket replay, wrong purpose/session/origin, expired ticket denial
-- idle/max lifetime, concurrent session, frame/paste/output cap
+- parent absolute expiry, heartbeat 중 route 이동 유지, concurrent session, frame/paste/output cap
 - root/sudo automation absent and opsd API has no shell/PTY/user argv
 - SFTP list/read/download and bounded atomic upload in allowed root
 - traversal/symlink escape/protected root/oversized file/stale digest denial

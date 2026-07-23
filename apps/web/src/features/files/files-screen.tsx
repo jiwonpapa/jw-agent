@@ -15,7 +15,7 @@ import {
   TriangleAlert,
   Upload,
 } from "lucide-react";
-import { type ChangeEvent, useState } from "react";
+import { type ChangeEvent, type DragEvent, useState } from "react";
 
 import {
   ApiError,
@@ -69,6 +69,7 @@ export function FilesScreen() {
   const [overwriteConfirmed, setOverwriteConfirmed] = useState(false);
   const [connectOpen, setConnectOpen] = useState(false);
   const [writeOpen, setWriteOpen] = useState(false);
+  const [dragActive, setDragActive] = useState(false);
   const additionalAuthRequired = useAdditionalAuthRequired();
 
   if (capabilityQuery.isPending) {
@@ -180,7 +181,7 @@ export function FilesScreen() {
     setState("idle");
     setMessage(null);
     if (!(await fileSession.disconnect())) {
-      setMessage("브라우저 세션은 비웠지만 서버 종료 확인에 실패했습니다. 최대 2분 안에 자동 만료됩니다.");
+      setMessage("브라우저 세션은 비웠지만 서버 종료 확인에 실패했습니다. heartbeat 중단 후 2분 안에 정리됩니다.");
     }
   }
 
@@ -197,7 +198,12 @@ export function FilesScreen() {
   async function chooseUpload(event: ChangeEvent<HTMLInputElement>): Promise<void> {
     const file = event.currentTarget.files?.[0];
     event.currentTarget.value = "";
-    if (file === undefined || listing === null) return;
+    if (file === undefined) return;
+    await prepareUpload(file);
+  }
+
+  async function prepareUpload(file: File): Promise<void> {
+    if (listing === null) return;
     if (file.size > capability.limits.maxUploadBytes) {
       setState("error");
       setMessage(`업로드 상한 ${formatFileBytes(capability.limits.maxUploadBytes)}를 넘었습니다.`);
@@ -219,6 +225,22 @@ export function FilesScreen() {
       setState("error");
       setMessage("선택한 파일을 브라우저 메모리에서 읽지 못했습니다.");
     }
+  }
+
+  async function handleDrop(event: DragEvent<HTMLElement>): Promise<void> {
+    event.preventDefault();
+    setDragActive(false);
+    if (session === null || listing === null || !capability.uploadAssurance.operationAvailable) return;
+    const files = Array.from(event.dataTransfer.files);
+    if (files.length === 0) return;
+    if (files.length > 1) {
+      setState("error");
+      setMessage("현재 안전 계약은 파일 1개마다 계획·재인증합니다. 한 번에 파일 하나만 놓아 주세요.");
+      return;
+    }
+    const file = files[0];
+    if (file === undefined) return;
+    await prepareUpload(file);
   }
 
   function beginTextEdit(): void {
@@ -371,6 +393,41 @@ export function FilesScreen() {
             <StatusMark label={state === "loading" ? "불러오는 중" : "SFTP 연결됨"} tone={state === "error" ? "danger" : "success"} />
           </div>
 
+          <label
+            className={cn(
+              "mb-4 flex min-h-24 cursor-pointer items-center justify-center rounded-panel border border-dashed px-5 py-4 text-center transition-colors",
+              dragActive ? "border-action bg-action/10 text-action" : "border-border bg-subtle/35 text-muted hover:border-action/60 hover:bg-action/5",
+              !capability.uploadAssurance.operationAvailable && "pointer-events-none opacity-50",
+            )}
+            onDragEnter={(event) => {
+              event.preventDefault();
+              setDragActive(true);
+            }}
+            onDragOver={(event) => {
+              event.preventDefault();
+              event.dataTransfer.dropEffect = "copy";
+              setDragActive(true);
+            }}
+            onDragLeave={(event) => {
+              if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDragActive(false);
+            }}
+            onDrop={(event) => void handleDrop(event)}
+          >
+            <span className="flex flex-col items-center gap-2 sm:flex-row">
+              <Upload aria-hidden="true" className="size-5" />
+              <span>
+                <strong className="font-semibold text-text">{listing.path === "" ? "~" : `~/${listing.path}`}에 파일 놓기</strong>
+                <span className="mt-0.5 block text-xs">또는 눌러서 파일 선택 · 1개씩 계획·승인</span>
+              </span>
+            </span>
+            <input
+              className="sr-only"
+              type="file"
+              disabled={!capability.uploadAssurance.operationAvailable || state === "loading"}
+              onChange={(event) => void chooseUpload(event)}
+            />
+          </label>
+
           <div className="grid min-h-[35rem] min-w-0 overflow-hidden rounded-panel border border-border bg-surface lg:grid-cols-[13rem_minmax(20rem,0.9fr)_minmax(0,1.1fr)]">
             <DirectoryTree listing={listing} disabled={state === "loading"} onOpen={openDirectory} />
             <div className="min-w-0 border-border lg:border-l">
@@ -436,8 +493,8 @@ export function FilesScreen() {
             <div className="mt-5"><AssuranceDetails assurance={capability.assurance} /></div>
           </div>
           <dl className="divide-y divide-border border-y border-border text-sm">
-            <Limit label="Idle 종료" value={`${String(capability.limits.idleTimeoutSeconds / 60)}분`} />
-            <Limit label="최대 세션" value={`${String(capability.limits.maxLifetimeSeconds / 60)}분`} />
+            <Limit label="연결 유지" value="30초 heartbeat" />
+            <Limit label="종료 조건" value="직접 종료·로그아웃·절대 만료" />
             <Limit label="텍스트" value={formatFileBytes(capability.limits.maxTextBytes)} />
             <Limit label="다운로드" value={formatFileBytes(capability.limits.maxDownloadBytes)} />
             <Limit label="업로드" value={formatFileBytes(capability.limits.maxUploadBytes)} />
@@ -492,6 +549,15 @@ export function FilesScreen() {
               <StatusMark label="G1 · 자동 원복 없음" tone="warning" />
               <span className="text-xs text-muted">최대 {formatFileBytes(capability.limits.maxUploadBytes)}</span>
             </div>
+            <progress
+              className="resource-meter mt-4 w-full"
+              data-tone={state === "error" ? "danger" : "info"}
+              max={3}
+              value={state === "applying" ? 2 : uploadPlan === null ? 1 : 2}
+              aria-label="업로드 진행 단계"
+            >
+              {state === "applying" ? "적용·검증 중" : uploadPlan === null ? "파일 준비" : "계획 승인 대기"}
+            </progress>
             <dl className="mt-6 grid gap-4 text-sm sm:grid-cols-2">
               <PlanFact label="대상" value={writeDraft.path} />
               <PlanFact label="작업" value={writeDraft.targetExists ? "기존 파일 교체" : "새 파일 생성"} />

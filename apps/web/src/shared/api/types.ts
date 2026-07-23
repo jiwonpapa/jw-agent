@@ -3,6 +3,7 @@ import type { components } from "./generated/schema";
 export type Role = components["schemas"]["Role"];
 export type IngressChannel = components["schemas"]["IngressChannel"];
 export type SessionView = components["schemas"]["SessionView"];
+export type AdministrativeAccessState = components["schemas"]["AdministrativeAccessState"];
 export type HealthView = components["schemas"]["HealthView"];
 export type HostObservation = components["schemas"]["HostObservation"];
 export type NginxSitesView = components["schemas"]["NginxSitesView"];

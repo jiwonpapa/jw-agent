@@ -59,8 +59,8 @@ P2 구현 진입은 2026-07-21 사용자 목표추진 지시와 [ADR-0010](../90
 - opsd는 private network namespace와 `CAP_NET_BIND_SERVICE`만 사용하며 외부 network API나 listening socket을 갖지 않습니다.
 - 제품 관리 vhost는 legacy basename뿐 아니라 versioned content marker와 제품 include로 판정합니다. 보호 resource는 operation type/schema를 노출하지 않고 opsd plan도 재검증합니다.
 - mutation 승인은 `202 Accepted`이며 durable ledger가 실행 상태를 소유합니다. 브라우저 SSE는 durable sequence를 event ID로 사용하고 canonical receipt를 다시 조회합니다.
-- `p2-local` 22개, `p2-browser` 8개, Playwright 39개, `p2-vm` 25개 gate가 PASS했습니다.
-- VM package는 `jw-agent_0.2.0~p2.16_amd64.deb`, SHA-256 `318568c89db7d5e17f5abac54f1f8ee7551a301fccc4afaa9fa39198313939fa`입니다.
+- `p2-local` 22개, `p2-browser` 8개, Playwright 42개, `p2-vm` 25개 gate가 PASS했습니다.
+- VM package는 `jw-agent_0.2.0~p2.17_amd64.deb`, SHA-256 `283bf2b8d3465e22ac38beb696014a3cea3e0b059b54a71238780aec8b7c3b5f`입니다.
 - Ubuntu systemd 서비스 목록은 템플릿 주요 서비스, 로컬 발견 unit과 시스템 내부 unit을 G0로 분리하며 failed unit을 숨기지 않습니다.
 - 로컬 콘솔은 Linux UID·non-root 경계를 명시하고 자원 사용률, 서비스 family, 현재 UID의 typed-operation 영수증만 요약합니다. opsd 임의 명령·전체 사용자 감사 조회 권한은 추가하지 않습니다.
 - managed Nginx config는 활성 exact symlink, root:root, UTF-8 24 KiB content와 exact managed-config plan 256 KiB envelope, reload profile만 `VM_PASS + G2`입니다.
@@ -72,7 +72,8 @@ P2 구현 진입은 2026-07-21 사용자 목표추진 지시와 [ADR-0010](../90
 - opsd는 SQLite ledger event와 외부 checkpoint 파일 사이의 일관된 판정을 위해 typed request 전체를 직렬화합니다. 실행 중 receipt 조회는 완료까지 대기하며 중간 checkpoint를 훼손으로 오판하지 않습니다.
 - [ADR-0014](../90-specs/adr/0014-codemirror-config-editor.md)는 Monaco 대신 mobile-compatible CodeMirror 최소 graph를 승인합니다. Mac mini production build는 2.38초, editor core gzip 100.97 kB, plan-only diff gzip 7.72 kB이며 범용 lint·autocomplete·search·React wrapper는 제외했습니다.
 - Nginx `nginx -t` stderr는 원문을 저장·노출하지 않고 selected-resource basename에 일치하는 양의 줄 번호만 `result_code`에 남깁니다. verified rollback 후 UI가 그 줄로 복귀하며 위치가 없으면 추측하지 않습니다.
-- terminal·SFTP memory-only session은 authenticated app shell이 소유합니다. route 이동은 close 효과가 아니며 browser regression gate는 같은 ticket/token 재사용과 close 요청 부재를 확인합니다. p2.16 package/runtime VM gate는 실제 OpenSSH terminal·SFTP endpoint와 제한 시간을 다시 검증했으며 무제한 session은 제공하지 않습니다.
+- terminal·SFTP memory-only session은 authenticated app shell이 소유합니다. route 이동은 close 효과가 아니며 browser regression gate는 같은 ticket/token 재사용과 close 요청 부재를 확인합니다. p2.17 package/runtime VM gate는 실제 OpenSSH terminal·SFTP endpoint를 다시 검증했습니다. terminal과 SFTP의 자체 max lifetime은 `0`으로 명시적 종료까지 유지하되 로그인 session 만료·logout·연결 상실·서버 재시작은 계속 종료 경계입니다.
+- admin 역할의 non-root Linux 계정은 PAM과 정책상 TOTP를 거쳐 15분 관리 모드로 진입합니다. root typed plan·approval은 이 상태가 아니면 서버에서 거부하며 root 로그인·shell·범용 root 파일 API는 추가하지 않았습니다.
 - `totp/v1`은 recovery ingress의 admin PAM 뒤에만 등록·초기화할 수 있습니다. 160-bit secret은 별도 mode `0600` wrapping key로 AEAD 암호화하고 복구 코드는 digest만 저장합니다. VM gate는 연속 code 두 개, `risky_operations`, exact-plan PAM+TOTP 승인, claim replay 차단, 복구 초기화와 저장소 정리를 검증했습니다.
 
 ## P3 전에 선택

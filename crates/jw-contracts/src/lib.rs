@@ -16,9 +16,9 @@ mod totp;
 
 pub use assurance::{AssuranceLevel, AssuranceView, RollbackSupport};
 pub use auth::{
-    AuthFailureClass, AuthPurpose, AuthRequest, AuthResponse, AuthResult, IngressChannel,
-    LoginRequest, PASSWORD_MAX_BYTES, ReauthPurpose, ReauthRequest, ReauthView, Role, SecretString,
-    SessionView, Subject,
+    AdministrativeAccessRequest, AdministrativeAccessState, AuthFailureClass, AuthPurpose,
+    AuthRequest, AuthResponse, AuthResult, IngressChannel, LoginRequest, PASSWORD_MAX_BYTES,
+    ReauthPurpose, ReauthRequest, ReauthView, Role, SecretString, SessionView, Subject,
 };
 pub use certificate::{
     CERT_FRAME_MAX_BYTES, CERTBOT_ATTACH_OPERATION, CERTBOT_ISSUE_OPERATION, CERTBOT_MAX_DOMAINS,
@@ -35,9 +35,10 @@ pub use files::{
     FILE_MAX_LIFETIME_SECONDS, FILE_MAX_LIST_ENTRIES, FILE_MAX_PATH_BYTES, FILE_MAX_TEXT_BYTES,
     FILE_MAX_UPLOAD_BYTES, FILE_SESSION_TOKEN_BYTES, FILE_UPLOAD_PLAN_TOKEN_BYTES,
     FILE_UPLOAD_PLAN_TTL_SECONDS, FileCapabilityView, FileEntryView, FileKind, FileLimitsView,
-    FileListView, FilePathRequest, FileSessionCloseRequest, FileSessionRequest, FileSessionView,
-    FileStatView, FileTextView, FileUploadPlanRequest, FileUploadPlanView, FileUploadResultView,
-    FileUploadTargetState, is_reserved_upload_name, validate_file_path,
+    FileListView, FilePathRequest, FileSessionCloseRequest, FileSessionHeartbeatRequest,
+    FileSessionRequest, FileSessionView, FileStatView, FileTextView, FileUploadPlanRequest,
+    FileUploadPlanView, FileUploadResultView, FileUploadTargetState, is_reserved_upload_name,
+    validate_file_path,
 };
 pub use framing::{
     AUTH_FRAME_MAX_BYTES, FrameError, IPC_PROTOCOL_VERSION, OPS_FRAME_MAX_BYTES, decode_frame,

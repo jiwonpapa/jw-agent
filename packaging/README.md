@@ -37,7 +37,10 @@ transfer, system paths, and root SFTP remain absent. The exact binary upload rou
 has an 8 MiB edge limit. The managed-config exception above does not widen PAM,
 terminal, SFTP control, or other JSON endpoints.
 
-P2.16 adds recovery-only TOTP enrollment and reset. TOTP seeds are encrypted
+P2.17 keeps recovery-only TOTP enrollment and reset, and adds a separate
+15-minute administrative access mode for root typed operations. The mode
+requires an admin-role non-root Linux account, PAM verification, and TOTP when
+the configured policy requires it; it never creates a root web session. TOTP seeds are encrypted
 with a database-adjacent mode-0600 key; one-time recovery material is shown
 only in the enrollment response and stored as digests. Enabling a non-disabled
 policy requires a ready provider, and typed-operation approval consumes the PAM

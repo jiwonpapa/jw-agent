@@ -46,6 +46,7 @@ fn run_scenarios(config: &VmConfig, password: &str, timeout: Duration) -> Result
     }
 
     let mut session = P2ApiSession::login(config, password, timeout)?;
+    session.enter_administrative(config, password, timeout)?;
     let inventory = session.get(config, PHP_FPM_API, timeout)?;
     expect_http(&inventory, 200, "PHP-FPM observation")?;
     require_inventory_contract(&inventory.body)?;

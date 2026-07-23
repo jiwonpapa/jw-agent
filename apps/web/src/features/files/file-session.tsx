@@ -9,7 +9,7 @@ import {
   type ReactNode,
 } from "react";
 
-import { closeFileSession } from "../../shared/api/client";
+import { closeFileSession, heartbeatFileSession } from "../../shared/api/client";
 import type { FileListView, FileSessionView } from "../../shared/api/types";
 
 interface FileSessionController {
@@ -45,6 +45,23 @@ export function FileSessionProvider({ children }: { children: ReactNode }) {
     setSession(null);
     setListing(null);
   }, []);
+
+  useEffect(() => {
+    if (session === null) return;
+    let stopped = false;
+    const heartbeat = async (): Promise<void> => {
+      try {
+        await heartbeatFileSession(session.sessionToken);
+      } catch {
+        if (!stopped) discard();
+      }
+    };
+    const timer = window.setInterval(() => void heartbeat(), 30_000);
+    return () => {
+      stopped = true;
+      window.clearInterval(timer);
+    };
+  }, [discard, session]);
 
   const disconnect = useCallback(async (): Promise<boolean> => {
     const active = sessionRef.current;

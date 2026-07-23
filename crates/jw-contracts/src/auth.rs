@@ -25,6 +25,13 @@ pub enum IngressChannel {
     Recovery,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AdministrativeAccessState {
+    Standard,
+    Administrative,
+}
+
 impl IngressChannel {
     #[must_use]
     pub const fn cookie_name(self) -> &'static str {
@@ -129,6 +136,15 @@ pub struct ReauthRequest {
     pub purpose: ReauthPurpose,
 }
 
+#[derive(Debug, Deserialize, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AdministrativeAccessRequest {
+    #[schema(value_type = String, format = Password, max_length = 1024)]
+    pub password: SecretString,
+    #[schema(value_type = Option<String>, format = Password)]
+    pub additional_auth_code: Option<SecretString>,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct Subject {
@@ -148,6 +164,8 @@ pub struct SessionView {
     #[schema(format = Password)]
     pub csrf_token: String,
     pub additional_auth_policy: crate::AdditionalAuthPolicy,
+    pub administrative_access: AdministrativeAccessState,
+    pub administrative_expires_at: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, ToSchema)]

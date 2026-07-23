@@ -3,7 +3,7 @@
 Status: P2B VM_PASS; P2C lifecycle VM_PASS except public CA success; P2D terminal and SFTP G0/G1 VM_PASS  
 Authority: Delivery  
 Owner: Verification Maintainer  
-Last reviewed: 2026-07-22
+Last reviewed: 2026-07-23
 
 This directory defines real-OS evidence that cannot be claimed from macOS or
 mock browser tests. The `p2-vm` xtask lane owns the repeatable OS, package,
@@ -25,9 +25,9 @@ JW_VM_PUBLIC_ADDRESS=192.168.0.142
 JW_VM_CA_CERT=/path/to/test-ca.crt
 JW_VM_ADMIN_USER=jwvmadmin
 JW_VM_PASSWORD_FILE=/path/to/mode-0600-fixture-password
-JW_VM_REMOTE_PACKAGE=/home/neojins/jw-agent_0.2.0~p2.16_amd64.deb
-JW_VM_EXPECTED_PACKAGE_SHA256=318568c89db7d5e17f5abac54f1f8ee7551a301fccc4afaa9fa39198313939fa
-JW_VM_EXPECTED_VERSION=0.2.0~p2.16
+JW_VM_REMOTE_PACKAGE=/home/neojins/jw-agent_0.2.0~p2.17_amd64.deb
+JW_VM_EXPECTED_PACKAGE_SHA256=283bf2b8d3465e22ac38beb696014a3cea3e0b059b54a71238780aec8b7c3b5f
+JW_VM_EXPECTED_VERSION=0.2.0~p2.17
 cargo xtask verify p2-vm
 ```
 
@@ -41,8 +41,8 @@ certificate를 VM management edge에 설치합니다.
 ## Current VM evidence
 
 - domain: `jw-agent-p1`, Ubuntu 24.04.4 LTS, kernel `6.8.0-136-generic`
-- package: `jw-agent 0.2.0~p2.16`, SHA-256 `318568c89db7d5e17f5abac54f1f8ee7551a301fccc4afaa9fa39198313939fa`, package/runtime gate clean
-- lanes: `p2-local` 22 PASS, `p2-browser` 8 PASS with 39 browser scenarios, `p2-vm` 25 PASS
+- package: `jw-agent 0.2.0~p2.17`, SHA-256 `283bf2b8d3465e22ac38beb696014a3cea3e0b059b54a71238780aec8b7c3b5f`, package/runtime gate clean
+- lanes: `p2-local` 22 PASS, `p2-browser` 8 PASS with 42 browser scenarios, `p2-vm` 25 PASS
 - service inventory: real Nginx and JW Agent internal classification plus a disposable failed custom unit surfaced as discovered read-only
 - automated VM scenarios: installed PAM fixture equality, no `pam_faillock`, `jw-authd → libpam.so.0`, `jw-agentd → libsqlite3.so.0`, repeated product-login failures followed by unchanged Linux password state and working OpenSSH key recovery
 - automated P2 faults: success, verified no-op, syntax failure rollback, injected reload failure rollback, 1 MiB snapshot filesystem cancellation before apply, deleted checkpoint lockdown and restoration
@@ -59,7 +59,7 @@ certificate를 VM management edge에 설치합니다.
 - automated TOTP step-up: recovery-only admin enrollment, two consecutive codes, `risky_operations`, exact-plan PAM+TOTP approval, replay denial, one-time recovery reset, session revoke, mode-0600 wrapping key and encrypted-state cleanup
 - package runtime: opsd private network namespace, exact `CAP_NET_BIND_SERVICE`, ephemeral Nginx test logs, no listening IP socket, root-owned `0600` ledger, bounded UDS
 - local console: grouped navigation, explicit non-root Linux identity, responsive resource meters and service-family cards, current-subject typed-operation history
-- real browser: p2.16 public HTTPS access-security screen, recovery-only enrollment boundary, TOTP provider state and policy prerequisite; authenticated screen console error 0
+- real browser: p2.17 public HTTPS 관리 모드, resource graph, actionable attention, service icon card, recovery-only TOTP boundary와 설정 rollback UX; 42개 mock browser scenario PASS
 
 This is a private-LAN `.test` host with a dedicated management-edge test CA.
 The Certbot runner boundary, read-only inventory, renewal dry-run, guided issue

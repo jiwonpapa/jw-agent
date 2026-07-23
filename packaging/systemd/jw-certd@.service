@@ -1,6 +1,7 @@
 [Unit]
 Description=JW Agent one-shot fixed Certbot worker
 Requires=jw-certd.socket
+CollectMode=inactive-or-failed
 
 [Service]
 Type=simple

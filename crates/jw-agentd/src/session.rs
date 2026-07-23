@@ -13,11 +13,14 @@ use zeroize::{Zeroize, Zeroizing};
 
 use crate::totp::{TotpService, additional_claim_digest};
 
+mod lifecycle;
+
 const MIGRATION_1: &str = include_str!("../migrations/0001_initial.sql");
 const MIGRATION_2: &str = include_str!("../migrations/0002_terminal_audit.sql");
 const MIGRATION_3: &str = include_str!("../migrations/0003_file_audit.sql");
 const MIGRATION_4: &str = include_str!("../migrations/0004_file_upload_audit.sql");
 const MIGRATION_5: &str = include_str!("../migrations/0005_totp.sql");
+const MIGRATION_6: &str = include_str!("../migrations/0006_administrative_access.sql");
 const TOKEN_BYTES: usize = 32;
 const TOKEN_TEXT_BYTES: usize = 43;
 const PUBLIC_IDLE_MS: i64 = 15 * 60 * 1_000;
@@ -76,133 +79,6 @@ impl SessionStore {
         migrate(&path, now_unix_ms)?;
         let totp = TotpService::new(path.clone());
         Ok(Self { path, totp })
-    }
-
-    pub fn issue_session(
-        &self,
-        subject: &Subject,
-        ingress: IngressChannel,
-        now_unix_ms: i64,
-    ) -> Result<IssuedSession, String> {
-        if subject.uid == 0 {
-            return Err(String::from("root session is forbidden"));
-        }
-        let policy = self.additional_auth_policy()?;
-        let token = random_token()?;
-        let token_digest = session_digest(token.as_bytes());
-        let (idle_duration, absolute_duration) = session_durations(ingress);
-        let idle_expires_at = now_unix_ms.saturating_add(idle_duration);
-        let absolute_expires_at = now_unix_ms.saturating_add(absolute_duration);
-        let connection = self.connection()?;
-        connection
-            .execute(
-                "INSERT INTO sessions(\
-                    token_digest, ingress, subject_uid, subject_username, subject_role, \
-                    authenticated_at_unix_ms, last_seen_at_unix_ms, idle_expires_at_unix_ms, \
-                    absolute_expires_at_unix_ms, revoked_at_unix_ms\
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6, ?7, ?8, NULL)",
-                params![
-                    token_digest.as_slice(),
-                    ingress_value(ingress),
-                    subject.uid,
-                    subject.username,
-                    role_value(subject.role),
-                    now_unix_ms,
-                    idle_expires_at,
-                    absolute_expires_at,
-                ],
-            )
-            .map_err(|error| error.to_string())?;
-        let view = session_view(
-            subject.clone(),
-            ingress,
-            now_unix_ms,
-            idle_expires_at,
-            absolute_expires_at,
-            token.as_str(),
-            policy,
-        )?;
-        Ok(IssuedSession { token, view })
-    }
-
-    pub fn authenticate_session(
-        &self,
-        token: &str,
-        ingress: IngressChannel,
-        now_unix_ms: i64,
-    ) -> Result<Option<SessionView>, String> {
-        if !valid_token_shape(token) {
-            return Ok(None);
-        }
-        let digest = session_digest(token.as_bytes());
-        let mut connection = self.connection()?;
-        let transaction = connection
-            .transaction()
-            .map_err(|error| error.to_string())?;
-        let record = load_session(&transaction, &digest)?;
-        let Some(record) = record else {
-            return Ok(None);
-        };
-        if record.ingress != ingress
-            || record.revoked_at.is_some()
-            || record.idle_expires_at <= now_unix_ms
-            || record.absolute_expires_at <= now_unix_ms
-        {
-            return Ok(None);
-        }
-        let should_touch =
-            now_unix_ms.saturating_sub(record.last_seen_at) >= SESSION_TOUCH_INTERVAL_MS;
-        let idle_expires_at = if should_touch {
-            let (idle_duration, _) = session_durations(ingress);
-            let next_idle = now_unix_ms
-                .saturating_add(idle_duration)
-                .min(record.absolute_expires_at);
-            transaction
-                .execute(
-                    "UPDATE sessions SET last_seen_at_unix_ms = ?1, idle_expires_at_unix_ms = ?2 \
-                     WHERE token_digest = ?3 AND revoked_at_unix_ms IS NULL",
-                    params![now_unix_ms, next_idle, digest.as_slice()],
-                )
-                .map_err(|error| error.to_string())?;
-            next_idle
-        } else {
-            record.idle_expires_at
-        };
-        let policy = policy_in_transaction(&transaction)?;
-        transaction.commit().map_err(|error| error.to_string())?;
-        session_view(
-            record.subject,
-            ingress,
-            record.authenticated_at,
-            idle_expires_at,
-            record.absolute_expires_at,
-            token,
-            policy,
-        )
-        .map(Some)
-    }
-
-    pub fn revoke_session(&self, token: &str, now_unix_ms: i64) -> Result<(), String> {
-        if !valid_token_shape(token) {
-            return Ok(());
-        }
-        let digest = session_digest(token.as_bytes());
-        self.connection()?
-            .execute(
-                "UPDATE sessions SET revoked_at_unix_ms = ?1 WHERE token_digest = ?2",
-                params![now_unix_ms, digest.as_slice()],
-            )
-            .map_err(|error| error.to_string())?;
-        Ok(())
-    }
-
-    pub fn revoke_all(&self, now_unix_ms: i64) -> Result<usize, String> {
-        self.connection()?
-            .execute(
-                "UPDATE sessions SET revoked_at_unix_ms = ?1 WHERE revoked_at_unix_ms IS NULL",
-                [now_unix_ms],
-            )
-            .map_err(|error| error.to_string())
     }
 
     pub fn record_terminal_start(
@@ -667,6 +543,7 @@ struct SessionRecord {
     idle_expires_at: i64,
     absolute_expires_at: i64,
     revoked_at: Option<i64>,
+    administrative_until: Option<i64>,
 }
 
 fn load_session(
@@ -675,10 +552,15 @@ fn load_session(
 ) -> Result<Option<SessionRecord>, String> {
     transaction
         .query_row(
-            "SELECT ingress, subject_uid, subject_username, subject_role, \
-                    authenticated_at_unix_ms, last_seen_at_unix_ms, \
-                    idle_expires_at_unix_ms, absolute_expires_at_unix_ms, revoked_at_unix_ms \
-             FROM sessions WHERE token_digest = ?1",
+            "SELECT sessions.ingress, sessions.subject_uid, sessions.subject_username, \
+                    sessions.subject_role, sessions.authenticated_at_unix_ms, \
+                    sessions.last_seen_at_unix_ms, sessions.idle_expires_at_unix_ms, \
+                    sessions.absolute_expires_at_unix_ms, sessions.revoked_at_unix_ms, \
+                    administrative_access.expires_at_unix_ms, \
+                    administrative_access.revoked_at_unix_ms \
+             FROM sessions LEFT JOIN administrative_access \
+               ON administrative_access.session_digest = sessions.token_digest \
+             WHERE sessions.token_digest = ?1",
             [digest.as_slice()],
             |row| {
                 let ingress_text: String = row.get(0)?;
@@ -695,6 +577,8 @@ fn load_session(
                     row.get::<_, i64>(6)?,
                     row.get::<_, i64>(7)?,
                     row.get::<_, Option<i64>>(8)?,
+                    row.get::<_, Option<i64>>(9)?,
+                    row.get::<_, Option<i64>>(10)?,
                 ))
             },
         )
@@ -711,6 +595,8 @@ fn load_session(
                 idle_expires_at,
                 absolute_expires_at,
                 revoked_at,
+                administrative_until,
+                administrative_revoked_at,
             )| {
                 Ok(SessionRecord {
                     ingress: parse_ingress(&ingress_text)?,
@@ -724,6 +610,8 @@ fn load_session(
                     idle_expires_at,
                     absolute_expires_at,
                     revoked_at,
+                    administrative_until: administrative_until
+                        .filter(|_| administrative_revoked_at.is_none()),
                 })
             },
         )
@@ -826,6 +714,15 @@ fn migrate(path: &Path, now_unix_ms: i64) -> Result<(), String> {
         .execute_batch(MIGRATION_5)
         .map_err(|error| error.to_string())?;
     transaction
+        .execute_batch(MIGRATION_6)
+        .map_err(|error| error.to_string())?;
+    transaction
+        .execute(
+            "INSERT OR IGNORE INTO schema_migrations(version, applied_at_unix_ms) VALUES (6, ?1)",
+            [now_unix_ms],
+        )
+        .map_err(|error| error.to_string())?;
+    transaction
         .execute(
             "INSERT OR IGNORE INTO schema_migrations(version, applied_at_unix_ms) VALUES (5, ?1)",
             [now_unix_ms],
@@ -924,24 +821,32 @@ fn session_durations(ingress: IngressChannel) -> (i64, i64) {
     }
 }
 
-fn session_view(
-    subject: Subject,
+fn record_administrative_event(
+    transaction: &Transaction<'_>,
+    subject_uid: u32,
     ingress: IngressChannel,
-    authenticated_at: i64,
-    idle_expires_at: i64,
-    absolute_expires_at: i64,
-    token: &str,
-    policy: AdditionalAuthPolicy,
-) -> Result<SessionView, String> {
-    Ok(SessionView {
-        subject,
-        ingress,
-        authenticated_at: format_rfc3339(authenticated_at)?,
-        idle_expires_at: format_rfc3339(idle_expires_at)?,
-        absolute_expires_at: format_rfc3339(absolute_expires_at)?,
-        csrf_token: csrf_token(token),
-        additional_auth_policy: policy,
-    })
+    event_type: &str,
+    result: &str,
+    now_unix_ms: i64,
+) -> Result<(), String> {
+    if subject_uid == 0 || result.is_empty() || result.len() > 64 {
+        return Err(String::from("administrative access audit value is invalid"));
+    }
+    transaction
+        .execute(
+            "INSERT INTO administrative_access_events(\
+                subject_uid, ingress, event_type, result, occurred_at_unix_ms\
+             ) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                subject_uid,
+                ingress_value(ingress),
+                event_type,
+                result,
+                now_unix_ms,
+            ],
+        )
+        .map_err(|error| error.to_string())?;
+    Ok(())
 }
 
 pub(crate) fn format_rfc3339(unix_ms: i64) -> Result<String, String> {
@@ -1023,7 +928,10 @@ mod tests {
     use std::fs;
     use std::path::PathBuf;
 
-    use jw_contracts::{AdditionalAuthPolicy, IngressChannel, Role, Subject};
+    use jw_contracts::{
+        AdditionalAuthPolicy, AdministrativeAccessState, IngressChannel, Role, Subject,
+    };
+    use rusqlite::Connection;
 
     use super::{FileUploadPlanAudit, SessionStore};
 
@@ -1076,6 +984,83 @@ mod tests {
         let shm = path.with_extension("sqlite3-shm");
         if shm.exists() {
             fs::remove_file(shm).map_err(|error| error.to_string())?;
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn administrative_access_is_bounded_preserved_and_audited() -> Result<(), String> {
+        let path = test_path()?;
+        let store = SessionStore::open(path.clone(), 1_000)?;
+        let admin = Subject {
+            uid: 1_000,
+            username: String::from("admin"),
+            role: Role::Admin,
+        };
+        let standard = store.issue_session(&admin, IngressChannel::Public, 2_000)?;
+        assert_eq!(
+            standard.view.administrative_access,
+            AdministrativeAccessState::Standard
+        );
+        let elevated = store.issue_administrative_session(&admin, IngressChannel::Public, 3_000)?;
+        assert_eq!(
+            elevated.view.administrative_access,
+            AdministrativeAccessState::Administrative
+        );
+        assert!(elevated.view.administrative_expires_at.is_some());
+        let rotated = store.issue_reauthenticated_session(
+            elevated.token(),
+            &admin,
+            IngressChannel::Public,
+            4_000,
+        )?;
+        assert_eq!(
+            rotated.view.administrative_access,
+            AdministrativeAccessState::Administrative
+        );
+        store.revoke_administrative_access(
+            rotated.token(),
+            IngressChannel::Public,
+            &admin,
+            5_000,
+        )?;
+        let after_revoke = store
+            .authenticate_session(rotated.token(), IngressChannel::Public, 6_000)?
+            .ok_or_else(|| String::from("rotated session missing"))?;
+        assert_eq!(
+            after_revoke.administrative_access,
+            AdministrativeAccessState::Standard
+        );
+        let audit_count: i64 = Connection::open(&path)
+            .map_err(|error| error.to_string())?
+            .query_row(
+                "SELECT COUNT(*) FROM administrative_access_events \
+                 WHERE subject_uid = 1000 AND event_type IN ('grant', 'revoke')",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|error| error.to_string())?;
+        assert_eq!(audit_count, 2);
+        assert!(
+            store
+                .issue_administrative_session(
+                    &Subject {
+                        uid: 1_001,
+                        username: String::from("operator"),
+                        role: Role::Operator,
+                    },
+                    IngressChannel::Public,
+                    7_000,
+                )
+                .is_err()
+        );
+        drop((standard, elevated, rotated, store));
+        fs::remove_file(&path).map_err(|error| error.to_string())?;
+        for extension in ["sqlite3-wal", "sqlite3-shm"] {
+            let sidecar = path.with_extension(extension);
+            if sidecar.exists() {
+                fs::remove_file(sidecar).map_err(|error| error.to_string())?;
+            }
         }
         Ok(())
     }

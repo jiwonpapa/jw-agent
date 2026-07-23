@@ -7,4 +7,5 @@
 - Brand names and marks remain subject to their owners' trademark policies.
 - Runtime CDN requests and remote scripts are not used.
 
-현재 포함: NGINX, PHP, Redis, Let's Encrypt. 아이콘이 없는 서비스는 Lucide category icon으로 fallback합니다.
+현재 포함: NGINX, Apache, Caddy, PHP, MySQL, MariaDB, PostgreSQL, Redis, Let's Encrypt,
+Docker. 아이콘이 없는 서비스는 저장된 Lucide category icon으로 fallback합니다.

@@ -61,6 +61,8 @@ Last reviewed: 2026-07-22
 - 주요 서비스는 같은 `templateId`의 service·timer·instance를 하나의 서비스 가족으로 묶고,
   쉬운 역할 설명, child unit, 실행·자동시작 상태와 지원 수준을 표시합니다.
 - 주요 서비스 가족은 desktop 다열·mobile 한 열의 작업 카드로 표시하고, 시스템 unit은 밀집 목록으로 유지합니다.
+- 대표 service는 repository에 포함한 CC0 Simple Icons asset을 사용하고 나머지는 고정 Lucide category icon으로 fallback합니다. runtime CDN은 사용하지 않습니다.
+- 발견된 서비스도 desktop 다열 card로 표시하며 system 목록은 2~3열의 compact card로 표시합니다.
 - `관리 지원`, `알려진 읽기 전용`, `발견된 읽기 전용`, `시스템 내부`를 혼동하지 않습니다.
 - mobile 320px에서 상태·역할·지원 수준을 생략하지 않고 한 열로 reflow합니다.
 

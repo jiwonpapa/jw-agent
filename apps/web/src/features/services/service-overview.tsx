@@ -13,7 +13,7 @@ export function ServiceOverview() {
   const primary = inventory.data?.services.filter((service) => service.visibility === "primary") ?? [];
   const failed = inventory.data?.services.filter((service) => service.runtimeState === "failed") ?? [];
   return (
-    <section className="border-t border-border py-7" aria-labelledby="overview-services-heading">
+    <section className="mt-6 rounded-panel border border-border bg-surface p-5" aria-labelledby="overview-services-heading">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
         <div className="flex items-start gap-3">
           <ServerCog aria-hidden="true" className="mt-0.5 size-5 text-muted" />

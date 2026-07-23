@@ -68,7 +68,7 @@ export function TerminalScreen() {
       <WorkspaceHeader
         eyebrow="Manual access / OpenSSH"
         title="터미널"
-        description={`${capability.username} Linux 계정으로 여는 제한 시간 OpenSSH 세션입니다.`}
+        description={`${capability.username} Linux 계정으로 여는 OpenSSH 세션입니다. 메뉴 이동 중에도 연결을 유지합니다.`}
         action={
           active ? (
             <Button variant="secondary" onClick={disconnect}>
@@ -140,8 +140,8 @@ export function TerminalScreen() {
             <div className="mt-5"><AssuranceDetails assurance={capability.assurance} /></div>
           </div>
           <dl className="divide-y divide-border border-y border-border text-sm">
-            <Limit label="Idle 종료" value={`${String(Math.round(capability.limits.idleTimeoutSeconds / 60))}분`} />
-            <Limit label="최대 세션" value={`${String(Math.round(capability.limits.maxLifetimeSeconds / 60))}분`} />
+            <Limit label="연결 유지" value="로그인 세션에 연동" />
+            <Limit label="종료 조건" value="직접 종료·로그아웃·절대 만료" />
             <Limit label="동시 연결" value={`${String(capability.limits.maxSessionsPerUser)}개`} />
             <Limit label="명령 내용" value="저장 안 함" />
           </dl>

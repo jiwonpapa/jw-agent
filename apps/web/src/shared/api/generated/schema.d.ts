@@ -20,6 +20,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/auth/administrative-access": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["enter_administrative_access"];
+        delete: operations["leave_administrative_access"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/auth/login": {
         parameters: {
             query?: never;
@@ -238,6 +254,22 @@ export interface paths {
         get?: never;
         put?: never;
         post: operations["close_file_session"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/files/sessions/heartbeat": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["heartbeat_file_session"];
         delete?: never;
         options?: never;
         head?: never;
@@ -709,6 +741,14 @@ export interface components {
         AdditionalAuthPolicy: "disabled" | "risky_operations" | "all_mutations";
         /** @enum {string} */
         AdditionalAuthProviderStatus: "not_implemented" | "not_configured" | "ready" | "unavailable";
+        AdministrativeAccessRequest: {
+            /** Format: password */
+            additionalAuthCode?: string | null;
+            /** Format: password */
+            password: string;
+        };
+        /** @enum {string} */
+        AdministrativeAccessState: "standard" | "administrative";
         /** @enum {string} */
         AssuranceLevel: "g0_observe_only" | "g1_verified_action" | "g2_reversible_config" | "g3_restore_validated_data";
         AssuranceView: {
@@ -953,6 +993,10 @@ export interface components {
             /** Format: password */
             sessionToken: string;
         };
+        FileSessionHeartbeatRequest: {
+            /** Format: password */
+            sessionToken: string;
+        };
         FileSessionRequest: {
             /** Format: password */
             password: string;
@@ -1032,10 +1076,14 @@ export interface components {
         };
         HostObservation: {
             architecture: string;
+            /** Format: double */
+            cpuUsagePercent?: number | null;
             hostname?: string | null;
             kernelRelease?: string | null;
             /** Format: double */
             loadAverageOne?: number | null;
+            /** Format: int32 */
+            logicalCpuCount?: number | null;
             memory?: null | components["schemas"]["MemoryObservation"];
             observedAt: string;
             osId?: string | null;
@@ -1365,6 +1413,8 @@ export interface components {
         SessionView: {
             absoluteExpiresAt: string;
             additionalAuthPolicy: components["schemas"]["AdditionalAuthPolicy"];
+            administrativeAccess: components["schemas"]["AdministrativeAccessState"];
+            administrativeExpiresAt?: string | null;
             authenticatedAt: string;
             /** Format: password */
             csrfToken: string;
@@ -1502,6 +1552,104 @@ export interface operations {
             };
             /** @description Operation ledger unavailable */
             503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    enter_administrative_access: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdministrativeAccessRequest"];
+            };
+        };
+        responses: {
+            /** @description Rotated non-root admin session with bounded administrative access */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionView"];
+                };
+            };
+            /** @description Generic PAM authentication failure */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Role, CSRF, subject, or TOTP rejected */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Authentication rate limited */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Authentication provider unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    leave_administrative_access: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Current session returned to standard access */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionView"];
+                };
+            };
+            /** @description Authentication required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description CSRF rejected */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -2109,6 +2257,46 @@ export interface operations {
                 content?: never;
             };
             /** @description Session rejected */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Origin or CSRF rejected */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    heartbeat_file_session: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FileSessionHeartbeatRequest"];
+            };
+        };
+        responses: {
+            /** @description File session and parent login session remain active */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Session rejected or expired */
             401: {
                 headers: {
                     [name: string]: unknown;

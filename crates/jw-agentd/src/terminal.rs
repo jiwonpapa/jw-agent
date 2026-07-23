@@ -32,6 +32,7 @@ struct TerminalState {
 
 struct TicketEntry {
     session_binding: [u8; 32],
+    session_token: Zeroizing<String>,
     subject: Subject,
     ingress: IngressChannel,
     origin: String,
@@ -65,6 +66,7 @@ pub struct TerminalTicketIssue<'a> {
 pub struct TerminalLease {
     broker: TerminalBroker,
     session_binding: [u8; 32],
+    session_token: Zeroizing<String>,
     pub session_id: String,
     pub subject: Subject,
     pub ingress: IngressChannel,
@@ -126,6 +128,7 @@ impl TerminalBroker {
             digest,
             TicketEntry {
                 session_binding,
+                session_token: Zeroizing::new(issue.session_token.to_owned()),
                 subject: issue.subject,
                 ingress: issue.ingress,
                 origin: issue.origin,
@@ -182,6 +185,7 @@ impl TerminalBroker {
         Ok(TerminalLease {
             broker: self.clone(),
             session_binding: binding,
+            session_token: entry.session_token,
             session_id,
             subject: entry.subject,
             ingress: entry.ingress,
@@ -240,6 +244,10 @@ impl TerminalBroker {
 impl TerminalLease {
     pub fn take_password(&mut self) -> Result<SecretString, TerminalTicketError> {
         self.password.take().ok_or(TerminalTicketError::Invalid)
+    }
+
+    pub fn session_token(&self) -> &str {
+        self.session_token.as_str()
     }
 }
 

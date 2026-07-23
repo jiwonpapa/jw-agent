@@ -4,8 +4,8 @@ use utoipa::ToSchema;
 use crate::{AssuranceView, SecretString};
 
 pub const TERMINAL_TICKET_TTL_SECONDS: u64 = 30;
-pub const TERMINAL_IDLE_TIMEOUT_SECONDS: u64 = 5 * 60;
-pub const TERMINAL_MAX_LIFETIME_SECONDS: u64 = 30 * 60;
+pub const TERMINAL_IDLE_TIMEOUT_SECONDS: u64 = 0;
+pub const TERMINAL_MAX_LIFETIME_SECONDS: u64 = 0;
 pub const TERMINAL_MAX_FRAME_BYTES: usize = 16 * 1_024;
 pub const TERMINAL_MAX_OUTPUT_BUFFER_BYTES: usize = 256 * 1_024;
 pub const TERMINAL_MIN_ROWS: u16 = 12;

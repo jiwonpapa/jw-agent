@@ -47,6 +47,15 @@ export function PhpFpmScreen() {
   }
 
   function closeEditor(open: boolean): void {
+    if (
+      !open &&
+      workflow.resource !== null &&
+      workflow.draft !== workflow.resource.content &&
+      workflow.receipt?.terminalState !== "SUCCEEDED" &&
+      !window.confirm("적용하지 않은 PHP-FPM 설정 변경이 있습니다. 편집을 종료하시겠습니까?")
+    ) {
+      return;
+    }
     setEditorOpen(open);
     if (!open) workflow.close();
   }
@@ -83,6 +92,7 @@ export function PhpFpmScreen() {
         title="PHP 8.3 FPM · php.ini"
         description="diff·문법검사·reload·실패 시 자동 원복"
         side="right"
+        size="fullscreen"
       >
         {workflow.loading ? (
           <div className="flex items-center gap-3 text-sm text-muted"><LoaderCircle aria-hidden="true" className="size-5 animate-spin" />설정 파일과 안전 조건을 확인하고 있습니다.</div>

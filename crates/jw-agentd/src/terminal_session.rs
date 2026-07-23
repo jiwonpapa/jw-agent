@@ -7,10 +7,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use axum::extract::ws::{CloseFrame, Message, WebSocket};
-use jw_contracts::{
-    TERMINAL_IDLE_TIMEOUT_SECONDS, TERMINAL_MAX_FRAME_BYTES, TERMINAL_MAX_LIFETIME_SECONDS,
-    TerminalClientMessage, validate_terminal_size,
-};
+use jw_contracts::{TERMINAL_MAX_FRAME_BYTES, TerminalClientMessage, validate_terminal_size};
 use nix::fcntl::{FcntlArg, OFlag, fcntl};
 use nix::pty::{Winsize, openpty};
 use nix::sys::stat::Mode;
@@ -25,6 +22,7 @@ use crate::{AgentConfig, SessionStore, TerminalLease};
 const SSH_AUTH_TIMEOUT: Duration = Duration::from_secs(8);
 const SSH_AUTH_SETTLE_TIME: Duration = Duration::from_millis(250);
 const PROCESS_EXIT_TIMEOUT: Duration = Duration::from_secs(2);
+const SESSION_CHECK_INTERVAL: Duration = Duration::from_secs(30);
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TerminalRunSummary {
@@ -69,6 +67,7 @@ pub async fn run_terminal(
                     &mut bytes_in,
                     &mut bytes_out,
                     &config,
+                    &store,
                 )
                 .await
             }
@@ -279,9 +278,9 @@ async fn relay_terminal(
     bytes_in: &mut u64,
     bytes_out: &mut u64,
     config: &AgentConfig,
+    store: &SessionStore,
 ) -> String {
-    let started = Instant::now();
-    let mut last_activity = started;
+    let mut last_session_check = Instant::now();
     let mut interval = tokio::time::interval(Duration::from_millis(100));
     interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
     let mut buffer = vec![0_u8; TERMINAL_MAX_FRAME_BYTES];
@@ -292,9 +291,8 @@ async fn relay_terminal(
                     Some(Ok(message)) => match handle_browser_message(message, terminal, config).await {
                         Ok(InputEffect::Bytes(count)) => {
                             *bytes_in = bytes_in.saturating_add(count);
-                            last_activity = Instant::now();
                         }
-                        Ok(InputEffect::Control) => last_activity = Instant::now(),
+                        Ok(InputEffect::Control) => {}
                         Ok(InputEffect::Close) => break String::from("browser_closed"),
                         Err(reason) => break reason,
                     },
@@ -310,7 +308,6 @@ async fn relay_terminal(
                         if socket.send(Message::binary(buffer[..count].to_vec())).await.is_err() {
                             break String::from("browser_disconnected");
                         }
-                        last_activity = Instant::now();
                     }
                     Err(_) => break String::from("pty_read_failed"),
                 }
@@ -321,11 +318,20 @@ async fn relay_terminal(
                 }
             }
             _ = interval.tick() => {
-                if started.elapsed() >= Duration::from_secs(TERMINAL_MAX_LIFETIME_SECONDS) {
-                    break String::from("max_lifetime_reached");
-                }
-                if last_activity.elapsed() >= Duration::from_secs(TERMINAL_IDLE_TIMEOUT_SECONDS) {
-                    break String::from("idle_timeout");
+                if last_session_check.elapsed() >= SESSION_CHECK_INTERVAL {
+                    let now = match unix_milliseconds() {
+                        Ok(now) => now,
+                        Err(_) => break String::from("session_validation_failed"),
+                    };
+                    match store.authenticate_session(lease.session_token(), lease.ingress, now) {
+                        Ok(Some(view)) if view.subject == lease.subject => {}
+                        Ok(_) => break String::from("session_revoked"),
+                        Err(_) => break String::from("session_validation_failed"),
+                    }
+                    if socket.send(Message::Ping(Vec::new().into())).await.is_err() {
+                        break String::from("browser_disconnected");
+                    }
+                    last_session_check = Instant::now();
                 }
                 match terminal.child.try_wait() {
                     Ok(Some(_)) => break String::from("remote_exit"),

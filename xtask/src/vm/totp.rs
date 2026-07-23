@@ -78,6 +78,18 @@ def reauth(purpose):
         fail("reauth_claim_missing")
     return token
 
+def enter_administrative():
+    global csrf
+    session = call("POST", "/api/v1/auth/administrative-access", {
+        "password": cfg["password"],
+        "additionalAuthCode": None,
+    })
+    if session.get("administrativeAccess") != "administrative":
+        fail("administrative_access_missing")
+    csrf = session.get("csrfToken")
+    if not csrf:
+        fail("administrative_csrf_missing")
+
 def totp(secret, step):
     try:
         key = base64.b32decode(secret + "=" * ((8 - len(secret) % 8) % 8), casefold=True)
@@ -139,6 +151,7 @@ def wait_for_success(operation_id):
 
 def main():
     login()
+    enter_administrative()
     enrollment_claim = reauth({"kind": "totp_enrollment"})
     enrollment = call("POST", "/api/v1/settings/access/totp/enrollment", {
         "reauthToken": enrollment_claim,
@@ -211,7 +224,7 @@ except Exception as error:
 
 const RESET_FIXTURE: &str = r#"set -eu
 sudo systemctl stop jw-agentd.service
-sudo python3 -c "import sqlite3; connection=sqlite3.connect('/var/lib/jw-agent/agentd/agentd.sqlite3'); connection.executescript(\"PRAGMA foreign_keys=ON; UPDATE settings SET value='disabled' WHERE key='additional_auth_policy'; DELETE FROM additional_auth_claims; DELETE FROM totp_enrollments; DELETE FROM reauth_claims; DELETE FROM sessions;\"); connection.commit(); connection.close()"
+sudo python3 -c "import sqlite3; connection=sqlite3.connect('/var/lib/jw-agent/agentd/agentd.sqlite3'); connection.executescript(\"PRAGMA foreign_keys=ON; UPDATE settings SET value='disabled' WHERE key='additional_auth_policy'; DELETE FROM additional_auth_claims; DELETE FROM totp_enrollments; DELETE FROM reauth_claims; DELETE FROM administrative_access; DELETE FROM sessions;\"); connection.commit(); connection.close()"
 sudo systemctl reset-failed jw-agentd.service
 sudo systemctl start jw-agentd.service
 for attempt in $(seq 1 40); do

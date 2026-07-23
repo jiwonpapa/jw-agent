@@ -17,6 +17,7 @@ Last reviewed: 2026-07-21
 - `/login`: public
 - `/session/reauth`: authenticated, single-use return to plan
 - `/settings/access`: current subject, role, sessions, public/recovery status
+- account panel: authenticated, overview에서는 기본 펼침, 다른 route에서는 header trigger로 표시
 
 ## Form contract
 
@@ -33,6 +34,7 @@ Last reviewed: 2026-07-21
 - anonymous
 - authenticating
 - authenticated viewer/operator/admin
+- admin standard mode / administrative mode
 - reauthentication required
 - session expired/revoked
 - PAM unavailable/timeout
@@ -48,6 +50,7 @@ Last reviewed: 2026-07-21
 - public and recovery cookie/session namespaces cannot cross ingress
 - UI hides unsupported action but server role remains authoritative
 - reauth result is bound to exact plan and cannot approve another plan
+- root typed operation UI는 `AUTH-ADMINISTRATIVE-ACCESS-V1` 관리 모드에서만 열리고 server API도 같은 상태를 강제
 - access settings exposes `disabled | risky_operations | all_mutations`; default is disabled and risky operations is recommended
 - provider가 준비되지 않으면 additional auth를 활성 상태로 표현하지 않고 mutation approval unavailable을 표시
 - every policy change requires admin and a recent PAM reauth claim; downgrade also shows residual-risk warning

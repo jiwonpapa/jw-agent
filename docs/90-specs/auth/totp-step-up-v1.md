@@ -3,7 +3,7 @@
 Status: Accepted  
 Authority: Authentication Specification  
 Owner: Security Maintainer  
-Last reviewed: 2026-07-22
+Last reviewed: 2026-07-23
 
 ## Purpose
 
@@ -75,4 +75,4 @@ Last reviewed: 2026-07-22
 - DB/log/journal/process/URL/browser trace secret scan
 - mobile password manager·authenticator paste와 accessibility
 
-`jw-agent_0.2.0~p2.16_amd64.deb`에서 구현되었으며 Ubuntu 24.04 VM의 `VM-P2-TOTP-STEP-UP`이 등록, exact-plan 승인, replay 차단, recovery reset과 encrypted-storage cleanup을 검증했습니다. SHA-256은 `318568c89db7d5e17f5abac54f1f8ee7551a301fccc4afaa9fa39198313939fa`입니다.
+`jw-agent_0.2.0~p2.17_amd64.deb`에서 재검증되었으며 Ubuntu 24.04 VM의 `VM-P2-TOTP-STEP-UP`이 등록, 관리 모드 진입, exact-plan 승인, replay 차단, recovery reset과 encrypted-storage cleanup을 검증했습니다. SHA-256은 `283bf2b8d3465e22ac38beb696014a3cea3e0b059b54a71238780aec8b7c3b5f`입니다.

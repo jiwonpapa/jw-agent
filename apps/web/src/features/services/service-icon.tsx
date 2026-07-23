@@ -17,9 +17,15 @@ import { cn } from "../../shared/ui/cn";
 
 const BRAND_ICON_PATHS: Readonly<Record<string, string>> = {
   nginx: "/service-icons/nginx.svg",
+  "apache-httpd": "/service-icons/apache.svg",
+  caddy: "/service-icons/caddy.svg",
   "php-fpm": "/service-icons/php.svg",
+  mysql: "/service-icons/mysql.svg",
+  mariadb: "/service-icons/mariadb.svg",
+  postgresql: "/service-icons/postgresql.svg",
   redis: "/service-icons/redis.svg",
   certbot: "/service-icons/letsencrypt.svg",
+  docker: "/service-icons/docker.svg",
 };
 
 const CATEGORY_ICONS: Readonly<Record<ServiceCategory, LucideIcon>> = {
@@ -44,7 +50,7 @@ export function ServiceIcon({ service, className }: { service: ServiceSummary; c
   if (brandPath !== undefined) {
     return (
       <span className={cn("grid size-10 shrink-0 place-items-center rounded-panel bg-surface ring-1 ring-border", className)}>
-        <img src={brandPath} alt="" aria-hidden="true" className="size-6 object-contain" />
+        <img src={brandPath} alt="" aria-hidden="true" className="size-6 object-contain dark:invert" />
       </span>
     );
   }

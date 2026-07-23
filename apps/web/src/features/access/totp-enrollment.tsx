@@ -137,7 +137,7 @@ export function TotpEnrollment({ settings, session }: {
   }
 
   return (
-    <section className="border-t border-border py-7" aria-labelledby="totp-provider-heading">
+    <section className="mt-6 rounded-panel border border-border bg-surface p-5" aria-labelledby="totp-provider-heading">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div className="flex items-start gap-3">
           <ShieldCheck aria-hidden="true" className="mt-0.5 size-5 text-action" />

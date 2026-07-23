@@ -10,6 +10,8 @@ const session = {
   absoluteExpiresAt: "2026-07-21T10:00:00Z",
   csrfToken: "fixture-csrf-token",
   additionalAuthPolicy: "disabled",
+  administrativeAccess: "standard",
+  administrativeExpiresAt: null,
 };
 const assurance = {
   level: "g2_reversible_config",

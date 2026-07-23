@@ -47,6 +47,110 @@
         }
       }
     },
+    "/api/v1/auth/administrative-access": {
+      "post": {
+        "tags": [],
+        "operationId": "enter_administrative_access",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdministrativeAccessRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Rotated non-root admin session with bounded administrative access",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Generic PAM authentication failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role, CSRF, subject, or TOTP rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Authentication rate limited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Authentication provider unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [],
+        "operationId": "leave_administrative_access",
+        "responses": {
+          "200": {
+            "description": "Current session returned to standard access",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "CSRF rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/auth/login": {
       "post": {
         "tags": [],
@@ -695,6 +799,47 @@
           },
           "401": {
             "description": "Session rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Origin or CSRF rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/files/sessions/heartbeat": {
+      "post": {
+        "tags": [],
+        "operationId": "heartbeat_file_session",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FileSessionHeartbeatRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "File session and parent login session remain active"
+          },
+          "401": {
+            "description": "Session rejected or expired",
             "content": {
               "application/json": {
                 "schema": {
@@ -2393,6 +2538,34 @@
           "unavailable"
         ]
       },
+      "AdministrativeAccessRequest": {
+        "type": "object",
+        "required": [
+          "password"
+        ],
+        "properties": {
+          "additionalAuthCode": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "password"
+          },
+          "password": {
+            "type": "string",
+            "format": "password",
+            "maxLength": 1024
+          }
+        },
+        "additionalProperties": false
+      },
+      "AdministrativeAccessState": {
+        "type": "string",
+        "enum": [
+          "standard",
+          "administrative"
+        ]
+      },
       "AssuranceLevel": {
         "type": "string",
         "enum": [
@@ -3370,6 +3543,19 @@
         },
         "additionalProperties": false
       },
+      "FileSessionHeartbeatRequest": {
+        "type": "object",
+        "required": [
+          "sessionToken"
+        ],
+        "properties": {
+          "sessionToken": {
+            "type": "string",
+            "format": "password"
+          }
+        },
+        "additionalProperties": false
+      },
       "FileSessionRequest": {
         "type": "object",
         "required": [
@@ -3663,6 +3849,13 @@
           "architecture": {
             "type": "string"
           },
+          "cpuUsagePercent": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
           "hostname": {
             "type": [
               "string",
@@ -3681,6 +3874,14 @@
               "null"
             ],
             "format": "double"
+          },
+          "logicalCpuCount": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
           },
           "memory": {
             "oneOf": [
@@ -5052,7 +5253,8 @@
           "idleExpiresAt",
           "absoluteExpiresAt",
           "csrfToken",
-          "additionalAuthPolicy"
+          "additionalAuthPolicy",
+          "administrativeAccess"
         ],
         "properties": {
           "absoluteExpiresAt": {
@@ -5060,6 +5262,15 @@
           },
           "additionalAuthPolicy": {
             "$ref": "#/components/schemas/AdditionalAuthPolicy"
+          },
+          "administrativeAccess": {
+            "$ref": "#/components/schemas/AdministrativeAccessState"
+          },
+          "administrativeExpiresAt": {
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "authenticatedAt": {
             "type": "string"

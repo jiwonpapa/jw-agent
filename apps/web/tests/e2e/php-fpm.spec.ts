@@ -26,6 +26,8 @@ const session = {
   absoluteExpiresAt: "2026-07-22T10:00:00Z",
   csrfToken: "fixture-csrf-token",
   additionalAuthPolicy: "disabled",
+  administrativeAccess: "administrative",
+  administrativeExpiresAt: "2026-07-22T02:25:00Z",
 };
 const phpFpm = {
   observedAt: "2026-07-22T02:10:00Z",

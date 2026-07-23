@@ -1,6 +1,7 @@
 [Unit]
 Description=JW Agent one-shot PAM authentication worker
 Requires=jw-authd.socket
+CollectMode=inactive-or-failed
 
 [Service]
 Type=simple

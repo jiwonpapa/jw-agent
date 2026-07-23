@@ -4,7 +4,7 @@ use utoipa::ToSchema;
 use crate::{AssuranceView, SecretString, validate_digest};
 
 pub const FILE_IDLE_TIMEOUT_SECONDS: u64 = 2 * 60;
-pub const FILE_MAX_LIFETIME_SECONDS: u64 = 10 * 60;
+pub const FILE_MAX_LIFETIME_SECONDS: u64 = 0;
 pub const FILE_MAX_PATH_BYTES: usize = 1_024;
 pub const FILE_MAX_COMPONENT_BYTES: usize = 255;
 pub const FILE_MAX_LIST_ENTRIES: usize = 500;
@@ -111,6 +111,13 @@ pub struct FilePathRequest {
 #[derive(Debug, Deserialize, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct FileSessionCloseRequest {
+    #[schema(value_type = String, format = Password)]
+    pub session_token: SecretString,
+}
+
+#[derive(Debug, Deserialize, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct FileSessionHeartbeatRequest {
     #[schema(value_type = String, format = Password)]
     pub session_token: SecretString,
 }

@@ -2,6 +2,10 @@ import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page } from "@playwright/test";
 
 type FeatureRegressionHarness = {
+  setupOverview: (
+    page: Page,
+    options?: { standardAccess?: boolean; onAdministrativeAccess?: (body: unknown) => void },
+  ) => Promise<void>;
   setupSftp: (
     page: Page,
     callbacks: { onSession: () => void; onClose: () => void },
@@ -15,6 +19,49 @@ type FeatureRegressionHarness = {
 };
 
 export function registerFeatureRegressionTests(harness: FeatureRegressionHarness): void {
+  test("overview exposes account state and opens bounded root typed management mode", async ({ page }) => {
+    let submitted: unknown;
+    await harness.setupOverview(page, {
+      standardAccess: true,
+      onAdministrativeAccess: (body) => { submitted = body; },
+    });
+    await page.goto("/overview");
+    await expect(page.getByRole("heading", { name: "계정·현재 세션" })).toBeVisible();
+    await expect(page.getByText("root 작업 잠김")).toBeVisible();
+    await page.getByRole("button", { name: "관리 모드 열기" }).click();
+    await expect(page.getByRole("dialog", { name: "관리 모드 열기" })).toBeVisible();
+    await expect(page.getByText(/root 계정으로 로그인하지 않습니다/)).toBeVisible();
+    await page.getByLabel("Linux 비밀번호").fill("fixture-management-password");
+    await page.getByRole("button", { name: "재인증 후 관리 모드 열기" }).click();
+    await expect(page.getByText("root opsd typed 작업 승인 가능")).toBeVisible();
+    await expect(page.getByText("관리 권한 · 관리 모드").first()).toBeVisible();
+    expect(submitted).toEqual({ password: "fixture-management-password", additionalAuthCode: null });
+    expect(page.url()).not.toContain("fixture-management-password");
+  });
+
+  test("overview renders resource graphs, actionable attention, and expandable receipts", async ({ page }) => {
+    await harness.setupOverview(page);
+    await page.goto("/overview");
+    await expect(page.getByRole("img", { name: "CPU 38%" })).toBeVisible();
+    await expect(page.getByRole("progressbar", { name: "메모리 사용률" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "주의 및 권장 조치" })).toBeVisible();
+    await expect(page.getByText("실패한 서비스 1개", { exact: true })).toBeVisible();
+    await expect(page.getByRole("link", { name: /서비스 확인/ })).toBeVisible();
+    await page.getByText("example.com 비활성화").click();
+    await expect(page.getByText("변경 전 digest")).toBeVisible();
+    await expect(page.getByText("nginx.site_state.set/v1")).toBeVisible();
+  });
+
+  for (const viewport of [{ width: 320, height: 800 }, { width: 390, height: 844 }, { width: 768, height: 1024 }, { width: 1024, height: 768 }, { width: 1440, height: 900 }]) {
+    test(`overview reflows at ${String(viewport.width)}x${String(viewport.height)}`, async ({ page }) => {
+      await page.setViewportSize(viewport);
+      await harness.setupOverview(page);
+      await page.goto("/overview");
+      await expect(page.getByRole("heading", { name: "서버 개요" })).toBeVisible();
+      expect(await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth)).toBe(false);
+    });
+  }
+
   test("SFTP keeps the same memory-only session and directory across route navigation", async ({ page }) => {
     let sessionRequests = 0;
     let closeRequests = 0;

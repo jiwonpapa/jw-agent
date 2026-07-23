@@ -101,7 +101,7 @@ export function ServiceList({
 }) {
   const headingId = `service-${title.replaceAll(" ", "-")}`;
   return (
-    <section className="border-t border-border py-7" aria-labelledby={headingId}>
+    <section className="mt-6 rounded-panel border border-border bg-surface p-5" aria-labelledby={headingId}>
       <div>
         <h2 id={headingId} className="text-sm font-semibold text-text">{title}</h2>
         <p className="mt-1 text-sm text-muted">{description}</p>
@@ -109,9 +109,9 @@ export function ServiceList({
       {services.length === 0 ? (
         <p className="mt-5 border-y border-border py-5 text-sm text-muted">{emptyLabel}</p>
       ) : (
-        <ul className="mt-5 divide-y divide-border border-y border-border">
+        <ul className="mt-5 grid gap-3 md:grid-cols-2 2xl:grid-cols-3">
           {services.map((service) => (
-            <li key={service.serviceId}><ServiceRow service={service} /></li>
+            <li key={service.serviceId} className="min-w-0 rounded-control border border-border bg-subtle/25"><ServiceRow service={service} /></li>
           ))}
         </ul>
       )}
@@ -125,6 +125,11 @@ export function ServiceRow({ service, compact = false }: { service: ServiceSumma
       <summary className={compact
         ? "flex min-h-14 cursor-pointer list-none items-center gap-3 px-3 py-2 transition-colors hover:bg-subtle/70 [&::-webkit-details-marker]:hidden"
         : "flex min-h-16 cursor-pointer list-none items-center gap-3 py-3 transition-colors hover:bg-subtle/70 [&::-webkit-details-marker]:hidden"}>
+        {compact ? (
+          <ServiceIcon service={service} className="size-8 rounded-control [&_img]:size-5 [&_svg]:size-4" />
+        ) : (
+          <ServiceIcon service={service} />
+        )}
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 flex-wrap items-baseline gap-x-3 gap-y-1">
             <p className="truncate text-sm font-semibold text-text">{service.displayName}</p>

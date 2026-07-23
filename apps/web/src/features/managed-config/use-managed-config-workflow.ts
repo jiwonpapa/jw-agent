@@ -1,4 +1,4 @@
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 
 import {
@@ -18,7 +18,8 @@ import type {
   OperationStage,
 } from "../../shared/api/types";
 import { managedConfigSyntaxDiagnosticLine } from "../../shared/domain/managed-config-diagnostic";
-import { queryKeys } from "../../shared/api/queries";
+import { queryKeys, sessionQueryOptions } from "../../shared/api/queries";
+import { useAdministrativeAccess } from "../auth/administrative-access";
 
 export interface ManagedConfigCapability {
   resourceId: string;
@@ -28,6 +29,8 @@ export interface ManagedConfigCapability {
 
 export function useManagedConfigWorkflow(refreshQueryKey: readonly unknown[]) {
   const queryClient = useQueryClient();
+  const session = useQuery(sessionQueryOptions).data;
+  const { requestAccess } = useAdministrativeAccess();
   const [resource, setResource] = useState<ManagedConfigResourceView | null>(null);
   const [draft, setDraft] = useState("");
   const [plan, setPlan] = useState<ManagedConfigPlanView | null>(null);
@@ -73,7 +76,14 @@ export function useManagedConfigWorkflow(refreshQueryKey: readonly unknown[]) {
     };
   }, [accepted, queryClient, refreshQueryKey]);
 
-  async function open(capability: ManagedConfigCapability): Promise<void> {
+  async function open(
+    capability: ManagedConfigCapability,
+    administrativeConfirmed = false,
+  ): Promise<void> {
+    if (!administrativeConfirmed && session?.administrativeAccess !== "administrative") {
+      requestAccess(() => void open(capability, true));
+      return;
+    }
     if (requestInFlight.current) return;
     requestInFlight.current = true;
     setLoading(true);
@@ -90,7 +100,14 @@ export function useManagedConfigWorkflow(refreshQueryKey: readonly unknown[]) {
     }
   }
 
-  async function createPlan(capability: ManagedConfigCapability): Promise<void> {
+  async function createPlan(
+    capability: ManagedConfigCapability,
+    administrativeConfirmed = false,
+  ): Promise<void> {
+    if (!administrativeConfirmed && session?.administrativeAccess !== "administrative") {
+      requestAccess(() => void createPlan(capability, true));
+      return;
+    }
     if (requestInFlight.current || resource === null || draft === resource.content) return;
     requestInFlight.current = true;
     setPlanning(true);

@@ -8,6 +8,7 @@ import {
   TriangleAlert,
   XCircle,
 } from "lucide-react";
+import { useBlocker } from "@tanstack/react-router";
 import { lazy, Suspense, useState, type SyntheticEvent } from "react";
 
 import type {
@@ -98,6 +99,16 @@ export function ManagedConfigEditor({
   onApprove,
   onRevise,
 }: ManagedConfigEditorProps) {
+  const hasUnappliedChanges =
+    draft !== resource.content &&
+    receipt?.terminalState !== "SUCCEEDED";
+  useBlocker({
+    enableBeforeUnload: hasUnappliedChanges,
+    shouldBlockFn: () =>
+      hasUnappliedChanges &&
+      !window.confirm("적용하지 않은 설정 변경이 있습니다. 편집을 종료하시겠습니까?"),
+  });
+
   if (receipt !== null) {
     return <ManagedConfigResult receipt={receipt} onRevise={onRevise} />;
   }
@@ -164,7 +175,7 @@ export function ManagedConfigEditor({
         diagnosticMessage={
           diagnosticLine === null
             ? "서버 문법검사가 이 줄에서 실패했습니다."
-            : `${profile.validatorLabel}가 ${String(diagnosticLine)}번째 줄을 지목했습니다.`
+            : `${profile.validatorLabel}가 선택한 설정의 ${String(diagnosticLine)}번째 줄을 지목했습니다.`
         }
         onChange={onDraftChange}
       />
@@ -238,7 +249,7 @@ function ManagedConfigOperationPlan({
       <section className="mt-5" aria-labelledby="config-diff-heading">
         <h4 id="config-diff-heading" className="text-xs font-semibold text-muted">제한된 diff 미리보기</h4>
         <Suspense fallback={<Skeleton className="mt-2 h-64 w-full" />}>
-          <CodeDiff ariaLabel={`${profile.contentLabel} 변경 diff`} className="mt-2" language={profile.language} original={original} modified={modified} />
+          <CodeDiff ariaLabel={`${profile.contentLabel.replace(" 내용", "")} 변경 diff`} className="mt-2" language={profile.language} original={original} modified={modified} />
         </Suspense>
         <details className="mt-3 text-xs text-muted">
           <summary className="cursor-pointer font-medium text-action">텍스트 diff 요약</summary>
