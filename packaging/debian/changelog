@@ -1,3 +1,15 @@
+jw-agent (0.2.0~p2.18) noble; urgency=medium
+
+  * Add a four-step managed configuration wizard without repeated passwords.
+  * Reject empty, ignored, unknown, and malformed PHP-FPM directives before apply.
+  * Manage php.ini, php-fpm.conf, and the standard www pool with exact rollback.
+  * Add typed Nginx and PHP-FPM start, stop, restart, and reload operations.
+  * Add explicit restore plans from successful managed-configuration receipts.
+  * Show one, five, and fifteen minute load averages with normalized gauges.
+  * Keep terminal and SFTP connections across route navigation until explicit close.
+
+ -- JW Agent Maintainers <maintainers@example.invalid>  Thu, 23 Jul 2026 12:40:00 +0900
+
 jw-agent (0.2.0~p2.17) noble; urgency=medium
 
   * Add bounded PAM and TOTP administrative access for root typed operations.

@@ -9,6 +9,7 @@ export type HostObservation = components["schemas"]["HostObservation"];
 export type NginxSitesView = components["schemas"]["NginxSitesView"];
 export type PhpFpmView = components["schemas"]["PhpFpmView"];
 export type PhpFpmRuntimeView = components["schemas"]["PhpFpmRuntimeView"];
+export type PhpFpmManagedConfigView = components["schemas"]["PhpFpmManagedConfigView"];
 export type NginxSiteObservation = components["schemas"]["NginxSiteObservation"];
 export type ServicesView = components["schemas"]["ServicesView"];
 export type ServiceSummary = components["schemas"]["ServiceSummary"];
@@ -40,6 +41,7 @@ export type ManagedConfigPlanRequest = components["schemas"]["ManagedConfigPlanR
 export type ManagedConfigPlanView = components["schemas"]["ManagedConfigPlanView"];
 export type ManagedConfigApprovalRequest =
   components["schemas"]["ManagedConfigApprovalRequest"];
+export type ManagedConfigRestorePlanRequest = components["schemas"]["ManagedConfigRestorePlanRequest"];
 export type OperationApprovalRequest = components["schemas"]["OperationApprovalRequest"];
 export type OperationAcceptedView = components["schemas"]["OperationAcceptedView"];
 export type OperationReceiptView = components["schemas"]["OperationReceiptView"];
@@ -48,6 +50,10 @@ export type OperationStage = components["schemas"]["OperationStage"];
 export type OperationStageEvidenceView =
   components["schemas"]["OperationStageEvidenceView"];
 export type ServiceAction = components["schemas"]["ServiceAction"];
+export type ManagedServiceAction = components["schemas"]["ManagedServiceAction"];
+export type ServiceControlPlanRequest = components["schemas"]["ServiceControlPlanRequest"];
+export type ServiceControlApprovalRequest = components["schemas"]["ServiceControlApprovalRequest"];
+export type ServiceControlPlanView = components["schemas"]["ServiceControlPlanView"];
 export type AccessSettingsView = components["schemas"]["AccessSettingsView"];
 export type AdditionalAuthPolicy = components["schemas"]["AdditionalAuthPolicy"];
 export type AdditionalAuthProviderStatus =

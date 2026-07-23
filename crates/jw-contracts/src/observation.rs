@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
-use crate::{AssuranceView, IngressChannel};
+use crate::{AssuranceView, IngressChannel, ManagedServiceAction};
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
@@ -66,6 +66,8 @@ pub struct HostObservation {
     pub logical_cpu_count: Option<u32>,
     pub cpu_usage_percent: Option<f64>,
     pub load_average_one: Option<f64>,
+    pub load_average_five: Option<f64>,
+    pub load_average_fifteen: Option<f64>,
     pub memory: Option<MemoryObservation>,
     pub root_disk: Option<DiskObservation>,
 }
@@ -159,6 +161,10 @@ pub struct ServiceSummary {
     pub support: ServiceSupport,
     pub read_only: bool,
     pub hidden_by_default: bool,
+    pub state_digest: String,
+    pub allowed_actions: Vec<ManagedServiceAction>,
+    pub operation_type: Option<String>,
+    pub operation_schema_version: Option<u16>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, ToSchema)]

@@ -55,21 +55,24 @@ pub use observation::{
 };
 pub use operation::{
     IDEMPOTENCY_KEY_MAX_BYTES, IDEMPOTENCY_KEY_MIN_BYTES, MANAGED_CONFIG_MAX_BYTES,
-    MANAGED_CONFIG_OPERATION, ManagedConfigApprovalIntent, ManagedConfigApprovalRequest,
-    ManagedConfigPlanRequest, ManagedConfigPlanView, ManagedConfigResourceView,
+    MANAGED_CONFIG_OPERATION, MANAGED_CONFIG_RESTORE_OPERATION, ManagedConfigApprovalIntent,
+    ManagedConfigApprovalRequest, ManagedConfigPlanRequest, ManagedConfigPlanView,
+    ManagedConfigResourceView, ManagedConfigRestorePlanRequest, ManagedServiceAction,
     NGINX_CONFIG_ADAPTER_ID, NGINX_LAYOUT_ID, NGINX_MANAGED_CONFIG_MAX_BYTES,
     NGINX_MANAGEMENT_MARKER, NGINX_MANAGEMENT_PROXY_INCLUDE, NGINX_SITE_STATE_OPERATION,
     NginxSiteState, NginxSiteStatePlanRequest, NginxSiteStatePlanView, OPERATION_SCHEMA_VERSION,
     OperationAcceptedView, OperationApprovalRequest, OperationListView, OperationReceiptView,
     OperationStage, OperationStageEvidenceView, OpsCapabilityResponse, OpsRejectedResponse,
-    OpsRequest, OpsRequestBody, OpsResponse, OpsResponseBody, ServiceAction,
-    managed_config_bytes_supported, nginx_config_resource_id, nginx_enabled_state_digest,
-    nginx_internal_temporary_name, nginx_management_config, nginx_site_id, sha256_digest,
-    validate_digest,
+    OpsRequest, OpsRequestBody, OpsResponse, OpsResponseBody, SERVICE_CONTROL_OPERATION,
+    ServiceAction, ServiceControlApprovalRequest, ServiceControlPlanRequest,
+    ServiceControlPlanView, managed_config_bytes_supported, nginx_config_resource_id,
+    nginx_enabled_state_digest, nginx_internal_temporary_name, nginx_management_config,
+    nginx_site_id, service_id, service_state_digest, sha256_digest, validate_digest,
 };
 pub use php_fpm::{
     PHP_FPM_CONFIG_ADAPTER_ID, PHP_FPM_CONFIG_MAX_BYTES, PHP_FPM_EXTENSION_MAX_ENTRIES,
-    PHP_FPM_SUPPORTED_VERSION, PHP_FPM_UNIT, PhpFpmRuntimeView, PhpFpmView,
+    PHP_FPM_GLOBAL_CONFIG_ADAPTER_ID, PHP_FPM_POOL_CONFIG_ADAPTER_ID, PHP_FPM_SUPPORTED_VERSION,
+    PHP_FPM_UNIT, PhpFpmManagedConfigView, PhpFpmRuntimeView, PhpFpmView,
     php_fpm_config_resource_id,
 };
 pub use problem::ProblemDetails;

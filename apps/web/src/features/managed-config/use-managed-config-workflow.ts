@@ -7,7 +7,6 @@ import {
   getManagedConfigResource,
   getOperationReceipt,
   planManagedConfig,
-  reauthenticateForOperation,
   watchOperationEvents,
 } from "../../shared/api/client";
 import type {
@@ -18,7 +17,7 @@ import type {
   OperationStage,
 } from "../../shared/api/types";
 import { managedConfigSyntaxDiagnosticLine } from "../../shared/domain/managed-config-diagnostic";
-import { queryKeys, sessionQueryOptions } from "../../shared/api/queries";
+import { sessionQueryOptions } from "../../shared/api/queries";
 import { useAdministrativeAccess } from "../auth/administrative-access";
 
 export interface ManagedConfigCapability {
@@ -129,6 +128,7 @@ export function useManagedConfigWorkflow(refreshQueryKey: readonly unknown[]) {
       approvalKey.current = idempotencyKey;
       setPlan(nextPlan);
     } catch (error) {
+      setDiagnosticLine(operationDiagnosticLine(error));
       setErrorMessage(operationErrorCopy(error, "설정 변경 계획을 만들지 못했습니다."));
       await queryClient.invalidateQueries({ queryKey: refreshQueryKey });
     } finally {
@@ -137,25 +137,19 @@ export function useManagedConfigWorkflow(refreshQueryKey: readonly unknown[]) {
     }
   }
 
-  async function approve(password: string, additionalAuthCode: string): Promise<void> {
+  async function approve(): Promise<void> {
     if (requestInFlight.current || plan === null || approvalKey.current === null) return;
     requestInFlight.current = true;
     setExecuting(true);
     setErrorMessage(null);
     try {
-      const reauth = await reauthenticateForOperation({
-        password,
-        planHash: plan.planHash,
-        additionalAuthCode,
-      });
-      queryClient.setQueryData(queryKeys.session, reauth.session);
       setAccepted(await approveManagedConfig({
         schemaVersion: plan.schemaVersion,
         planId: plan.planId,
         planHash: plan.planHash,
         idempotencyKey: approvalKey.current,
-        reauthToken: reauth.reauthToken,
-        additionalAuthClaim: reauth.additionalAuthClaim ?? null,
+        reauthToken: null,
+        additionalAuthClaim: null,
         approvalIntent: {
           validationConfirmed: true,
           serviceActionConfirmed: true,
@@ -223,10 +217,22 @@ function isTerminalStage(stage: OperationStage): boolean {
 
 function operationErrorCopy(error: unknown, fallback: string): string {
   if (!(error instanceof ApiError)) return fallback;
+  if (error.code === "empty_config") return "빈 설정 파일은 적용할 수 없습니다. 필수 설정을 복원한 뒤 다시 검증하세요.";
+  if (error.code.startsWith("ignored_directive_line_")) return "설정으로 해석되지 않는 줄이 있습니다. 표시된 줄을 수정하거나 주석으로 바꾸세요.";
+  if (error.code.startsWith("unknown_directive_line_")) return "현재 설치된 PHP가 알지 못하는 설정 항목입니다. 표시된 줄의 이름을 확인하세요.";
+  if (error.code.startsWith("invalid_directive_line_")) return "설정 형식이 올바르지 않습니다. 표시된 줄을 ‘항목 = 값’ 형식으로 수정하세요.";
   if (error.status === 401) return "재인증에 실패했거나 세션이 만료되었습니다.";
   if (error.status === 403) return "현재 계정 또는 exact-plan 재인증으로 승인할 수 없습니다.";
   if (error.status === 409) return "계획이 만료·변경되었거나 다른 작업이 진행 중입니다. 상태를 다시 확인하세요.";
   if (error.status === 423) return "감사 원장 무결성 잠금으로 모든 변경이 차단되었습니다.";
   if (error.status === 428) return "설정된 추가 인증 수단을 사용할 수 없어 변경이 차단되었습니다.";
   return fallback;
+}
+
+function operationDiagnosticLine(error: unknown): number | null {
+  if (!(error instanceof ApiError)) return null;
+  const match = error.code.match(/_(?:line_)?(\d+)$/u);
+  if (match === null) return null;
+  const line = Number.parseInt(match[1] ?? "", 10);
+  return Number.isFinite(line) && line > 0 ? line : null;
 }

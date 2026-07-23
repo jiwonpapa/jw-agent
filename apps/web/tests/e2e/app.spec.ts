@@ -167,7 +167,7 @@ const operationReceipt: OperationReceiptView = {
   ],
   assurance: reversibleAssurance,
   rollbackResult: null,
-  recoveryPath: [],
+  recoveryPath: [], restoreAvailable: false,
 };
 
 const operationAccepted = {
@@ -469,7 +469,7 @@ const certbotIssueReceipt: OperationReceiptView = {
   afterDigest: certificates.inventoryDigest,
   assurance: verifiedActionAssurance,
   rollbackResult: null,
-  recoveryPath: [],
+  recoveryPath: [], restoreAvailable: false,
   stages: [
     { sequence: 1, stage: "APPROVED", recordedAt: "2026-07-21T02:12:00Z", resultCode: "approved", evidenceDigest: certbotIssuePlan.planHash },
     { sequence: 2, stage: "SNAPSHOTTED", recordedAt: "2026-07-21T02:12:01Z", resultCode: "snapshot_durable", evidenceDigest: certificates.inventoryDigest },
@@ -586,7 +586,7 @@ const certbotRenewReceipt: OperationReceiptView = {
   ],
   assurance: verifiedActionAssurance,
   rollbackResult: null,
-  recoveryPath: [],
+  recoveryPath: [], restoreAvailable: false,
 };
 
 const certbotRenewAccepted = {

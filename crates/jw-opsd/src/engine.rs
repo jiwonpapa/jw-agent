@@ -7,11 +7,12 @@ use jw_contracts::{
     CERTBOT_RENEW_TEST_OPERATION, CertbotAttachPlanRequest, CertbotAttachPlanView, CertbotCommand,
     CertbotCommandEvidence, CertbotIssuePlanInput, CertbotIssuePlanView,
     CertbotRenewTestPlanRequest, CertbotRenewTestPlanView, CertificateEnvironment,
-    CertificateInventoryView, MANAGED_CONFIG_OPERATION, ManagedConfigApprovalIntent,
-    ManagedConfigPlanRequest, ManagedConfigPlanView, ManagedConfigResourceView,
-    NGINX_SITE_STATE_OPERATION, NginxSiteState, NginxSiteStatePlanRequest, OperationReceiptView,
-    OperationStage, OpsCapabilityResponse, OpsRejectedResponse, OpsRequest, OpsRequestBody,
-    OpsResponse, OpsResponseBody, Role, RollbackSupport, Subject,
+    CertificateInventoryView, MANAGED_CONFIG_OPERATION, MANAGED_CONFIG_RESTORE_OPERATION,
+    ManagedConfigApprovalIntent, ManagedConfigPlanRequest, ManagedConfigPlanView,
+    ManagedConfigResourceView, ManagedConfigRestorePlanRequest, NGINX_SITE_STATE_OPERATION,
+    NginxSiteState, NginxSiteStatePlanRequest, OperationReceiptView, OperationStage,
+    OpsCapabilityResponse, OpsRejectedResponse, OpsRequest, OpsRequestBody, OpsResponse,
+    OpsResponseBody, Role, RollbackSupport, SERVICE_CONTROL_OPERATION, Subject,
     nginx_enabled_state_digest as enabled_state_digest, sha256_digest,
 };
 use serde::Serialize;
@@ -31,7 +32,8 @@ use crate::managed_config::{
     diff_stats, discover_managed_config, discover_protected_config, managed_config_adapter,
     managed_config_assurance, managed_config_failure_code, managed_config_test_succeeded,
     read_proposal, remove_proposal, replace_managed_config, replace_protected_config,
-    restore_managed_config, restore_protected_config, write_proposal,
+    restore_managed_config, restore_protected_config, validate_managed_config_candidate,
+    write_proposal,
 };
 use crate::nginx::{NGINX_IMPACT, NGINX_RECOVERY_PATH, NginxSite, discover_site, set_enabled};
 use crate::runner::{CommandClass, CommandEvidence, OperationRunner};
@@ -40,6 +42,9 @@ use crate::snapshot::{
     read_certificate_inventory_snapshot, read_managed_config_snapshot, read_nginx_snapshot,
     write_certificate_inventory_snapshot, write_managed_config_snapshot, write_nginx_snapshot,
 };
+
+mod managed_config_plan;
+mod service_operation;
 
 const CERTBOT_STAGING_EVIDENCE_TTL_MS: i64 = 24 * 60 * 60 * 1_000;
 
@@ -67,6 +72,14 @@ struct ManagedPlanRequestDigest<'a> {
     operation_type: &'a str,
     actor: &'a Subject,
     request: &'a ManagedConfigPlanRequest,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ManagedRestorePlanRequestDigest<'a> {
+    operation_type: &'a str,
+    actor: &'a Subject,
+    request: &'a ManagedConfigRestorePlanRequest,
 }
 
 #[derive(Serialize)]
@@ -419,6 +432,12 @@ impl OpsService {
                 self.plan_managed_config(actor, plan, now_ms)
                     .map(OpsResponseBody::ManagedConfigPlan)
             }
+            OpsRequestBody::PlanManagedConfigRestore { actor, plan } => {
+                self.require_write_available()?;
+                require_operator(actor)?;
+                self.plan_managed_config_restore(actor, plan, now_ms)
+                    .map(OpsResponseBody::ManagedConfigPlan)
+            }
             OpsRequestBody::ApproveManagedConfig {
                 actor,
                 plan_id,
@@ -437,6 +456,27 @@ impl OpsService {
                     now_ms,
                 )
                 .map(OpsResponseBody::OperationReceipt)
+            }
+            OpsRequestBody::PlanServiceControl { actor, plan } => {
+                self.require_write_available()?;
+                require_operator(actor)?;
+                self.plan_service_control(actor, plan, now_ms)
+                    .map(OpsResponseBody::ServiceControlPlan)
+            }
+            OpsRequestBody::ApproveServiceControl {
+                actor,
+                plan_id,
+                plan_hash,
+                idempotency_key,
+                impact_confirmed,
+            } => {
+                self.require_write_available()?;
+                require_operator(actor)?;
+                if !impact_confirmed {
+                    return Err(OpsError::Rejected("impact_confirmation"));
+                }
+                self.approve_service_control(actor, plan_id, plan_hash, idempotency_key, now_ms)
+                    .map(OpsResponseBody::OperationReceipt)
             }
             OpsRequestBody::ExecuteOperation {
                 actor,
@@ -478,6 +518,7 @@ impl OpsService {
                     String::from(CERTBOT_ISSUE_OPERATION),
                     String::from(CERTBOT_RENEW_TEST_OPERATION),
                     String::from(CERTBOT_ATTACH_OPERATION),
+                    String::from(SERVICE_CONTROL_OPERATION),
                 ],
                 forensic_lockdown: false,
             },
@@ -908,149 +949,6 @@ impl OpsService {
         ledger.receipt(&operation.operation_id)
     }
 
-    fn plan_managed_config(
-        &self,
-        actor: &Subject,
-        request: &ManagedConfigPlanRequest,
-        now_ms: i64,
-    ) -> Result<ManagedConfigPlanView, OpsError> {
-        request.validate().map_err(OpsError::Rejected)?;
-        let ledger = self.open_ledger()?;
-        self.remove_expired_proposals(&ledger, now_ms)?;
-        drop(ledger);
-        let resource = discover_managed_config(&self.paths, &request.resource_id)?;
-        if request.proposed_content.len() > resource.adapter.maximum_bytes() {
-            return Err(OpsError::Rejected("size_limit"));
-        }
-        if resource.content_digest != request.expected_content_digest
-            || resource.metadata_digest != request.expected_metadata_digest
-        {
-            return Err(OpsError::Rejected("stale_resource"));
-        }
-        let plan_id = random_id("plan")?;
-        let created_plan_id = plan_id.clone();
-        let proposal = write_proposal(
-            &self.paths,
-            &self.policy,
-            &plan_id,
-            &request.proposed_content,
-        )?;
-        let result =
-            self.store_managed_config_plan(actor, request, resource, plan_id, &proposal, now_ms);
-        if result
-            .as_ref()
-            .map_or(true, |stored| stored.plan_id != created_plan_id)
-        {
-            let _cleanup = remove_proposal(&self.paths, &proposal);
-        }
-        result.and_then(|stored| {
-            let ledger = self.open_ledger()?;
-            ledger.managed_config_plan_view(&stored)
-        })
-    }
-
-    fn store_managed_config_plan(
-        &self,
-        actor: &Subject,
-        request: &ManagedConfigPlanRequest,
-        resource: crate::managed_config::ManagedConfigResource,
-        plan_id: String,
-        proposal: &ProposalRecord,
-        now_ms: i64,
-    ) -> Result<StoredPlan, OpsError> {
-        let ttl_ms = i64::try_from(self.policy.plan_ttl.as_millis())
-            .map_err(|_| OpsError::Storage(String::from("plan ttl overflow")))?;
-        let expires_at_ms = now_ms.saturating_add(ttl_ms);
-        let stats = diff_stats(&resource.content, &request.proposed_content);
-        let current_bytes =
-            u32::try_from(resource.content.len()).map_err(|_| OpsError::Rejected("size_limit"))?;
-        let proposed_bytes = u32::try_from(request.proposed_content.len())
-            .map_err(|_| OpsError::Rejected("size_limit"))?;
-        let request_digest = canonical_digest(
-            b"jw-agent/operation-request/v1",
-            &ManagedPlanRequestDigest {
-                operation_type: MANAGED_CONFIG_OPERATION,
-                actor,
-                request,
-            },
-        )?;
-        let payload = ManagedConfigPlanPayload {
-            proposal_relative_path: proposal.relative_path.clone(),
-            proposal_digest: proposal.digest.clone(),
-            proposed_content_digest: sha256_digest(request.proposed_content.as_bytes()),
-            current_bytes,
-            proposed_bytes,
-            added_lines: stats.added_lines,
-            removed_lines: stats.removed_lines,
-            diff_summary: stats.summary,
-            service_action: request.service_action,
-        };
-        let mut plan = StoredPlan {
-            operation_type: String::from(MANAGED_CONFIG_OPERATION),
-            plan_id,
-            plan_hash: String::new(),
-            actor: actor.clone(),
-            site_id: resource.resource_id,
-            display_name: resource.display_name,
-            current_state: NginxSiteState::Disabled,
-            target_state: NginxSiteState::Disabled,
-            available_digest: resource.content_digest,
-            enabled_state_digest: resource.metadata_digest,
-            created_at_ms: now_ms,
-            expires_at_ms,
-            idempotency_key: request.idempotency_key.clone(),
-            request_digest,
-            resource_key: format!(
-                "config/{}/{}",
-                resource.adapter.adapter_id(),
-                request.resource_id
-            ),
-            assurance: managed_config_assurance(resource.adapter),
-            managed_config: Some(payload),
-            certbot_renew: None,
-            certbot_issue: None,
-            certbot_attach: None,
-        };
-        plan.plan_hash = managed_config_plan_hash(&plan)?;
-        let mut ledger = self.open_ledger()?;
-        ledger.create_or_reuse_plan(&plan)
-    }
-
-    fn approve_managed_config(
-        &self,
-        actor: &Subject,
-        plan_id: &str,
-        plan_hash: &str,
-        idempotency_key: &str,
-        approval_intent: &ManagedConfigApprovalIntent,
-        now_ms: i64,
-    ) -> Result<OperationReceiptView, OpsError> {
-        approval_intent.validate().map_err(OpsError::Rejected)?;
-        let mut ledger = self.open_ledger()?;
-        let plan = ledger.load_plan(plan_id)?;
-        if plan.operation_type != MANAGED_CONFIG_OPERATION {
-            return Err(OpsError::Rejected("approval_mismatch"));
-        }
-        let operation_id = random_id("op")?;
-        let operation = ledger.begin_operation(
-            &operation_id,
-            plan_id,
-            plan_hash,
-            idempotency_key,
-            actor,
-            now_ms,
-        );
-        let operation = match operation {
-            Ok(operation) => operation,
-            Err(OpsError::Rejected("plan_expired")) => {
-                self.remove_plan_proposal(&plan);
-                return Err(OpsError::Rejected("plan_expired"));
-            }
-            Err(error) => return Err(error),
-        };
-        ledger.receipt(&operation.operation_id)
-    }
-
     fn plan_nginx(
         &self,
         actor: &Subject,
@@ -1157,8 +1055,13 @@ impl OpsService {
         if operation.plan.operation_type == CERTBOT_ATTACH_OPERATION {
             return self.execute_certbot_attach(&mut ledger, operation, now_ms);
         }
-        if operation.plan.operation_type == MANAGED_CONFIG_OPERATION {
+        if operation.plan.operation_type == MANAGED_CONFIG_OPERATION
+            || operation.plan.operation_type == MANAGED_CONFIG_RESTORE_OPERATION
+        {
             return self.execute_managed_config(&mut ledger, operation, now_ms);
+        }
+        if operation.plan.operation_type == SERVICE_CONTROL_OPERATION {
+            return self.execute_service_control(&mut ledger, operation, now_ms);
         }
         if operation.plan.operation_type != NGINX_SITE_STATE_OPERATION {
             return Err(OpsError::ForensicLockdown);
@@ -2102,7 +2005,7 @@ impl OpsService {
         &self,
         ledger: &mut Ledger,
         operation: &StoredOperation,
-        reason: &'static str,
+        reason: &str,
         now_ms: i64,
     ) -> Result<OperationReceiptView, OpsError> {
         let terminal = ledger.transition(
@@ -2127,7 +2030,7 @@ impl OpsService {
         ledger: &mut Ledger,
         operation_id: &str,
         expected: OperationStage,
-        reason: &'static str,
+        reason: &str,
         evidence_digest: &str,
         now_ms: i64,
     ) -> Result<OperationReceiptView, OpsError> {
@@ -2198,6 +2101,11 @@ impl OpsService {
                 return self.cancel_managed_before_apply(ledger, &operation, error.code(), now_ms);
             }
         };
+        if let Err(error) =
+            validate_managed_config_candidate(preflight.adapter, &preflight.content, &proposed)
+        {
+            return self.cancel_managed_before_apply(ledger, &operation, error.code(), now_ms);
+        }
         let snapshot = ManagedConfigSnapshot {
             schema_version: 1,
             resource_id: preflight.resource_id.clone(),
@@ -2869,8 +2777,19 @@ impl OpsService {
                         now_ms,
                     )
                     .map(|_| ())
-                } else if operation.plan.operation_type == MANAGED_CONFIG_OPERATION {
+                } else if operation.plan.operation_type == MANAGED_CONFIG_OPERATION
+                    || operation.plan.operation_type == MANAGED_CONFIG_RESTORE_OPERATION
+                {
                     self.rollback_managed_config(
+                        ledger,
+                        &operation.operation_id,
+                        "restart_recovery",
+                        &sha256_digest(b"restart_recovery"),
+                        now_ms,
+                    )
+                    .map(|_| ())
+                } else if operation.plan.operation_type == SERVICE_CONTROL_OPERATION {
+                    self.rollback_service_control(
                         ledger,
                         &operation.operation_id,
                         "restart_recovery",
@@ -3004,7 +2923,7 @@ fn managed_config_plan_hash(plan: &StoredPlan) -> Result<String, OpsError> {
         b"jw-agent/operation-plan/v1",
         &ManagedPlanHashMaterial {
             schema_version: 1,
-            operation_type: MANAGED_CONFIG_OPERATION,
+            operation_type: &plan.operation_type,
             plan_id: &plan.plan_id,
             created_at_ms: plan.created_at_ms,
             expires_at_ms: plan.expires_at_ms,

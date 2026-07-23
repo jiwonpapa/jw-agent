@@ -7,7 +7,8 @@ use std::path::{Path, PathBuf};
 use jw_contracts::{
     AssuranceLevel, AssuranceView, MANAGED_CONFIG_MAX_BYTES, ManagedConfigResourceView,
     NGINX_CONFIG_ADAPTER_ID, NGINX_LAYOUT_ID, NGINX_MANAGED_CONFIG_MAX_BYTES, NginxSiteState,
-    OPERATION_SCHEMA_VERSION, PHP_FPM_CONFIG_ADAPTER_ID, PHP_FPM_CONFIG_MAX_BYTES, RollbackSupport,
+    OPERATION_SCHEMA_VERSION, PHP_FPM_CONFIG_ADAPTER_ID, PHP_FPM_CONFIG_MAX_BYTES,
+    PHP_FPM_GLOBAL_CONFIG_ADAPTER_ID, PHP_FPM_POOL_CONFIG_ADAPTER_ID, RollbackSupport,
     ServiceAction, managed_config_bytes_supported, nginx_config_resource_id,
     nginx_internal_temporary_name, nginx_site_id, php_fpm_config_resource_id, sha256_digest,
 };
@@ -20,7 +21,10 @@ use crate::nginx::{
     validate_root,
 };
 use crate::nginx_diagnostic::nginx_config_failure_code;
-use crate::php_fpm_diagnostic::{php_fpm_config_failure_code, php_fpm_config_test_succeeded};
+use crate::php_fpm_diagnostic::{
+    php_fpm_config_failure_code, php_fpm_config_test_succeeded, validate_php_fpm_candidate,
+    validate_php_ini_candidate,
+};
 use crate::runner::{CommandClass, CommandEvidence};
 use crate::snapshot::{
     prepare_private_root, require_capacity, set_file_mode, set_mode, validate_private_directory,
@@ -53,7 +57,9 @@ const PHP_FPM_MANAGED_CONFIG_RECOVERY_PATH: [&str; 4] = [
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ManagedConfigAdapter {
     Nginx,
-    PhpFpm83,
+    PhpFpm83Ini,
+    PhpFpm83Global,
+    PhpFpm83PoolWww,
 }
 
 impl ManagedConfigAdapter {
@@ -61,7 +67,9 @@ impl ManagedConfigAdapter {
     pub const fn adapter_id(self) -> &'static str {
         match self {
             Self::Nginx => NGINX_CONFIG_ADAPTER_ID,
-            Self::PhpFpm83 => PHP_FPM_CONFIG_ADAPTER_ID,
+            Self::PhpFpm83Ini => PHP_FPM_CONFIG_ADAPTER_ID,
+            Self::PhpFpm83Global => PHP_FPM_GLOBAL_CONFIG_ADAPTER_ID,
+            Self::PhpFpm83PoolWww => PHP_FPM_POOL_CONFIG_ADAPTER_ID,
         }
     }
 
@@ -69,7 +77,9 @@ impl ManagedConfigAdapter {
     pub const fn maximum_bytes(self) -> usize {
         match self {
             Self::Nginx => NGINX_MANAGED_CONFIG_MAX_BYTES,
-            Self::PhpFpm83 => PHP_FPM_CONFIG_MAX_BYTES,
+            Self::PhpFpm83Ini | Self::PhpFpm83Global | Self::PhpFpm83PoolWww => {
+                PHP_FPM_CONFIG_MAX_BYTES
+            }
         }
     }
 
@@ -77,7 +87,9 @@ impl ManagedConfigAdapter {
     pub const fn impact(self) -> &'static [&'static str] {
         match self {
             Self::Nginx => &NGINX_MANAGED_CONFIG_IMPACT,
-            Self::PhpFpm83 => &PHP_FPM_MANAGED_CONFIG_IMPACT,
+            Self::PhpFpm83Ini | Self::PhpFpm83Global | Self::PhpFpm83PoolWww => {
+                &PHP_FPM_MANAGED_CONFIG_IMPACT
+            }
         }
     }
 
@@ -85,7 +97,9 @@ impl ManagedConfigAdapter {
     pub const fn recovery_path(self) -> &'static [&'static str] {
         match self {
             Self::Nginx => &NGINX_MANAGED_CONFIG_RECOVERY_PATH,
-            Self::PhpFpm83 => &PHP_FPM_MANAGED_CONFIG_RECOVERY_PATH,
+            Self::PhpFpm83Ini | Self::PhpFpm83Global | Self::PhpFpm83PoolWww => {
+                &PHP_FPM_MANAGED_CONFIG_RECOVERY_PATH
+            }
         }
     }
 
@@ -93,7 +107,9 @@ impl ManagedConfigAdapter {
     pub const fn config_test(self) -> CommandClass {
         match self {
             Self::Nginx => CommandClass::NginxConfigTest,
-            Self::PhpFpm83 => CommandClass::PhpFpm83ConfigTest,
+            Self::PhpFpm83Ini | Self::PhpFpm83Global | Self::PhpFpm83PoolWww => {
+                CommandClass::PhpFpm83ConfigTest
+            }
         }
     }
 
@@ -101,7 +117,9 @@ impl ManagedConfigAdapter {
     pub const fn reload(self) -> CommandClass {
         match self {
             Self::Nginx => CommandClass::NginxReload,
-            Self::PhpFpm83 => CommandClass::PhpFpm83Reload,
+            Self::PhpFpm83Ini | Self::PhpFpm83Global | Self::PhpFpm83PoolWww => {
+                CommandClass::PhpFpm83Reload
+            }
         }
     }
 
@@ -109,7 +127,9 @@ impl ManagedConfigAdapter {
     pub const fn active(self) -> CommandClass {
         match self {
             Self::Nginx => CommandClass::NginxActive,
-            Self::PhpFpm83 => CommandClass::PhpFpm83Active,
+            Self::PhpFpm83Ini | Self::PhpFpm83Global | Self::PhpFpm83PoolWww => {
+                CommandClass::PhpFpm83Active
+            }
         }
     }
 
@@ -117,7 +137,9 @@ impl ManagedConfigAdapter {
     pub const fn config_valid_code(self) -> &'static str {
         match self {
             Self::Nginx => "nginx_config_valid",
-            Self::PhpFpm83 => "php_fpm_config_valid",
+            Self::PhpFpm83Ini | Self::PhpFpm83Global | Self::PhpFpm83PoolWww => {
+                "php_fpm_config_valid"
+            }
         }
     }
 
@@ -125,7 +147,7 @@ impl ManagedConfigAdapter {
     pub const fn reloaded_code(self) -> &'static str {
         match self {
             Self::Nginx => "nginx_reloaded",
-            Self::PhpFpm83 => "php_fpm_reloaded",
+            Self::PhpFpm83Ini | Self::PhpFpm83Global | Self::PhpFpm83PoolWww => "php_fpm_reloaded",
         }
     }
 }
@@ -134,7 +156,11 @@ pub fn managed_config_adapter(resource_id: &str) -> Result<ManagedConfigAdapter,
     if resource_id.starts_with("ngc_") {
         Ok(ManagedConfigAdapter::Nginx)
     } else if resource_id == php_fpm_config_resource_id(PHP_FPM_CONFIG_ADAPTER_ID) {
-        Ok(ManagedConfigAdapter::PhpFpm83)
+        Ok(ManagedConfigAdapter::PhpFpm83Ini)
+    } else if resource_id == php_fpm_config_resource_id(PHP_FPM_GLOBAL_CONFIG_ADAPTER_ID) {
+        Ok(ManagedConfigAdapter::PhpFpm83Global)
+    } else if resource_id == php_fpm_config_resource_id(PHP_FPM_POOL_CONFIG_ADAPTER_ID) {
+        Ok(ManagedConfigAdapter::PhpFpm83PoolWww)
     } else {
         Err(OpsError::Rejected("resource_missing"))
     }
@@ -147,7 +173,9 @@ pub fn managed_config_test_succeeded(
 ) -> bool {
     match adapter {
         ManagedConfigAdapter::Nginx => evidence.success,
-        ManagedConfigAdapter::PhpFpm83 => php_fpm_config_test_succeeded(evidence),
+        ManagedConfigAdapter::PhpFpm83Ini
+        | ManagedConfigAdapter::PhpFpm83Global
+        | ManagedConfigAdapter::PhpFpm83PoolWww => php_fpm_config_test_succeeded(evidence),
     }
 }
 
@@ -159,7 +187,25 @@ pub fn managed_config_failure_code(
 ) -> String {
     match adapter {
         ManagedConfigAdapter::Nginx => nginx_config_failure_code(evidence, basename),
-        ManagedConfigAdapter::PhpFpm83 => php_fpm_config_failure_code(evidence),
+        ManagedConfigAdapter::PhpFpm83Ini
+        | ManagedConfigAdapter::PhpFpm83Global
+        | ManagedConfigAdapter::PhpFpm83PoolWww => php_fpm_config_failure_code(evidence),
+    }
+}
+
+pub fn validate_managed_config_candidate(
+    adapter: ManagedConfigAdapter,
+    current: &str,
+    proposed: &str,
+) -> Result<(), OpsError> {
+    match adapter {
+        ManagedConfigAdapter::Nginx => Ok(()),
+        ManagedConfigAdapter::PhpFpm83Ini => {
+            validate_php_ini_candidate(current, proposed).map_err(OpsError::RejectedOwned)
+        }
+        ManagedConfigAdapter::PhpFpm83Global | ManagedConfigAdapter::PhpFpm83PoolWww => {
+            validate_php_fpm_candidate(current, proposed).map_err(OpsError::RejectedOwned)
+        }
     }
 }
 
@@ -167,7 +213,9 @@ pub fn managed_config_failure_code(
 pub fn managed_config_masked_path(adapter: ManagedConfigAdapter, display_name: &str) -> String {
     match adapter {
         ManagedConfigAdapter::Nginx => format!("…/sites-available/{display_name}"),
-        ManagedConfigAdapter::PhpFpm83 => String::from("…/php/8.3/fpm/php.ini"),
+        ManagedConfigAdapter::PhpFpm83Ini => String::from("…/php/8.3/fpm/php.ini"),
+        ManagedConfigAdapter::PhpFpm83Global => String::from("…/php/8.3/fpm/php-fpm.conf"),
+        ManagedConfigAdapter::PhpFpm83PoolWww => String::from("…/php/8.3/fpm/pool.d/www.conf"),
     }
 }
 
@@ -191,10 +239,12 @@ pub fn managed_config_assurance(adapter: ManagedConfigAdapter) -> AssuranceView 
                 String::from("nginx -t와 reload 후 active 확인"),
             ],
         ),
-        ManagedConfigAdapter::PhpFpm83 => (
-            "Ubuntu PHP 8.3 FPM의 표준 php.ini bytes·owner·mode와 검증된 reload",
+        ManagedConfigAdapter::PhpFpm83Ini
+        | ManagedConfigAdapter::PhpFpm83Global
+        | ManagedConfigAdapter::PhpFpm83PoolWww => (
+            "Ubuntu PHP 8.3 FPM의 선택한 표준 설정 파일 bytes·owner·mode와 검증된 reload",
             vec![
-                String::from("pool 설정·CLI/Apache SAPI 설정과 extension package"),
+                String::from("선택하지 않은 다른 FPM·CLI·Apache SAPI 설정과 extension package"),
                 String::from("기존 request와 PHP process의 과거 in-memory 상태"),
                 String::from("제품 밖 root 사용자의 동시 변경"),
             ],
@@ -336,7 +386,27 @@ pub fn discover_managed_config(
 ) -> Result<ManagedConfigResource, OpsError> {
     match managed_config_adapter(requested_resource_id)? {
         ManagedConfigAdapter::Nginx => discover_nginx_managed_config(paths, requested_resource_id),
-        ManagedConfigAdapter::PhpFpm83 => discover_php_fpm_managed_config(paths),
+        ManagedConfigAdapter::PhpFpm83Ini => discover_php_fpm_managed_config(
+            paths,
+            ManagedConfigAdapter::PhpFpm83Ini,
+            &paths.php_fpm_ini,
+            "php.ini",
+            "PHP 8.3 FPM · php.ini",
+        ),
+        ManagedConfigAdapter::PhpFpm83Global => discover_php_fpm_managed_config(
+            paths,
+            ManagedConfigAdapter::PhpFpm83Global,
+            &paths.php_fpm_global,
+            "php-fpm.conf",
+            "PHP 8.3 FPM · 전역 설정",
+        ),
+        ManagedConfigAdapter::PhpFpm83PoolWww => discover_php_fpm_managed_config(
+            paths,
+            ManagedConfigAdapter::PhpFpm83PoolWww,
+            &paths.php_fpm_pool_www,
+            "www.conf",
+            "PHP 8.3 FPM · www pool",
+        ),
     }
 }
 
@@ -397,15 +467,20 @@ fn discover_nginx_managed_config(
     Err(OpsError::Rejected("resource_missing"))
 }
 
-fn discover_php_fpm_managed_config(paths: &OpsPaths) -> Result<ManagedConfigResource, OpsError> {
-    let root = paths
-        .php_fpm_ini
+fn discover_php_fpm_managed_config(
+    paths: &OpsPaths,
+    adapter: ManagedConfigAdapter,
+    path: &Path,
+    basename: &str,
+    display_name: &str,
+) -> Result<ManagedConfigResource, OpsError> {
+    let root = path
         .parent()
         .ok_or(OpsError::Rejected("unsupported_layout"))?;
     validate_root(root, paths.enforce_root_ownership)
         .map_err(|_| OpsError::Rejected("unsupported_layout"))?;
-    let metadata = std::fs::symlink_metadata(&paths.php_fpm_ini)
-        .map_err(|_| OpsError::Rejected("resource_missing"))?;
+    let metadata =
+        std::fs::symlink_metadata(path).map_err(|_| OpsError::Rejected("resource_missing"))?;
     validate_available_metadata(&metadata, paths.enforce_root_ownership)?;
     validate_managed_metadata(&metadata, paths.enforce_root_ownership)?;
     if metadata.len()
@@ -416,7 +491,7 @@ fn discover_php_fpm_managed_config(paths: &OpsPaths) -> Result<ManagedConfigReso
     let mut bytes = Vec::with_capacity(
         usize::try_from(metadata.len()).map_err(|_| OpsError::Rejected("size_limit"))?,
     );
-    File::open(&paths.php_fpm_ini)
+    File::open(path)
         .and_then(|mut source| source.read_to_end(&mut bytes))
         .map_err(|error| OpsError::Filesystem(error.to_string()))?;
     if !managed_config_bytes_supported(&bytes) {
@@ -427,10 +502,10 @@ fn discover_php_fpm_managed_config(paths: &OpsPaths) -> Result<ManagedConfigReso
     let uid = metadata_uid(&metadata);
     let gid = metadata_gid(&metadata);
     Ok(ManagedConfigResource {
-        adapter: ManagedConfigAdapter::PhpFpm83,
-        resource_id: php_fpm_config_resource_id(PHP_FPM_CONFIG_ADAPTER_ID),
-        basename: String::from("php.ini"),
-        display_name: String::from("PHP 8.3 FPM · php.ini"),
+        adapter,
+        resource_id: php_fpm_config_resource_id(adapter.adapter_id()),
+        basename: String::from(basename),
+        display_name: String::from(display_name),
         root: root.to_path_buf(),
         content_digest: sha256_digest(content.as_bytes()),
         metadata_digest: managed_metadata_digest(mode, uid, gid),

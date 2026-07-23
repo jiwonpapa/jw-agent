@@ -66,9 +66,13 @@ pub async fn observe_host(profile: &ObservationProfile, observed_at: String) -> 
         .and_then(|value| value.split_whitespace().next().map(str::to_owned))
         .and_then(|value| value.parse::<f64>().ok())
         .map(|value| value.max(0.0) as u64);
-    let load_average_one = read_bounded(&profile.load_average)
-        .and_then(|value| value.split_whitespace().next().map(str::to_owned))
-        .and_then(|value| value.parse::<f64>().ok());
+    let mut load_averages = (None, None, None);
+    if let Some(values) =
+        read_bounded(&profile.load_average).and_then(|value| parse_load_averages(&value))
+    {
+        load_averages = values;
+    }
+    let (load_average_one, load_average_five, load_average_fifteen) = load_averages;
     let memory = read_bounded(&profile.meminfo).and_then(|value| parse_memory(&value));
     let root_disk = observe_root_disk();
     let status = if cfg!(target_os = "linux") {
@@ -94,9 +98,20 @@ pub async fn observe_host(profile: &ObservationProfile, observed_at: String) -> 
         logical_cpu_count,
         cpu_usage_percent,
         load_average_one,
+        load_average_five,
+        load_average_fifteen,
         memory,
         root_disk,
     }
+}
+
+fn parse_load_averages(value: &str) -> Option<(Option<f64>, Option<f64>, Option<f64>)> {
+    let mut fields = value.split_whitespace();
+    Some((
+        fields.next()?.parse::<f64>().ok(),
+        fields.next()?.parse::<f64>().ok(),
+        fields.next()?.parse::<f64>().ok(),
+    ))
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

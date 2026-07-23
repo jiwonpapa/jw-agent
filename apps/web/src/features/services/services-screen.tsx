@@ -1,23 +1,36 @@
-import { useQuery } from "@tanstack/react-query";
-import { AlertTriangle, ListFilter, Search, ServerCog } from "lucide-react";
-import { useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { AlertTriangle, CheckCircle2, ListFilter, LoaderCircle, Play, Search, ServerCog, TriangleAlert } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
 
-import type { ServiceSummary } from "../../shared/api/types";
-import { servicesQueryOptions } from "../../shared/api/queries";
+import { ApiError, approveServiceControl, getOperationReceipt, planServiceControl, watchOperationEvents } from "../../shared/api/client";
+import type { ManagedServiceAction, OperationAcceptedView, OperationReceiptView, OperationStage, ServiceControlPlanView, ServiceSummary } from "../../shared/api/types";
+import { queryKeys, servicesQueryOptions, sessionQueryOptions } from "../../shared/api/queries";
 import { formatDateTime } from "../../shared/domain/format";
 import { Button } from "../../shared/ui/button";
 import { cn } from "../../shared/ui/cn";
 import { Skeleton } from "../../shared/ui/skeleton";
+import { Sheet } from "../../shared/ui/sheet";
 import { StatusMark } from "../../shared/ui/status-mark";
 import { SurfaceState } from "../../shared/ui/surface-state";
 import { WorkspaceHeader } from "../../shared/ui/workspace-header";
 import { PrimaryServiceGrid, ServiceList, ServiceRow } from "./service-list";
 import { SERVICE_FILTERS, matchesFilter, type ServiceFilter } from "./service-presenter";
+import { useAdministrativeAccess } from "../auth/administrative-access";
 
 export function ServicesScreen() {
   const inventory = useQuery(servicesQueryOptions);
+  const queryClient = useQueryClient();
+  const session = useQuery(sessionQueryOptions).data;
+  const { requestAccess } = useAdministrativeAccess();
   const [filter, setFilter] = useState<ServiceFilter>("all");
   const [systemSearch, setSystemSearch] = useState("");
+  const [controlTarget, setControlTarget] = useState<{ service: ServiceSummary; action: ManagedServiceAction } | null>(null);
+  const [controlPlan, setControlPlan] = useState<ServiceControlPlanView | null>(null);
+  const [controlAccepted, setControlAccepted] = useState<OperationAcceptedView | null>(null);
+  const [controlReceipt, setControlReceipt] = useState<OperationReceiptView | null>(null);
+  const [controlBusy, setControlBusy] = useState(false);
+  const [controlError, setControlError] = useState<string | null>(null);
+  const controlKey = useRef<string | null>(null);
   const services = inventory.data?.services ?? [];
   const filtered = services.filter((service) => matchesFilter(service, filter));
   const primary = filtered.filter((service) => service.visibility === "primary");
@@ -25,12 +38,92 @@ export function ServicesScreen() {
   const system = filtered.filter((service) => service.visibility === "system");
   const failed = services.filter((service) => service.runtimeState === "failed");
 
+  useEffect(() => {
+    if (controlAccepted === null) return;
+    const operation = controlAccepted;
+    const controller = new AbortController();
+    let closeStream: () => void = () => undefined;
+    async function refresh(): Promise<void> {
+      try {
+        const receipt = await getOperationReceipt(operation.operationId, controller.signal);
+        setControlReceipt(receipt);
+        if (isTerminal(receipt.terminalState)) {
+          closeStream();
+          setControlAccepted(null);
+          await queryClient.invalidateQueries({ queryKey: queryKeys.services });
+        }
+      } catch (error) {
+        if (!(error instanceof DOMException && error.name === "AbortError")) setControlError(controlErrorCopy(error));
+      }
+    }
+    closeStream = watchOperationEvents(operation.eventStream, () => void refresh(), () => void refresh());
+    void refresh();
+    return () => { controller.abort(); closeStream(); };
+  }, [controlAccepted, queryClient]);
+
+  async function beginControl(service: ServiceSummary, action: ManagedServiceAction, administrativeConfirmed = false): Promise<void> {
+    if (!administrativeConfirmed && session?.administrativeAccess !== "administrative") {
+      requestAccess(() => void beginControl(service, action, true));
+      return;
+    }
+    if (service.operationType !== "service.lifecycle.set/v1" || service.operationSchemaVersion == null) return;
+    setControlTarget({ service, action });
+    setControlPlan(null);
+    setControlReceipt(null);
+    setControlError(null);
+    setControlBusy(true);
+    const idempotencyKey = `web_${crypto.randomUUID()}`;
+    controlKey.current = idempotencyKey;
+    try {
+      setControlPlan(await planServiceControl({
+        schemaVersion: service.operationSchemaVersion,
+        operationType: service.operationType,
+        serviceId: service.serviceId,
+        action,
+        expectedStateDigest: service.stateDigest,
+        idempotencyKey,
+      }));
+    } catch (error) {
+      setControlError(controlErrorCopy(error));
+    } finally {
+      setControlBusy(false);
+    }
+  }
+
+  async function approveControl(): Promise<void> {
+    if (controlPlan === null || controlKey.current === null || controlBusy) return;
+    setControlBusy(true);
+    setControlError(null);
+    try {
+      setControlAccepted(await approveServiceControl({
+        schemaVersion: controlPlan.schemaVersion,
+        planId: controlPlan.planId,
+        planHash: controlPlan.planHash,
+        idempotencyKey: controlKey.current,
+        impactConfirmed: true,
+      }));
+    } catch (error) {
+      setControlError(controlErrorCopy(error));
+    } finally {
+      setControlBusy(false);
+    }
+  }
+
+  function closeControl(): void {
+    if (controlAccepted !== null) return;
+    setControlTarget(null);
+    setControlPlan(null);
+    setControlReceipt(null);
+    setControlError(null);
+    controlKey.current = null;
+  }
+
   return (
     <div className="animate-state-in">
       <WorkspaceHeader
         eyebrow="Services"
         title="서비스"
-        description="Ubuntu가 실제로 보고한 주요 서비스와 역할을 읽기 전용으로 확인합니다."
+        description="Ubuntu가 실제로 보고한 서비스를 확인하고 지원 대상은 안전 절차로 제어합니다."
         action={inventory.data ? (
           <div className="text-left sm:text-right">
             <p className="text-xs text-muted">마지막 관찰</p>
@@ -62,22 +155,75 @@ export function ServicesScreen() {
           <section className="mt-6 rounded-panel border border-border bg-surface p-5" aria-labelledby="primary-services-heading">
             <h2 id="primary-services-heading" className="text-sm font-semibold text-text">주요 서비스</h2>
             <p className="mt-1 text-sm text-muted">같은 서비스의 timer·instance는 한 카드 안에서 확인합니다.</p>
-            <PrimaryServiceGrid services={primary} />
+            <PrimaryServiceGrid services={primary} onAction={(service, action) => void beginControl(service, action)} />
           </section>
           <ServiceList
             title="발견된 서비스"
             description="서버 관리자가 추가한 systemd unit이며 JW Agent는 역할을 추측하지 않습니다."
             services={discovered}
             emptyLabel="발견된 사용자 정의 서비스가 없습니다."
+            onAction={(service, action) => void beginControl(service, action)}
           />
           <SystemServices services={system} search={systemSearch} onSearch={setSystemSearch} />
           <p className="border-t border-border pt-5 text-xs text-muted">
-            템플릿 {inventory.data.templateProfile} · 최대 512개 · 모든 항목은 G0 읽기 전용
+            템플릿 {inventory.data.templateProfile} · 최대 512개 · Nginx와 PHP 8.3 FPM만 lifecycle 제어 지원
           </p>
         </>
       )}
+
+      <Sheet open={controlTarget !== null} onOpenChange={(open) => { if (!open) closeControl(); }} title={controlTarget === null ? "서비스 작업" : `${controlTarget.service.displayName} ${actionLabel(controlTarget.action)}`} description="계획 → 실행 → 상태 확인 → 실패 시 이전 active 상태 복구" side="right" size="wide">
+        <ServiceControlPanel target={controlTarget} plan={controlPlan} accepted={controlAccepted} receipt={controlReceipt} busy={controlBusy} error={controlError} onApprove={() => void approveControl()} />
+      </Sheet>
     </div>
   );
+}
+
+function ServiceControlPanel({ target, plan, accepted, receipt, busy, error, onApprove }: {
+  target: { service: ServiceSummary; action: ManagedServiceAction } | null;
+  plan: ServiceControlPlanView | null;
+  accepted: OperationAcceptedView | null;
+  receipt: OperationReceiptView | null;
+  busy: boolean;
+  error: string | null;
+  onApprove: () => void;
+}) {
+  if (target === null) return null;
+  if (busy && plan === null) return <div className="flex items-center gap-3 text-sm text-muted"><LoaderCircle aria-hidden="true" className="size-5 animate-spin" />현재 서비스 상태와 작업 가능 여부를 확인합니다.</div>;
+  if (receipt !== null && isTerminal(receipt.terminalState)) {
+    const success = receipt.terminalState === "SUCCEEDED";
+    return <section className={success ? "rounded-panel border border-success/35 bg-success/5 p-5" : "rounded-panel border border-warning/35 bg-warning/5 p-5"}><div className="flex items-start gap-3"><CheckCircle2 aria-hidden="true" className={success ? "size-6 text-success" : "size-6 text-warning"} /><div><h3 className="font-semibold text-text">{success ? "서비스 작업 완료" : receipt.terminalState === "ROLLED_BACK" ? "실패 후 이전 상태 복구 완료" : "수동 확인 필요"}</h3><p className="mt-1 text-sm text-muted">{receipt.displayName} · {receipt.terminalState}</p></div></div></section>;
+  }
+  if (accepted !== null) return <div className="flex min-h-48 items-center justify-center gap-3"><LoaderCircle aria-hidden="true" className="size-6 animate-spin text-action" /><p className="text-sm text-muted">작업 실행 후 systemd 상태를 다시 확인하고 있습니다.</p></div>;
+  if (plan === null) return <p role="alert" className="text-sm text-danger">{error ?? "서비스 계획을 만들지 못했습니다."}</p>;
+  return (
+    <div>
+      <section className={target.action === "stop" ? "rounded-panel border border-danger/35 bg-danger/5 p-5" : "rounded-panel border border-border bg-subtle/40 p-5"}>
+        <div className="flex items-start gap-3"><TriangleAlert aria-hidden="true" className={target.action === "stop" ? "size-5 text-danger" : "size-5 text-warning"} /><div><h3 className="font-semibold text-text">{actionLabel(target.action)} 작업을 적용하시겠습니까?</h3><p className="mt-1 text-sm leading-6 text-muted">{target.action === "stop" ? "서비스가 중지되며 연결된 웹 요청이 즉시 실패할 수 있습니다." : "작업 후 active 상태를 읽어 확인하고 실패하면 이전 상태 복구를 시도합니다."}</p></div></div>
+      </section>
+      <dl className="mt-4 grid gap-3 rounded-panel border border-border p-4 text-sm sm:grid-cols-2"><div><dt className="text-xs text-muted">unit</dt><dd className="mt-1 font-mono text-text">{plan.unitName}</dd></div><div><dt className="text-xs text-muted">현재 상태</dt><dd className="mt-1 font-medium text-text">{plan.currentActive ? "실행 중" : "중지"}</dd></div></dl>
+      <details className="mt-4 rounded-panel border border-border p-4"><summary className="cursor-pointer text-sm font-semibold text-text">영향과 복구 경로 보기</summary><ul className="mt-3 space-y-1 text-sm text-muted">{[...plan.impact, ...plan.recoveryPath].map((item) => <li key={item}>· {item}</li>)}</ul></details>
+      {error ? <p role="alert" className="mt-4 text-sm font-medium text-danger">{error}</p> : null}
+      <Button className="mt-5 w-full" variant={target.action === "stop" ? "danger" : "primary"} disabled={busy} onClick={onApprove}>{busy ? <LoaderCircle aria-hidden="true" className="size-4 animate-spin" /> : <Play aria-hidden="true" className="size-4" />}{busy ? "승인 중" : `${actionLabel(target.action)} 적용`}</Button>
+    </div>
+  );
+}
+
+function actionLabel(action: ManagedServiceAction): string {
+  if (action === "start") return "시작";
+  if (action === "stop") return "중지";
+  if (action === "restart") return "재시작";
+  return "reload";
+}
+
+function isTerminal(stage: OperationStage): boolean {
+  return ["SUCCEEDED", "ROLLED_BACK", "RECOVERY_REQUIRED", "REJECTED", "EXPIRED", "CANCELLED_BEFORE_APPLY"].includes(stage);
+}
+
+function controlErrorCopy(error: unknown): string {
+  if (!(error instanceof ApiError)) return "서비스 작업을 완료하지 못했습니다.";
+  if (error.status === 409) return "서비스 상태가 바뀌었거나 다른 작업이 진행 중입니다. 새로 관찰한 뒤 다시 시도하세요.";
+  if (error.status === 423) return "감사 원장 무결성 잠금으로 변경이 차단되었습니다.";
+  return error.message;
 }
 
 function InventorySummary({ services, partial }: { services: ServiceSummary[]; partial: boolean }) {

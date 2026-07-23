@@ -7,9 +7,10 @@ use std::path::Path;
 use jw_contracts::{
     AssuranceView, CERTBOT_ATTACH_OPERATION, CERTBOT_ISSUE_OPERATION, CERTBOT_RENEW_TEST_OPERATION,
     CertbotAttachPlanView, CertbotIssuePlanView, CertbotRenewTestPlanView, CertificateEnvironment,
-    MANAGED_CONFIG_OPERATION, ManagedConfigPlanView, NGINX_SITE_STATE_OPERATION, NginxSiteState,
-    NginxSiteStatePlanView, OPERATION_SCHEMA_VERSION, OperationListView, OperationReceiptView,
-    OperationStage, OperationStageEvidenceView, Role, Subject,
+    MANAGED_CONFIG_OPERATION, MANAGED_CONFIG_RESTORE_OPERATION, ManagedConfigPlanView,
+    NGINX_SITE_STATE_OPERATION, NginxSiteState, NginxSiteStatePlanView, OPERATION_SCHEMA_VERSION,
+    OperationListView, OperationReceiptView, OperationStage, OperationStageEvidenceView, Role,
+    SERVICE_CONTROL_OPERATION, ServiceControlPlanView, Subject,
 };
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use serde::{Deserialize, Serialize};
@@ -26,9 +27,15 @@ use crate::managed_config::{
     ManagedConfigPlanPayload, managed_config_adapter, managed_config_masked_path,
 };
 use crate::nginx::{NGINX_IMPACT, NGINX_RECOVERY_PATH};
+use crate::service_control::{
+    SERVICE_CONTROL_IMPACT, SERVICE_CONTROL_RECOVERY_PATH, registered_service,
+    service_action_from_digest,
+};
 use crate::snapshot::SnapshotRecord;
 
 mod activity;
+mod operation_views;
+use operation_views::recovery_path_for;
 
 const GENESIS_DIGEST: &str =
     "sha256:0000000000000000000000000000000000000000000000000000000000000000";
@@ -62,6 +69,7 @@ impl StoredPlan {
     #[must_use]
     pub fn before_digest(&self) -> &str {
         if self.operation_type == MANAGED_CONFIG_OPERATION
+            || self.operation_type == MANAGED_CONFIG_RESTORE_OPERATION
             || self.operation_type == CERTBOT_ATTACH_OPERATION
         {
             &self.available_digest
@@ -445,13 +453,18 @@ impl Ledger {
         let mut statement = self.connection.prepare(
             "SELECT plans.plan_id FROM plans
              LEFT JOIN operations ON operations.plan_id = plans.plan_id
-             WHERE plans.operation_type IN (?1, ?2)
-               AND plans.expires_at_ms <= ?3
+             WHERE plans.operation_type IN (?1, ?2, ?3)
+               AND plans.expires_at_ms <= ?4
                AND operations.operation_id IS NULL
              ORDER BY plans.expires_at_ms, plans.plan_id",
         )?;
         let rows = statement.query_map(
-            params![MANAGED_CONFIG_OPERATION, CERTBOT_ISSUE_OPERATION, now_ms],
+            params![
+                MANAGED_CONFIG_OPERATION,
+                MANAGED_CONFIG_RESTORE_OPERATION,
+                CERTBOT_ISSUE_OPERATION,
+                now_ms
+            ],
             |row| row.get::<_, String>(0),
         )?;
         let mut plans = Vec::new();
@@ -496,6 +509,12 @@ impl Ledger {
         } else {
             Vec::new()
         };
+        let managed_config_operation = operation.plan.operation_type == MANAGED_CONFIG_OPERATION
+            || operation.plan.operation_type == MANAGED_CONFIG_RESTORE_OPERATION;
+        let resource_id = managed_config_operation.then(|| operation.plan.site_id.clone());
+        let restore_available = managed_config_operation
+            && operation.stage == OperationStage::Succeeded
+            && operation.snapshot.is_some();
         Ok(OperationReceiptView {
             schema_version: OPERATION_SCHEMA_VERSION,
             operation_type: operation.plan.operation_type.clone(),
@@ -512,6 +531,8 @@ impl Ledger {
             assurance: operation.plan.assurance,
             rollback_result: operation.rollback_result,
             recovery_path,
+            resource_id,
+            restore_available,
         })
     }
 
@@ -554,7 +575,9 @@ impl Ledger {
         &self,
         plan: &StoredPlan,
     ) -> Result<ManagedConfigPlanView, OpsError> {
-        if plan.operation_type != MANAGED_CONFIG_OPERATION {
+        if plan.operation_type != MANAGED_CONFIG_OPERATION
+            && plan.operation_type != MANAGED_CONFIG_RESTORE_OPERATION
+        {
             return Err(OpsError::Rejected("operation_type"));
         }
         let payload = plan
@@ -1108,22 +1131,6 @@ fn migrate(connection: &Connection) -> Result<(), OpsError> {
         _ => return Err(OpsError::ForensicLockdown),
     }
     Ok(())
-}
-
-fn recovery_path_for(plan: &StoredPlan) -> Vec<String> {
-    let values: &[&str] = if plan.operation_type == MANAGED_CONFIG_OPERATION {
-        managed_config_adapter(&plan.site_id)
-            .map_or(&[] as &[&str], |adapter| adapter.recovery_path())
-    } else if plan.operation_type == CERTBOT_ISSUE_OPERATION {
-        &CERTBOT_ISSUE_RECOVERY_PATH
-    } else if plan.operation_type == jw_contracts::CERTBOT_RENEW_TEST_OPERATION {
-        &CERTBOT_RENEW_RECOVERY_PATH
-    } else if plan.operation_type == CERTBOT_ATTACH_OPERATION {
-        &CERTBOT_ATTACH_RECOVERY_PATH
-    } else {
-        &NGINX_RECOVERY_PATH
-    };
-    values.iter().map(ToString::to_string).collect()
 }
 
 fn load_operation_from(

@@ -1964,6 +1964,240 @@
         }
       }
     },
+    "/api/v1/operations/service/config-file/restore/plans": {
+      "post": {
+        "tags": [],
+        "operationId": "plan_managed_config_restore",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ManagedConfigRestorePlanRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Immutable managed configuration restore plan",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManagedConfigPlanView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid typed request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Administrative access required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Source unavailable, stale, or busy",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "Forensic lockdown",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/operations/service/lifecycle/approvals": {
+      "post": {
+        "tags": [],
+        "operationId": "approve_service_control",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ServiceControlApprovalRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Service lifecycle operation accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperationAcceptedView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid approval",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Administrative access required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Expired, stale, or busy service",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "Forensic lockdown",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/operations/service/lifecycle/plans": {
+      "post": {
+        "tags": [],
+        "operationId": "plan_service_control",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ServiceControlPlanRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Immutable service lifecycle plan",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServiceControlPlanView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid typed request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Administrative access required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Stale or busy service",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "Forensic lockdown",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/operations/{operation_id}": {
       "get": {
         "tags": [],
@@ -3868,6 +4102,20 @@
               "null"
             ]
           },
+          "loadAverageFifteen": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "loadAverageFive": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
           "loadAverageOne": {
             "type": [
               "number",
@@ -4110,7 +4358,6 @@
           "planId",
           "planHash",
           "idempotencyKey",
-          "reauthToken",
           "approvalIntent"
         ],
         "properties": {
@@ -4134,7 +4381,10 @@
             "type": "string"
           },
           "reauthToken": {
-            "type": "string",
+            "type": [
+              "string",
+              "null"
+            ],
             "format": "password"
           },
           "schemaVersion": {
@@ -4363,6 +4613,49 @@
             "minimum": 0
           }
         }
+      },
+      "ManagedConfigRestorePlanRequest": {
+        "type": "object",
+        "required": [
+          "schemaVersion",
+          "operationType",
+          "sourceOperationId",
+          "expectedContentDigest",
+          "expectedMetadataDigest",
+          "idempotencyKey"
+        ],
+        "properties": {
+          "expectedContentDigest": {
+            "type": "string"
+          },
+          "expectedMetadataDigest": {
+            "type": "string"
+          },
+          "idempotencyKey": {
+            "type": "string"
+          },
+          "operationType": {
+            "type": "string"
+          },
+          "schemaVersion": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "sourceOperationId": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "ManagedServiceAction": {
+        "type": "string",
+        "enum": [
+          "start",
+          "stop",
+          "restart",
+          "reload"
+        ]
       },
       "MemoryObservation": {
         "type": "object",
@@ -4730,7 +5023,8 @@
           "afterDigest",
           "stages",
           "assurance",
-          "recoveryPath"
+          "recoveryPath",
+          "restoreAvailable"
         ],
         "properties": {
           "actor": {
@@ -4768,6 +5062,15 @@
             "items": {
               "type": "string"
             }
+          },
+          "resourceId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "restoreAvailable": {
+            "type": "boolean"
           },
           "rollbackResult": {
             "type": [
@@ -4839,6 +5142,49 @@
           }
         }
       },
+      "PhpFpmManagedConfigView": {
+        "type": "object",
+        "required": [
+          "resourceId",
+          "operationType",
+          "schemaVersion",
+          "displayName",
+          "maskedPath",
+          "available",
+          "assurance"
+        ],
+        "properties": {
+          "assurance": {
+            "$ref": "#/components/schemas/AssuranceView"
+          },
+          "available": {
+            "type": "boolean"
+          },
+          "blockedReason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "displayName": {
+            "type": "string"
+          },
+          "maskedPath": {
+            "type": "string"
+          },
+          "operationType": {
+            "type": "string"
+          },
+          "resourceId": {
+            "type": "string"
+          },
+          "schemaVersion": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        }
+      },
       "PhpFpmRuntimeView": {
         "type": "object",
         "required": [
@@ -4853,6 +5199,7 @@
           "extensions",
           "extensionCount",
           "extensionsTruncated",
+          "managedConfigs",
           "assurance"
         ],
         "properties": {
@@ -4904,6 +5251,12 @@
             ],
             "format": "int32",
             "minimum": 0
+          },
+          "managedConfigs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PhpFpmManagedConfigView"
+            }
           },
           "phpIniMaskedPath": {
             "type": "string"
@@ -5119,6 +5472,149 @@
           "other"
         ]
       },
+      "ServiceControlApprovalRequest": {
+        "type": "object",
+        "required": [
+          "schemaVersion",
+          "planId",
+          "planHash",
+          "idempotencyKey",
+          "impactConfirmed"
+        ],
+        "properties": {
+          "idempotencyKey": {
+            "type": "string"
+          },
+          "impactConfirmed": {
+            "type": "boolean"
+          },
+          "planHash": {
+            "type": "string"
+          },
+          "planId": {
+            "type": "string"
+          },
+          "schemaVersion": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        },
+        "additionalProperties": false
+      },
+      "ServiceControlPlanRequest": {
+        "type": "object",
+        "required": [
+          "schemaVersion",
+          "operationType",
+          "serviceId",
+          "action",
+          "expectedStateDigest",
+          "idempotencyKey"
+        ],
+        "properties": {
+          "action": {
+            "$ref": "#/components/schemas/ManagedServiceAction"
+          },
+          "expectedStateDigest": {
+            "type": "string"
+          },
+          "idempotencyKey": {
+            "type": "string"
+          },
+          "operationType": {
+            "type": "string"
+          },
+          "schemaVersion": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "serviceId": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "ServiceControlPlanView": {
+        "type": "object",
+        "required": [
+          "schemaVersion",
+          "operationType",
+          "planId",
+          "planHash",
+          "createdAt",
+          "expiresAt",
+          "actor",
+          "serviceId",
+          "unitName",
+          "displayName",
+          "currentActive",
+          "action",
+          "expectedStateDigest",
+          "impact",
+          "recoveryPath",
+          "assurance"
+        ],
+        "properties": {
+          "action": {
+            "$ref": "#/components/schemas/ManagedServiceAction"
+          },
+          "actor": {
+            "$ref": "#/components/schemas/Subject"
+          },
+          "assurance": {
+            "$ref": "#/components/schemas/AssuranceView"
+          },
+          "createdAt": {
+            "type": "string"
+          },
+          "currentActive": {
+            "type": "boolean"
+          },
+          "displayName": {
+            "type": "string"
+          },
+          "expectedStateDigest": {
+            "type": "string"
+          },
+          "expiresAt": {
+            "type": "string"
+          },
+          "impact": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "operationType": {
+            "type": "string"
+          },
+          "planHash": {
+            "type": "string"
+          },
+          "planId": {
+            "type": "string"
+          },
+          "recoveryPath": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "schemaVersion": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "serviceId": {
+            "type": "string"
+          },
+          "unitName": {
+            "type": "string"
+          }
+        }
+      },
       "ServiceRuntimeState": {
         "type": "string",
         "enum": [
@@ -5144,11 +5640,19 @@
           "visibility",
           "support",
           "readOnly",
-          "hiddenByDefault"
+          "hiddenByDefault",
+          "stateDigest",
+          "allowedActions"
         ],
         "properties": {
           "activeState": {
             "type": "string"
+          },
+          "allowedActions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ManagedServiceAction"
+            }
           },
           "category": {
             "$ref": "#/components/schemas/ServiceCategory"
@@ -5158,6 +5662,20 @@
           },
           "hiddenByDefault": {
             "type": "boolean"
+          },
+          "operationSchemaVersion": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "operationType": {
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "purpose": {
             "type": "string"
@@ -5169,6 +5687,9 @@
             "$ref": "#/components/schemas/ServiceRuntimeState"
           },
           "serviceId": {
+            "type": "string"
+          },
+          "stateDigest": {
             "type": "string"
           },
           "subState": {

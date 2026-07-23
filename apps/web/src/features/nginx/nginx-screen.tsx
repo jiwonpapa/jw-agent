@@ -300,25 +300,19 @@ export function NginxScreen() {
     }
   }
 
-  async function approveConfigPlan(password: string, additionalAuthCode: string): Promise<void> {
+  async function approveConfigPlan(): Promise<void> {
     if (requestInFlight.current || configPlan === null || approvalKey.current === null) return;
     requestInFlight.current = true;
     setExecuting(true);
     setErrorMessage(null);
     try {
-      const reauth = await reauthenticateForOperation({
-        password,
-        planHash: configPlan.planHash,
-        additionalAuthCode,
-      });
-      queryClient.setQueryData(queryKeys.session, reauth.session);
       const operation = await approveManagedConfig({
         schemaVersion: configPlan.schemaVersion,
         planId: configPlan.planId,
         planHash: configPlan.planHash,
         idempotencyKey: approvalKey.current,
-        reauthToken: reauth.reauthToken,
-        additionalAuthClaim: reauth.additionalAuthClaim ?? null,
+        reauthToken: null,
+        additionalAuthClaim: null,
         approvalIntent: {
           validationConfirmed: true,
           serviceActionConfirmed: true,

@@ -47,6 +47,16 @@ const phpFpm = {
     managedConfigResourceId: resourceId,
     managedConfigOperationType: "service.config_file.set/v1",
     managedConfigSchemaVersion: 1,
+    managedConfigs: [{
+      resourceId,
+      displayName: "PHP 8.3 FPM php.ini",
+      maskedPath: "…/php/8.3/fpm/php.ini",
+      operationType: "service.config_file.set/v1",
+      schemaVersion: 1,
+      available: true,
+      blockedReason: null,
+      assurance,
+    }],
     blockedReason: null,
     assurance,
   }],
@@ -160,26 +170,23 @@ test("PHP-FPM workspace exposes runtime facts and a typed G2 php.ini flow", asyn
   await page.goto("/services/php-fpm");
 
   await expect(page.getByRole("heading", { name: "PHP-FPM", exact: true })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "PHP 8.3 FPM" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "PHP 8.3 FPM", exact: true })).toBeVisible();
   await expect(page.getByText("curl", { exact: true })).toBeVisible();
   await expect(page.getByText("원문 phpinfo는 제공하지 않습니다")).toBeVisible();
-  await page.getByRole("button", { name: "php.ini 편집" }).click();
+  await page.getByRole("button", { name: "PHP 8.3 FPM php.ini 편집" }).click();
   const editor = page.getByLabel("PHP 8.3 FPM php.ini 설정");
   await expect(editor).toContainText("memory_limit = 128M");
   await editor.fill("memory_limit = 256M\n");
-  await page.getByRole("button", { name: "변경 계획 만들기" }).click();
+  await page.getByRole("button", { name: "검증하기" }).click();
 
-  await expect(page.getByRole("heading", { name: "설정 변경 계획" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "서버 사전 검증을 통과했습니다" })).toBeVisible();
   await expect(page.getByLabel("PHP 8.3 FPM php.ini 설정 변경 diff")).toContainText("256M");
-  await page.getByLabel("Linux 계정 비밀번호로 exact plan 승인").fill("fixture-password");
-  await page.getByLabel(/php-fpm8.3 -t를 통과해야만 reload/).check();
-  await page.getByLabel(/php8.3-fpm.service reload를 수행/).check();
-  await page.getByRole("button", { name: "재인증 후 설정 적용" }).click();
+  await page.getByRole("button", { name: "적용 후 php8.3-fpm.service reload" }).click();
 
   await expect(page.getByRole("heading", { name: "적용 완료" })).toBeVisible();
   expect(planBodies).toHaveLength(1);
   expect(approvalBodies).toHaveLength(1);
-  expect(JSON.stringify(approvalBodies)).not.toContain("fixture-password");
+  expect(JSON.stringify(approvalBodies)).not.toContain("password");
   const hasOverflow = await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth);
   expect(hasOverflow).toBe(false);
   const accessibility = await new AxeBuilder({ page }).analyze();

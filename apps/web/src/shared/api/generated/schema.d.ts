@@ -532,6 +532,54 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/operations/service/config-file/restore/plans": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["plan_managed_config_restore"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/operations/service/lifecycle/approvals": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["approve_service_control"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/operations/service/lifecycle/plans": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["plan_service_control"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/operations/{operation_id}": {
         parameters: {
             query?: never;
@@ -1081,6 +1129,10 @@ export interface components {
             hostname?: string | null;
             kernelRelease?: string | null;
             /** Format: double */
+            loadAverageFifteen?: number | null;
+            /** Format: double */
+            loadAverageFive?: number | null;
+            /** Format: double */
             loadAverageOne?: number | null;
             /** Format: int32 */
             logicalCpuCount?: number | null;
@@ -1140,7 +1192,7 @@ export interface components {
             planHash: string;
             planId: string;
             /** Format: password */
-            reauthToken: string;
+            reauthToken?: string | null;
             /** Format: int32 */
             schemaVersion: number;
         };
@@ -1200,6 +1252,17 @@ export interface components {
             /** Format: int32 */
             schemaVersion: number;
         };
+        ManagedConfigRestorePlanRequest: {
+            expectedContentDigest: string;
+            expectedMetadataDigest: string;
+            idempotencyKey: string;
+            operationType: string;
+            /** Format: int32 */
+            schemaVersion: number;
+            sourceOperationId: string;
+        };
+        /** @enum {string} */
+        ManagedServiceAction: "start" | "stop" | "restart" | "reload";
         MemoryObservation: {
             /** Format: int64 */
             availableBytes: number;
@@ -1299,6 +1362,8 @@ export interface components {
             planId: string;
             recordedAt: string;
             recoveryPath: string[];
+            resourceId?: string | null;
+            restoreAvailable: boolean;
             rollbackResult?: string | null;
             /** Format: int32 */
             schemaVersion: number;
@@ -1315,6 +1380,17 @@ export interface components {
             sequence: number;
             stage: components["schemas"]["OperationStage"];
         };
+        PhpFpmManagedConfigView: {
+            assurance: components["schemas"]["AssuranceView"];
+            available: boolean;
+            blockedReason?: string | null;
+            displayName: string;
+            maskedPath: string;
+            operationType: string;
+            resourceId: string;
+            /** Format: int32 */
+            schemaVersion: number;
+        };
         PhpFpmRuntimeView: {
             activeState: string;
             assurance: components["schemas"]["AssuranceView"];
@@ -1328,6 +1404,7 @@ export interface components {
             managedConfigResourceId?: string | null;
             /** Format: int32 */
             managedConfigSchemaVersion?: number | null;
+            managedConfigs: components["schemas"]["PhpFpmManagedConfigView"][];
             phpIniMaskedPath: string;
             poolDirectoryMaskedPath: string;
             runtimeState: components["schemas"]["ServiceRuntimeState"];
@@ -1381,17 +1458,58 @@ export interface components {
         ServiceAction: "reload" | "restart";
         /** @enum {string} */
         ServiceCategory: "web" | "runtime" | "database" | "cache" | "access" | "security" | "certificate" | "container" | "monitoring" | "custom" | "system" | "other";
+        ServiceControlApprovalRequest: {
+            idempotencyKey: string;
+            impactConfirmed: boolean;
+            planHash: string;
+            planId: string;
+            /** Format: int32 */
+            schemaVersion: number;
+        };
+        ServiceControlPlanRequest: {
+            action: components["schemas"]["ManagedServiceAction"];
+            expectedStateDigest: string;
+            idempotencyKey: string;
+            operationType: string;
+            /** Format: int32 */
+            schemaVersion: number;
+            serviceId: string;
+        };
+        ServiceControlPlanView: {
+            action: components["schemas"]["ManagedServiceAction"];
+            actor: components["schemas"]["Subject"];
+            assurance: components["schemas"]["AssuranceView"];
+            createdAt: string;
+            currentActive: boolean;
+            displayName: string;
+            expectedStateDigest: string;
+            expiresAt: string;
+            impact: string[];
+            operationType: string;
+            planHash: string;
+            planId: string;
+            recoveryPath: string[];
+            /** Format: int32 */
+            schemaVersion: number;
+            serviceId: string;
+            unitName: string;
+        };
         /** @enum {string} */
         ServiceRuntimeState: "running" | "active" | "failed" | "stopped" | "transitioning" | "unknown";
         ServiceSummary: {
             activeState: string;
+            allowedActions: components["schemas"]["ManagedServiceAction"][];
             category: components["schemas"]["ServiceCategory"];
             displayName: string;
             hiddenByDefault: boolean;
+            /** Format: int32 */
+            operationSchemaVersion?: number | null;
+            operationType?: string | null;
             purpose: string;
             readOnly: boolean;
             runtimeState: components["schemas"]["ServiceRuntimeState"];
             serviceId: string;
+            stateDigest: string;
             subState: string;
             support: components["schemas"]["ServiceSupport"];
             templateId?: string | null;
@@ -3281,6 +3399,213 @@ export interface operations {
                 };
             };
             /** @description Stale, busy, or idempotency conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Forensic lockdown */
+            423: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    plan_managed_config_restore: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ManagedConfigRestorePlanRequest"];
+            };
+        };
+        responses: {
+            /** @description Immutable managed configuration restore plan */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ManagedConfigPlanView"];
+                };
+            };
+            /** @description Invalid typed request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Authentication required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Administrative access required */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Source unavailable, stale, or busy */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Forensic lockdown */
+            423: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    approve_service_control: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ServiceControlApprovalRequest"];
+            };
+        };
+        responses: {
+            /** @description Service lifecycle operation accepted */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OperationAcceptedView"];
+                };
+            };
+            /** @description Invalid approval */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Authentication required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Administrative access required */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Expired, stale, or busy service */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Forensic lockdown */
+            423: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    plan_service_control: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ServiceControlPlanRequest"];
+            };
+        };
+        responses: {
+            /** @description Immutable service lifecycle plan */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ServiceControlPlanView"];
+                };
+            };
+            /** @description Invalid typed request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Authentication required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Administrative access required */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Stale or busy service */
             409: {
                 headers: {
                     [name: string]: unknown;

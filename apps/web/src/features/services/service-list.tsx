@@ -1,7 +1,8 @@
 import { ArrowRight, ChevronDown } from "lucide-react";
 import { Link } from "@tanstack/react-router";
 
-import type { ServiceSummary } from "../../shared/api/types";
+import type { ManagedServiceAction, ServiceSummary } from "../../shared/api/types";
+import { Button } from "../../shared/ui/button";
 import { StatusMark } from "../../shared/ui/status-mark";
 import { ServiceIcon } from "./service-icon";
 import {
@@ -13,7 +14,7 @@ import {
   supportLabel,
 } from "./service-presenter";
 
-export function PrimaryServiceGrid({ services }: { services: ServiceSummary[] }) {
+export function PrimaryServiceGrid({ services, onAction }: { services: ServiceSummary[]; onAction?: ((service: ServiceSummary, action: ManagedServiceAction) => void) | undefined }) {
   const families = Array.from(
     services.reduce<Map<string, ServiceSummary[]>>((groups, service) => {
       const key = serviceFamilyKey(service);
@@ -29,13 +30,13 @@ export function PrimaryServiceGrid({ services }: { services: ServiceSummary[] })
   return (
     <ul className="mt-5 grid gap-3 md:grid-cols-2 2xl:grid-cols-3">
       {families.map(([key, family]) => (
-        <li key={key}><ServiceFamilyCard services={family} /></li>
+        <li key={key}><ServiceFamilyCard services={family} onAction={onAction} /></li>
       ))}
     </ul>
   );
 }
 
-function ServiceFamilyCard({ services }: { services: ServiceSummary[] }) {
+function ServiceFamilyCard({ services, onAction }: { services: ServiceSummary[]; onAction?: ((service: ServiceSummary, action: ManagedServiceAction) => void) | undefined }) {
   const lead = services[0];
   if (lead === undefined) return null;
   const state = aggregateServiceState(services);
@@ -77,6 +78,17 @@ function ServiceFamilyCard({ services }: { services: ServiceSummary[] }) {
           ))}
         </ul>
         <p className="mt-3 text-xs text-muted">{supportLabel(lead)}</p>
+        {onAction ? services.map((service) => (
+          service.allowedActions.length === 0 ? null : (
+            <div key={`${service.serviceId}-actions`} className="mt-3 flex flex-wrap gap-2">
+              {service.allowedActions.map((action) => (
+                <Button key={action} size="compact" variant={action === "stop" ? "danger" : "secondary"} onClick={() => onAction(service, action)}>
+                  {actionLabel(action)}
+                </Button>
+              ))}
+            </div>
+          )
+        )) : null}
         {href !== null ? (
           <Link to={href} className="mt-3 inline-flex min-h-9 items-center gap-2 rounded-control text-sm font-semibold text-action hover:underline">
             관리 화면
@@ -93,11 +105,13 @@ export function ServiceList({
   description,
   services,
   emptyLabel,
+  onAction,
 }: {
   title: string;
   description: string;
   services: ServiceSummary[];
   emptyLabel: string;
+  onAction?: ((service: ServiceSummary, action: ManagedServiceAction) => void) | undefined;
 }) {
   const headingId = `service-${title.replaceAll(" ", "-")}`;
   return (
@@ -111,7 +125,7 @@ export function ServiceList({
       ) : (
         <ul className="mt-5 grid gap-3 md:grid-cols-2 2xl:grid-cols-3">
           {services.map((service) => (
-            <li key={service.serviceId} className="min-w-0 rounded-control border border-border bg-subtle/25"><ServiceRow service={service} /></li>
+            <li key={service.serviceId} className="min-w-0 rounded-control border border-border bg-subtle/25"><ServiceRow service={service} onAction={onAction} /></li>
           ))}
         </ul>
       )}
@@ -119,7 +133,7 @@ export function ServiceList({
   );
 }
 
-export function ServiceRow({ service, compact = false }: { service: ServiceSummary; compact?: boolean }) {
+export function ServiceRow({ service, compact = false, onAction }: { service: ServiceSummary; compact?: boolean; onAction?: ((service: ServiceSummary, action: ManagedServiceAction) => void) | undefined }) {
   return (
     <details className="group">
       <summary className={compact
@@ -149,9 +163,23 @@ export function ServiceRow({ service, compact = false }: { service: ServiceSumma
         <Detail label="자동 시작" value={unitFileLabel(service.unitFileState)} />
         <Detail label="실제 상태" value={`${service.activeState} · ${service.subState}`} mono />
         <Detail label="JW Agent 범위" value={supportLabel(service)} />
+        {onAction && service.allowedActions.length > 0 ? (
+          <div className="flex flex-wrap gap-2 sm:col-span-2 lg:col-span-4">
+            {service.allowedActions.map((action) => (
+              <Button key={action} size="compact" variant={action === "stop" ? "danger" : "secondary"} onClick={() => onAction(service, action)}>{actionLabel(action)}</Button>
+            ))}
+          </div>
+        ) : null}
       </dl>
     </details>
   );
+}
+
+function actionLabel(action: ManagedServiceAction): string {
+  if (action === "start") return "시작";
+  if (action === "stop") return "중지";
+  if (action === "restart") return "재시작";
+  return "reload";
 }
 
 function Detail({ label, value, mono = false }: { label: string; value: string; mono?: boolean }) {

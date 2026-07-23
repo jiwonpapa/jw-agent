@@ -47,7 +47,7 @@ SFTP v3 handshake가 두 OpenSSH extension을 광고하지 않으면 write capab
 - public Nginx는 exact upload route만 8 MiB로 열고 다른 JSON route의 64 KiB limit는 유지
 - agentd는 body를 직접 bounded collect하며 Content-Type과 Content-Length를 검증
 - 동시 upload plan은 file session당 1개, 전역 8개 이하
-- session idle 2분·max 10분과 logout/revoke/daemon restart 규칙을 재사용
+- 로그인 session 연동·명시적 끊기·logout/revoke/daemon restart 규칙을 재사용하며 route 이동과 idle로 종료하지 않음
 - browser는 선택한 file bytes와 plan token을 memory에만 두며 재시작 resume을 제공하지 않음
 
 ## Text editing

@@ -9,13 +9,13 @@ Envelope 결정: [ADR-0015](../adr/0015-php-fpm-managed-config-envelope.md)
 
 ## 목적
 
-Ubuntu 24.04 기본 apt 패키지의 PHP 8.3 FPM 상태·활성 확장·설정 위치를 관찰하고, 표준 `php.ini` 한 파일을 문법 검사와 검증된 자동 원복 안에서 변경합니다.
+Ubuntu 24.04 기본 apt 패키지의 PHP 8.3 FPM 상태·활성 확장·설정 위치를 관찰하고, 표준 `php.ini`, `php-fpm.conf`, `pool.d/*.conf`를 리소스별 문법·의미 검사와 검증된 자동 원복 안에서 변경합니다.
 
 ## 지원 프로필
 
 - adapter: `php-fpm/ubuntu-24.04-8.3-v1`
 - package/layout: Ubuntu 24.04 apt `php8.3-fpm`, `/etc/php/8.3/fpm`
-- managed resource: `/etc/php/8.3/fpm/php.ini`
+- managed resources: `/etc/php/8.3/fpm/php.ini`, `/etc/php/8.3/fpm/php-fpm.conf`, root:root regular `pool.d/*.conf`
 - unit: `php8.3-fpm.service`
 - validator: fixed `/usr/sbin/php-fpm8.3 -t`
 - action: fixed `systemctl reload php8.3-fpm.service`
@@ -35,34 +35,41 @@ custom build, container, PPA layout, 다른 PHP major/minor, symlink·hardlink·
 - masked `php.ini`, pool, `conf.d` 위치
 - 활성 extension 이름과 개수; 최대 개수 초과 여부
 - managed resource ID, 허용 operation, 보장 등급 또는 차단 이유
+- resource별 종류(`php_ini | fpm_global | fpm_pool`)와 표시명
 
 `phpinfo()` HTML, 환경 변수, request header, loaded secret, 전체 command output은 수집·저장·표시하지 않습니다.
 
 ## Typed operation
 
-기존 `service.config_file.set/v1` lifecycle을 사용합니다.
+기존 `service.config_file.set/v1` lifecycle을 사용하고 성공 receipt snapshot은
+`service.config_file.restore/v1`의 복원 원본으로만 참조할 수 있습니다.
 
 - resource ID는 `php_` prefix의 opaque digest입니다.
 - request는 resource ID, before content·metadata digest, UTF-8 proposed content, `reload`, idempotency key만 받습니다.
 - inline content 최대 `128 KiB`, JSON·ops IPC frame 최대 `256 KiB`
 - path, executable, unit, version, validator argv는 사용자 입력으로 받지 않습니다.
 - plan은 변경 줄 수, byte 수, 문법 검사, reload 영향, 원복 범위와 SSH 복구 명령 class를 공개합니다.
+- 빈 파일은 모든 PHP-FPM resource에서 거부합니다.
+- `php.ini`의 주석·공백·section 이외 행은 `key = value` 형식이어야 하며 `=` 없는 무시 행은 줄 번호와 함께 거부합니다.
+- 설치된 FPM SAPI가 반환한 directive inventory에 없는 `php.ini` key는 거부합니다. inventory를 얻지 못하면 쓰기 capability를 닫습니다.
+- 전체 줄의 절반 이상 삭제는 `large_deletion` 고위험 계획으로 표시하며 별도 downtime 확인을 요구합니다.
 
 ## 실행과 원복
 
 1. ledger continuity, resource lock, plan expiry와 before digest를 재검사합니다.
 2. bytes·owner·group·mode snapshot을 durable 저장합니다.
-3. 같은 디렉터리에 root-only 임시 파일을 만들고 fsync 후 atomic rename합니다.
-4. `php-fpm8.3 -t`가 실패하면 reload하지 않고 즉시 snapshot을 복원합니다.
-5. 문법 성공 뒤 `php8.3-fpm.service`를 reload하고 active 상태·문법·content metadata를 read-back합니다.
-6. reload·active·read-back 실패 시 원문을 복원하고 다시 문법 검사·reload·active를 검증합니다.
-7. 원복 검증 실패는 `RECOVERY_REQUIRED`이며 성공으로 표시하지 않습니다.
+3. 제안 원문을 리소스별 구조·directive inventory로 검증하고 실패하면 실제 파일을 변경하지 않습니다.
+4. 같은 디렉터리에 root-only 임시 파일을 만들고 fsync 후 atomic rename합니다.
+5. `php-fpm8.3 -t`가 실패하면 reload하지 않고 즉시 snapshot을 복원합니다.
+6. 문법 성공 뒤 `php8.3-fpm.service`를 reload하고 active 상태·문법·content metadata를 read-back합니다.
+7. reload·active·read-back 실패 시 원문을 복원하고 다시 문법 검사·reload·active를 검증합니다.
+8. 원복 검증 실패는 `RECOVERY_REQUIRED`이며 성공으로 표시하지 않습니다.
 
 no-op도 기존 설정의 문법과 unit active를 검증해야 성공합니다. 외부 편집·resource drift는 side effect 전 `CANCELLED_BEFORE_APPLY`로 끝냅니다.
 
 ## Typed errors
 
-`not_installed`, `unsupported_version`, `unsupported_layout`, `resource_missing`, `resource_not_regular`, `resource_metadata_rejected`, `size_limit`, `invalid_encoding`, `stale_resource`, `syntax_failed`, `reload_failed`, `service_inactive`, `read_back_failed`, `rollback_failed`, `forensic_lockdown`을 구분합니다.
+`not_installed`, `unsupported_version`, `unsupported_layout`, `resource_missing`, `resource_not_regular`, `resource_metadata_rejected`, `empty_config`, `ignored_directive`, `unknown_directive`, `directive_inventory_unavailable`, `large_deletion`, `size_limit`, `invalid_encoding`, `stale_resource`, `syntax_failed`, `reload_failed`, `service_inactive`, `read_back_failed`, `rollback_failed`, `forensic_lockdown`을 구분합니다.
 
 ## Acceptance scenarios
 
@@ -74,10 +81,15 @@ no-op도 기존 설정의 문법과 unit active를 검증해야 성공합니다.
 - PFC-06 browser는 G2 범위·제외·검증·복구 경로를 승인 버튼 위에 표시합니다.
 - PFC-07 API·ledger·journal·browser storage에 설정 원문, PAM 비밀번호, 환경 값이 남지 않습니다.
 - PFC-08 Ubuntu 24.04 VM의 실제 `php8.3-fpm`에서 valid·syntax rollback·service continuity를 증명합니다.
+- PFC-09 빈 파일과 `=` 없는 행은 snapshot·apply 전에 거부됩니다.
+- PFC-10 설치된 directive inventory에 없는 `php.ini` key는 해당 줄과 함께 거부됩니다.
+- PFC-11 `php-fpm.conf`와 `pool.d/www.conf`는 별도 resource·lock·snapshot으로 변경되고 전체 FPM 문법을 검증합니다.
+- PFC-12 성공 이력의 snapshot을 선택하면 새 복원 plan·diff·승인·reload·receipt가 생성됩니다.
+- PFC-13 원복·서비스 제어·고위험 삭제는 관리 모드와 작업 위험 등급을 서버가 판정합니다.
 
 ## 명시적 제외
 
-- pool file 편집, FPM socket·user/group 자동 변경
+- FPM socket·user/group의 구조화 자동 변경
 - CLI·Apache SAPI 설정 변경
 - extension 설치·제거, apt operation
 - arbitrary version/path/unit/command

@@ -14,7 +14,7 @@ Last reviewed: 2026-07-23
 - UID 0 로그인, root password, root shell·PTY·SFTP
 - 브라우저·DB·로그에 Linux password 또는 TOTP code 저장
 - arbitrary command, argv 또는 arbitrary root path 전달
-- exact plan 승인 재인증 생략
+- 관리 모드를 Linux `sudo` credential cache로 사용
 - 관리 모드를 Linux `sudo` credential cache로 사용
 
 ## Contract
@@ -32,8 +32,8 @@ Last reviewed: 2026-07-23
 ## Root operation authorization
 
 - Nginx·PHP-FPM·Certbot과 이후 추가되는 root service adapter의 plan과 approval API는 유효한 관리 모드가 아니면 `403 administrative_access_required`로 거부
-- plan은 계속 immutable hash를 가지며 approval 직전에 같은 PAM 계정의 exact-plan reauthentication이 필요
-- 추가 인증 정책이 켜져 있으면 관리 모드 진입과 operation approval 모두 해당 context에 바인딩된 검증을 각각 수행
+- plan은 계속 immutable hash·single-use approval·CSRF·idempotency를 가지며 유효한 관리 모드가 G2 reversible operation의 step-up 근거입니다.
+- 관리 모드 만료, stop, large deletion과 관리 접속 영향 작업은 정책이 요구하는 PAM·추가 인증을 다시 수행합니다.
 - `opsd`는 관리 모드 token, password 또는 TOTP를 받지 않고 기존 typed request와 canonical actor만 받음
 - management mode는 root login이나 sudo shell이 아니라 root `opsd` typed operation 승인 capability입니다.
 - 화면은 `root 작업 잠김`과 `root opsd typed 작업 승인 가능`을 구분하고 15분 만료를 표시합니다.
@@ -44,7 +44,7 @@ Last reviewed: 2026-07-23
 - 개요 첫 화면은 계정·현재 session·root 경계를 접지 않고 표시
 - 다른 화면은 우측 account panel에서 같은 상태와 남은 시간을 표시
 - root typed 작업의 직접 진입점에서 표준 모드이면 관리 모드 요청 dialog를 열고, 성공 뒤 원래 작업으로 복귀
-- root로 실행되는 범위, 자동 원복 보장, exact-plan 재인증이 별도임을 승인 전 표시
+- root로 실행되는 범위와 자동 원복 보장은 간결한 기본 요약과 접을 수 있는 기술 세부정보로 표시
 
 ## Acceptance
 
@@ -54,6 +54,7 @@ Last reviewed: 2026-07-23
 - standard mode에서 모든 root plan·approval API server-side denial
 - administrative mode에서도 arbitrary shell/root file endpoint 부재
 - password/TOTP가 URL, storage, SQLite audit, log, screenshot, trace에 없음
+- 관리 모드 안의 G2 설정은 반복 비밀번호 없이 승인되며 stop·large deletion은 추가 위험 확인을 요구
 - 개요 default-expanded session panel과 다른 route account drawer
 
 `jw-agent_0.2.0~p2.17_amd64.deb`에서 구현되었으며 Ubuntu 24.04 VM의 전체 `p2-vm` 25개 gate가 관리 모드 진입 뒤 Nginx·PHP-FPM·Certbot typed operation, TOTP 결합, PAM limiter 분리와 secret scan을 검증했습니다. SHA-256은 `283bf2b8d3465e22ac38beb696014a3cea3e0b059b54a71238780aec8b7c3b5f`입니다.

@@ -7,10 +7,11 @@ use jw_contracts::{
     CertbotAttachPlanRequest, CertbotAttachPlanView, CertbotIssuePlanInput, CertbotIssuePlanView,
     CertbotRenewTestPlanRequest, CertbotRenewTestPlanView, CertificateInventoryView,
     IPC_PROTOCOL_VERSION, ManagedConfigApprovalIntent, ManagedConfigPlanRequest,
-    ManagedConfigPlanView, ManagedConfigResourceView, NginxSiteStatePlanRequest,
-    NginxSiteStatePlanView, OPS_FRAME_MAX_BYTES, OperationListView, OperationReceiptView,
-    OpsCapabilityResponse, OpsRequest, OpsRequestBody, OpsResponse, OpsResponseBody, Subject,
-    decode_frame, encode_frame,
+    ManagedConfigPlanView, ManagedConfigResourceView, ManagedConfigRestorePlanRequest,
+    NginxSiteStatePlanRequest, NginxSiteStatePlanView, OPS_FRAME_MAX_BYTES, OperationListView,
+    OperationReceiptView, OpsCapabilityResponse, OpsRequest, OpsRequestBody, OpsResponse,
+    OpsResponseBody, ServiceControlPlanRequest, ServiceControlPlanView, Subject, decode_frame,
+    encode_frame,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixStream;
@@ -107,6 +108,14 @@ pub trait OpsBroker: Send + Sync {
         plan: ManagedConfigPlanRequest,
     ) -> OpsFuture<'a, ManagedConfigPlanView>;
 
+    fn plan_managed_config_restore<'a>(
+        &'a self,
+        _actor: Subject,
+        _plan: ManagedConfigRestorePlanRequest,
+    ) -> OpsFuture<'a, ManagedConfigPlanView> {
+        Box::pin(async move { Err(OpsBrokerError::Unavailable) })
+    }
+
     fn approve_managed_config<'a>(
         &'a self,
         actor: Subject,
@@ -115,6 +124,24 @@ pub trait OpsBroker: Send + Sync {
         idempotency_key: String,
         approval_intent: ManagedConfigApprovalIntent,
     ) -> OpsFuture<'a, OperationReceiptView>;
+
+    fn plan_service_control<'a>(
+        &'a self,
+        _actor: Subject,
+        _plan: ServiceControlPlanRequest,
+    ) -> OpsFuture<'a, ServiceControlPlanView> {
+        Box::pin(async move { Err(OpsBrokerError::Unavailable) })
+    }
+
+    fn approve_service_control<'a>(
+        &'a self,
+        _actor: Subject,
+        _plan_id: String,
+        _plan_hash: String,
+        _idempotency_key: String,
+    ) -> OpsFuture<'a, OperationReceiptView> {
+        Box::pin(async move { Err(OpsBrokerError::Unavailable) })
+    }
 
     fn operation_receipt<'a>(
         &'a self,
@@ -391,6 +418,22 @@ impl OpsBroker for UdsOpsBroker {
         })
     }
 
+    fn plan_managed_config_restore<'a>(
+        &'a self,
+        actor: Subject,
+        plan: ManagedConfigRestorePlanRequest,
+    ) -> OpsFuture<'a, ManagedConfigPlanView> {
+        Box::pin(async move {
+            let body = self
+                .request(OpsRequestBody::PlanManagedConfigRestore { actor, plan })
+                .await?;
+            let OpsResponseBody::ManagedConfigPlan(plan) = body else {
+                return Err(OpsBrokerError::InvalidResponse);
+            };
+            Ok(plan)
+        })
+    }
+
     fn approve_managed_config<'a>(
         &'a self,
         actor: Subject,
@@ -407,6 +450,46 @@ impl OpsBroker for UdsOpsBroker {
                     plan_hash,
                     idempotency_key,
                     approval_intent,
+                })
+                .await?;
+            let OpsResponseBody::OperationReceipt(receipt) = body else {
+                return Err(OpsBrokerError::InvalidResponse);
+            };
+            Ok(receipt)
+        })
+    }
+
+    fn plan_service_control<'a>(
+        &'a self,
+        actor: Subject,
+        plan: ServiceControlPlanRequest,
+    ) -> OpsFuture<'a, ServiceControlPlanView> {
+        Box::pin(async move {
+            let body = self
+                .request(OpsRequestBody::PlanServiceControl { actor, plan })
+                .await?;
+            let OpsResponseBody::ServiceControlPlan(plan) = body else {
+                return Err(OpsBrokerError::InvalidResponse);
+            };
+            Ok(plan)
+        })
+    }
+
+    fn approve_service_control<'a>(
+        &'a self,
+        actor: Subject,
+        plan_id: String,
+        plan_hash: String,
+        idempotency_key: String,
+    ) -> OpsFuture<'a, OperationReceiptView> {
+        Box::pin(async move {
+            let body = self
+                .request(OpsRequestBody::ApproveServiceControl {
+                    actor,
+                    plan_id,
+                    plan_hash,
+                    idempotency_key,
+                    impact_confirmed: true,
                 })
                 .await?;
             let OpsResponseBody::OperationReceipt(receipt) = body else {

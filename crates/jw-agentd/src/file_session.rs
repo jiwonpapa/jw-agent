@@ -10,10 +10,9 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use jw_contracts::{
-    FILE_IDLE_TIMEOUT_SECONDS, FILE_MAX_UPLOAD_BYTES, FILE_SESSION_TOKEN_BYTES,
-    FILE_UPLOAD_PLAN_TOKEN_BYTES, FILE_UPLOAD_PLAN_TTL_SECONDS, FileListView, FileStatView,
-    FileTextView, FileUploadTargetState, IngressChannel, SecretString, Subject, sha256_digest,
-    validate_digest,
+    FILE_MAX_UPLOAD_BYTES, FILE_SESSION_TOKEN_BYTES, FILE_UPLOAD_PLAN_TOKEN_BYTES,
+    FILE_UPLOAD_PLAN_TTL_SECONDS, FileListView, FileStatView, FileTextView, FileUploadTargetState,
+    IngressChannel, SecretString, Subject, sha256_digest, validate_digest,
 };
 use nix::sys::stat::Mode;
 use nix::unistd::mkfifo;
@@ -900,12 +899,6 @@ fn cleanup_expired(state: &mut FileState) {
 }
 
 fn session_expired(session: &FileSession) -> bool {
-    let idle = session.last_activity.lock().map_or(true, |last| {
-        last.elapsed() >= Duration::from_secs(FILE_IDLE_TIMEOUT_SECONDS)
-    });
-    if idle {
-        return true;
-    }
     let now = match unix_milliseconds() {
         Ok(now) => now,
         Err(_) => return true,

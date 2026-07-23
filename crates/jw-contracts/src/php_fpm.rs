@@ -7,6 +7,8 @@ use utoipa::ToSchema;
 use crate::{AssuranceView, ObservationStatus, ServiceRuntimeState};
 
 pub const PHP_FPM_CONFIG_ADAPTER_ID: &str = "php-fpm/ubuntu-24.04-8.3-v1";
+pub const PHP_FPM_GLOBAL_CONFIG_ADAPTER_ID: &str = "php-fpm/ubuntu-24.04-8.3-global-v1";
+pub const PHP_FPM_POOL_CONFIG_ADAPTER_ID: &str = "php-fpm/ubuntu-24.04-8.3-pool-www-v1";
 pub const PHP_FPM_CONFIG_MAX_BYTES: usize = 128 * 1_024;
 pub const PHP_FPM_SUPPORTED_VERSION: &str = "8.3";
 pub const PHP_FPM_UNIT: &str = "php8.3-fpm.service";
@@ -40,9 +42,23 @@ pub struct PhpFpmRuntimeView {
     pub extensions: Vec<String>,
     pub extension_count: u16,
     pub extensions_truncated: bool,
+    pub managed_configs: Vec<PhpFpmManagedConfigView>,
     pub managed_config_resource_id: Option<String>,
     pub managed_config_operation_type: Option<String>,
     pub managed_config_schema_version: Option<u16>,
+    pub blocked_reason: Option<String>,
+    pub assurance: AssuranceView,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct PhpFpmManagedConfigView {
+    pub resource_id: String,
+    pub operation_type: String,
+    pub schema_version: u16,
+    pub display_name: String,
+    pub masked_path: String,
+    pub available: bool,
     pub blocked_reason: Option<String>,
     pub assurance: AssuranceView,
 }

@@ -11,7 +11,7 @@ import {
 } from "lucide-react";
 import { useState } from "react";
 
-import type { PhpFpmRuntimeView } from "../../shared/api/types";
+import type { PhpFpmManagedConfigView, PhpFpmRuntimeView } from "../../shared/api/types";
 import { phpFpmQueryOptions, queryKeys } from "../../shared/api/queries";
 import { formatDateTime } from "../../shared/domain/format";
 import { AssuranceDetails, AssuranceMark } from "../../shared/ui/assurance";
@@ -37,11 +37,13 @@ export function PhpFpmScreen() {
   const inventory = useQuery(phpFpmQueryOptions);
   const workflow = useManagedConfigWorkflow(queryKeys.phpFpm);
   const [editorOpen, setEditorOpen] = useState(false);
+  const [selectedConfig, setSelectedConfig] = useState<PhpFpmManagedConfigView | null>(null);
   const runtime = inventory.data?.runtimes[0] ?? null;
-  const capability = runtime === null ? null : toCapability(runtime);
 
-  async function openEditor(): Promise<void> {
+  async function openEditor(config: PhpFpmManagedConfigView): Promise<void> {
+    const capability = toCapability(config);
     if (capability === null) return;
+    setSelectedConfig(config);
     setEditorOpen(true);
     await workflow.open(capability);
   }
@@ -57,7 +59,10 @@ export function PhpFpmScreen() {
       return;
     }
     setEditorOpen(open);
-    if (!open) workflow.close();
+    if (!open) {
+      workflow.close();
+      setSelectedConfig(null);
+    }
   }
 
   return (
@@ -83,20 +88,20 @@ export function PhpFpmScreen() {
       ) : inventory.data.status === "not_installed" || runtime === null ? (
         <SurfaceState kind="empty" title="PHP-FPM이 설치되지 않았습니다" description="이 화면은 패키지를 자동 설치하지 않습니다. Ubuntu 24.04 apt PHP 8.3 FPM이 발견되면 관리 기능이 열립니다." />
       ) : (
-        <RuntimeWorkspace runtime={runtime} observedAt={inventory.data.observedAt} capability={capability} loadingEditor={workflow.loading} onEdit={() => void openEditor()} />
+        <RuntimeWorkspace runtime={runtime} observedAt={inventory.data.observedAt} loadingEditor={workflow.loading} onEdit={(config) => void openEditor(config)} />
       )}
 
       <Sheet
         open={editorOpen}
         onOpenChange={closeEditor}
-        title="PHP 8.3 FPM · php.ini"
+        title={selectedConfig?.displayName ?? "PHP 8.3 FPM 설정"}
         description="diff·문법검사·reload·실패 시 자동 원복"
         side="right"
         size="fullscreen"
       >
         {workflow.loading ? (
           <div className="flex items-center gap-3 text-sm text-muted"><LoaderCircle aria-hidden="true" className="size-5 animate-spin" />설정 파일과 안전 조건을 확인하고 있습니다.</div>
-        ) : workflow.resource !== null && capability !== null ? (
+        ) : workflow.resource !== null && selectedConfig !== null && toCapability(selectedConfig) !== null ? (
           <ManagedConfigEditor
             profile={EDITOR_PROFILE}
             resource={workflow.resource}
@@ -110,7 +115,10 @@ export function PhpFpmScreen() {
             diagnosticLine={workflow.diagnosticLine}
             onDraftChange={workflow.changeDraft}
             onBack={() => closeEditor(false)}
-            onCreatePlan={() => void workflow.createPlan(capability)}
+            onCreatePlan={() => {
+              const capability = toCapability(selectedConfig);
+              if (capability !== null) void workflow.createPlan(capability);
+            }}
             onApprove={workflow.approve}
             onRevise={workflow.revise}
           />
@@ -122,12 +130,11 @@ export function PhpFpmScreen() {
   );
 }
 
-function RuntimeWorkspace({ runtime, observedAt, capability, loadingEditor, onEdit }: {
+function RuntimeWorkspace({ runtime, observedAt, loadingEditor, onEdit }: {
   runtime: PhpFpmRuntimeView;
   observedAt: string;
-  capability: ManagedConfigCapability | null;
   loadingEditor: boolean;
-  onEdit: () => void;
+  onEdit: (config: PhpFpmManagedConfigView) => void;
 }) {
   return (
     <>
@@ -154,7 +161,7 @@ function RuntimeWorkspace({ runtime, observedAt, capability, loadingEditor, onEd
         </dl>
       </section>
 
-      <div className="mt-6 grid gap-6 xl:grid-cols-[minmax(0,1.35fr)_minmax(19rem,0.65fr)]">
+      <div className="mt-6 grid gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
         <section className="rounded-panel border border-border bg-surface p-5" aria-labelledby="extensions-heading">
           <div className="flex items-start justify-between gap-4">
             <div><h2 id="extensions-heading" className="text-sm font-semibold text-text">활성 extension</h2><p className="mt-1 text-sm text-muted">FPM의 conf.d에서 실제 로드 대상으로 발견된 이름입니다.</p></div>
@@ -168,9 +175,24 @@ function RuntimeWorkspace({ runtime, observedAt, capability, loadingEditor, onEd
         </section>
 
         <section className="rounded-panel border border-border bg-surface p-5" aria-labelledby="safe-edit-heading">
-          <div className="flex items-start gap-3"><ShieldCheck aria-hidden="true" className="mt-0.5 size-5 text-action" /><div><h2 id="safe-edit-heading" className="text-sm font-semibold text-text">안전 편집 범위</h2><p className="mt-1 text-sm leading-6 text-muted">php.ini 한 파일만 snapshot 후 교체합니다. pool·extension 설치·CLI 설정은 바꾸지 않습니다.</p></div></div>
-          <div className="mt-5"><AssuranceDetails assurance={runtime.assurance} /></div>
-          {capability === null ? <BlockedReason reason={runtime.blockedReason} /> : <Button className="mt-5 w-full" disabled={loadingEditor} onClick={onEdit}>{loadingEditor ? <LoaderCircle aria-hidden="true" className="size-4 animate-spin" /> : <FileCode2 aria-hidden="true" className="size-4" />}{loadingEditor ? "안전 조건 확인 중" : "php.ini 편집"}</Button>}
+          <div className="flex items-start gap-3"><ShieldCheck aria-hidden="true" className="mt-0.5 size-5 text-action" /><div><h2 id="safe-edit-heading" className="text-sm font-semibold text-text">관리 설정</h2><p className="mt-1 text-sm leading-6 text-muted">파일마다 별도 snapshot·검증·reload·자동 원복을 적용합니다.</p></div></div>
+          <div className="mt-5 grid gap-3 sm:grid-cols-2">
+            {runtime.managedConfigs.map((config) => (
+              <article key={config.resourceId} className="rounded-control border border-border bg-subtle/45 p-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div><h3 className="text-sm font-semibold text-text">{config.displayName}</h3><p className="mt-1 break-all font-mono text-xs text-muted">{config.maskedPath}</p></div>
+                  <AssuranceMark assurance={config.assurance} />
+                </div>
+                {config.available ? (
+                  <Button aria-label={`${config.displayName} 편집`} className="mt-4 w-full" size="compact" disabled={loadingEditor} onClick={() => onEdit(config)}>
+                    {loadingEditor ? <LoaderCircle aria-hidden="true" className="size-4 animate-spin" /> : <FileCode2 aria-hidden="true" className="size-4" />}
+                    편집
+                  </Button>
+                ) : <BlockedReason reason={config.blockedReason} />}
+              </article>
+            ))}
+          </div>
+          <details className="mt-4"><summary className="cursor-pointer text-sm font-semibold text-action">전체 원복 범위 보기</summary><div className="mt-4"><AssuranceDetails assurance={runtime.assurance} /></div></details>
         </section>
       </div>
 
@@ -195,9 +217,9 @@ function BlockedReason({ reason }: { reason: string | null | undefined }) {
   return <p role="status" className="mt-5 rounded-control border border-warning/35 bg-warning/5 p-3 text-sm leading-6 text-muted">{message}</p>;
 }
 
-function toCapability(runtime: PhpFpmRuntimeView): ManagedConfigCapability | null {
-  if (!runtime.assurance.operationAvailable || runtime.assurance.level !== "g2_reversible_config" || runtime.managedConfigResourceId === null || runtime.managedConfigResourceId === undefined || runtime.managedConfigOperationType !== "service.config_file.set/v1" || runtime.managedConfigSchemaVersion === null || runtime.managedConfigSchemaVersion === undefined) return null;
-  return { resourceId: runtime.managedConfigResourceId, operationType: runtime.managedConfigOperationType, schemaVersion: runtime.managedConfigSchemaVersion };
+function toCapability(config: PhpFpmManagedConfigView): ManagedConfigCapability | null {
+  if (!config.available || !config.assurance.operationAvailable || config.assurance.level !== "g2_reversible_config" || config.operationType !== "service.config_file.set/v1") return null;
+  return { resourceId: config.resourceId, operationType: config.operationType, schemaVersion: config.schemaVersion };
 }
 
 function LoadingState() {

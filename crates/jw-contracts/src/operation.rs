@@ -10,6 +10,8 @@ use crate::{AssuranceView, Subject};
 pub const NGINX_SITE_STATE_OPERATION: &str = "nginx.site_state.set/v1";
 pub const NGINX_LAYOUT_ID: &str = "ubuntu-nginx-sites-v1";
 pub const MANAGED_CONFIG_OPERATION: &str = "service.config_file.set/v1";
+pub const MANAGED_CONFIG_RESTORE_OPERATION: &str = "service.config_file.restore/v1";
+pub const SERVICE_CONTROL_OPERATION: &str = "service.lifecycle.set/v1";
 pub const NGINX_CONFIG_ADAPTER_ID: &str = "nginx/ubuntu-standard-v1";
 pub const MANAGED_CONFIG_MAX_BYTES: usize = 128 * 1_024;
 pub const NGINX_MANAGED_CONFIG_MAX_BYTES: usize = 24 * 1_024;
@@ -212,6 +214,121 @@ impl ServiceAction {
     }
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ManagedServiceAction {
+    Start,
+    Stop,
+    Restart,
+    Reload,
+}
+
+impl ManagedServiceAction {
+    #[must_use]
+    pub const fn as_storage_value(self) -> &'static str {
+        match self {
+            Self::Start => "start",
+            Self::Stop => "stop",
+            Self::Restart => "restart",
+            Self::Reload => "reload",
+        }
+    }
+}
+
+#[must_use]
+pub fn service_id(unit_name: &str) -> String {
+    format!(
+        "svc_{}",
+        sha256_digest(unit_name.as_bytes()).trim_start_matches("sha256:")
+    )
+}
+
+#[must_use]
+pub fn service_state_digest(unit_name: &str, active: bool) -> String {
+    let mut value = Vec::with_capacity(unit_name.len().saturating_add(2));
+    value.extend_from_slice(unit_name.as_bytes());
+    value.push(0);
+    value.push(u8::from(active));
+    sha256_digest(&value)
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ServiceControlPlanRequest {
+    pub schema_version: u16,
+    pub operation_type: String,
+    pub service_id: String,
+    pub action: ManagedServiceAction,
+    pub expected_state_digest: String,
+    pub idempotency_key: String,
+}
+
+impl ServiceControlPlanRequest {
+    pub fn validate(&self) -> Result<(), &'static str> {
+        if self.schema_version != OPERATION_SCHEMA_VERSION {
+            return Err("schema_version");
+        }
+        if self.operation_type != SERVICE_CONTROL_OPERATION {
+            return Err("operation_type");
+        }
+        validate_service_identifier(&self.service_id)?;
+        validate_digest(&self.expected_state_digest)?;
+        validate_ascii_range(
+            &self.idempotency_key,
+            IDEMPOTENCY_KEY_MIN_BYTES,
+            IDEMPOTENCY_KEY_MAX_BYTES,
+            "idempotency_key",
+        )
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ServiceControlApprovalRequest {
+    pub schema_version: u16,
+    pub plan_id: String,
+    pub plan_hash: String,
+    pub idempotency_key: String,
+    pub impact_confirmed: bool,
+}
+
+impl ServiceControlApprovalRequest {
+    pub fn validate(&self) -> Result<(), &'static str> {
+        if self.schema_version != OPERATION_SCHEMA_VERSION || !self.impact_confirmed {
+            return Err("approval");
+        }
+        validate_ascii_range(&self.plan_id, 1, PLAN_ID_MAX_BYTES, "plan_id")?;
+        validate_digest(&self.plan_hash)?;
+        validate_ascii_range(
+            &self.idempotency_key,
+            IDEMPOTENCY_KEY_MIN_BYTES,
+            IDEMPOTENCY_KEY_MAX_BYTES,
+            "idempotency_key",
+        )
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ServiceControlPlanView {
+    pub schema_version: u16,
+    pub operation_type: String,
+    pub plan_id: String,
+    pub plan_hash: String,
+    pub created_at: String,
+    pub expires_at: String,
+    pub actor: Subject,
+    pub service_id: String,
+    pub unit_name: String,
+    pub display_name: String,
+    pub current_active: bool,
+    pub action: ManagedServiceAction,
+    pub expected_state_digest: String,
+    pub impact: Vec<String>,
+    pub recovery_path: Vec<String>,
+    pub assurance: AssuranceView,
+}
+
 #[derive(Clone, Deserialize, Eq, PartialEq, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ManagedConfigPlanRequest {
@@ -311,23 +428,70 @@ pub struct ManagedConfigApprovalRequest {
     pub plan_hash: String,
     pub idempotency_key: String,
     #[schema(format = Password)]
-    pub reauth_token: String,
+    pub reauth_token: Option<String>,
     #[schema(format = Password)]
     pub additional_auth_claim: Option<String>,
     pub approval_intent: ManagedConfigApprovalIntent,
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ManagedConfigRestorePlanRequest {
+    pub schema_version: u16,
+    pub operation_type: String,
+    pub source_operation_id: String,
+    pub expected_content_digest: String,
+    pub expected_metadata_digest: String,
+    pub idempotency_key: String,
+}
+
+impl ManagedConfigRestorePlanRequest {
+    pub fn validate(&self) -> Result<(), &'static str> {
+        if self.schema_version != OPERATION_SCHEMA_VERSION {
+            return Err("schema_version");
+        }
+        if self.operation_type != MANAGED_CONFIG_RESTORE_OPERATION {
+            return Err("operation_type");
+        }
+        validate_ascii_range(
+            &self.source_operation_id,
+            1,
+            OPERATION_ID_MAX_BYTES,
+            "source_operation_id",
+        )?;
+        validate_digest(&self.expected_content_digest)?;
+        validate_digest(&self.expected_metadata_digest)?;
+        validate_ascii_range(
+            &self.idempotency_key,
+            IDEMPOTENCY_KEY_MIN_BYTES,
+            IDEMPOTENCY_KEY_MAX_BYTES,
+            "idempotency_key",
+        )
+    }
+}
+
 impl ManagedConfigApprovalRequest {
     pub fn validate_shape(&self) -> Result<(), &'static str> {
-        OperationApprovalRequest {
-            schema_version: self.schema_version,
-            plan_id: self.plan_id.clone(),
-            plan_hash: self.plan_hash.clone(),
-            idempotency_key: self.idempotency_key.clone(),
-            reauth_token: self.reauth_token.clone(),
-            additional_auth_claim: self.additional_auth_claim.clone(),
+        if self.schema_version != OPERATION_SCHEMA_VERSION {
+            return Err("schema_version");
         }
-        .validate_shape()?;
+        validate_ascii_range(&self.plan_id, 1, PLAN_ID_MAX_BYTES, "plan_id")?;
+        validate_digest(&self.plan_hash)?;
+        validate_ascii_range(
+            &self.idempotency_key,
+            IDEMPOTENCY_KEY_MIN_BYTES,
+            IDEMPOTENCY_KEY_MAX_BYTES,
+            "idempotency_key",
+        )?;
+        if let Some(token) = &self.reauth_token {
+            validate_ascii_range(token, 16, 256, "reauth_token")?;
+        }
+        if let Some(claim) = &self.additional_auth_claim {
+            if self.reauth_token.is_none() {
+                return Err("additional_auth_claim");
+            }
+            validate_ascii_range(claim, 16, 256, "additional_auth_claim")?;
+        }
         self.approval_intent.validate()
     }
 }
@@ -459,6 +623,8 @@ pub struct OperationReceiptView {
     pub assurance: AssuranceView,
     pub rollback_result: Option<String>,
     pub recovery_path: Vec<String>,
+    pub resource_id: Option<String>,
+    pub restore_available: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, ToSchema)]
@@ -554,12 +720,27 @@ pub enum OpsRequestBody {
         actor: Subject,
         plan: ManagedConfigPlanRequest,
     },
+    PlanManagedConfigRestore {
+        actor: Subject,
+        plan: ManagedConfigRestorePlanRequest,
+    },
     ApproveManagedConfig {
         actor: Subject,
         plan_id: String,
         plan_hash: String,
         idempotency_key: String,
         approval_intent: ManagedConfigApprovalIntent,
+    },
+    PlanServiceControl {
+        actor: Subject,
+        plan: ServiceControlPlanRequest,
+    },
+    ApproveServiceControl {
+        actor: Subject,
+        plan_id: String,
+        plan_hash: String,
+        idempotency_key: String,
+        impact_confirmed: bool,
     },
     ExecuteOperation {
         actor: Subject,
@@ -591,6 +772,15 @@ impl OpsRequest {
             }
         ) {
             return Err("external_effect_confirmation");
+        }
+        if matches!(
+            &self.body,
+            OpsRequestBody::ApproveServiceControl {
+                impact_confirmed: false,
+                ..
+            }
+        ) {
+            return Err("impact_confirmation");
         }
         if let OpsRequestBody::ApproveCertbotIssue {
             external_effect_confirmed,
@@ -630,6 +820,8 @@ impl OpsRequest {
             }
             OpsRequestBody::PlanNginxSiteState { plan, .. } => plan.validate(),
             OpsRequestBody::PlanManagedConfig { plan, .. } => plan.validate(),
+            OpsRequestBody::PlanManagedConfigRestore { plan, .. } => plan.validate(),
+            OpsRequestBody::PlanServiceControl { plan, .. } => plan.validate(),
             OpsRequestBody::ApproveNginxSiteState {
                 plan_id,
                 plan_hash,
@@ -637,6 +829,12 @@ impl OpsRequest {
                 ..
             }
             | OpsRequestBody::ApproveManagedConfig {
+                plan_id,
+                plan_hash,
+                idempotency_key,
+                ..
+            }
+            | OpsRequestBody::ApproveServiceControl {
                 plan_id,
                 plan_hash,
                 idempotency_key,
@@ -701,6 +899,7 @@ pub enum OpsResponseBody {
     ManagedConfigResource(ManagedConfigResourceView),
     NginxSiteStatePlan(NginxSiteStatePlanView),
     ManagedConfigPlan(ManagedConfigPlanView),
+    ServiceControlPlan(ServiceControlPlanView),
     OperationReceipt(OperationReceiptView),
     RecentOperations(OperationListView),
     Rejected(OpsRejectedResponse),
@@ -731,6 +930,17 @@ fn validate_identifier(value: &str, prefix: &str, error: &'static str) -> Result
         Err(error)
     } else {
         Ok(())
+    }
+}
+
+fn validate_service_identifier(value: &str) -> Result<(), &'static str> {
+    let Some(digest) = value.strip_prefix("svc_") else {
+        return Err("service_id");
+    };
+    if digest.len() == 64 && digest.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        Ok(())
+    } else {
+        Err("service_id")
     }
 }
 

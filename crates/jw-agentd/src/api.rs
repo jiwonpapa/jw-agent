@@ -35,18 +35,21 @@ use jw_contracts::{
     FileSessionCloseRequest, FileSessionHeartbeatRequest, FileSessionRequest, FileSessionView,
     FileStatView, FileTextView, FileUploadPlanRequest, FileUploadPlanView, FileUploadResultView,
     HealthStatus, HealthView, IPC_PROTOCOL_VERSION, IngressChannel, IntegrationCatalogView,
-    LoginRequest, MANAGED_CONFIG_OPERATION, ManagedConfigApprovalRequest, ManagedConfigPlanRequest,
-    ManagedConfigPlanView, ManagedConfigResourceView, NGINX_SITE_STATE_OPERATION,
+    LoginRequest, MANAGED_CONFIG_OPERATION, MANAGED_CONFIG_RESTORE_OPERATION,
+    ManagedConfigApprovalRequest, ManagedConfigPlanRequest, ManagedConfigPlanView,
+    ManagedConfigResourceView, ManagedConfigRestorePlanRequest, NGINX_SITE_STATE_OPERATION,
     NginxSiteStatePlanRequest, NginxSiteStatePlanView, NginxSitesView, ObservationStatus,
     OperationAcceptedView, OperationApprovalRequest, OperationListView, OperationReceiptView,
-    OperationStageEvidenceView, PhpFpmRuntimeView, PhpFpmView, ProblemDetails, ReauthPurpose,
-    ReauthRequest, ReauthView, Role, RollbackSupport, ServiceAction, ServiceCategory,
-    ServiceRuntimeState, ServiceSummary, ServiceSupport, ServiceVisibility, ServicesView,
-    SessionView, Subject, TERMINAL_MAX_FRAME_BYTES, TERMINAL_MAX_OUTPUT_BUFFER_BYTES,
-    TerminalCapabilityView, TerminalLimitsView, TerminalTicketRequest, TerminalTicketView,
-    TotpEnrollmentConfirmRequest, TotpEnrollmentConfirmView, TotpEnrollmentStartRequest,
-    TotpEnrollmentStartView, TotpRecoveryResetRequest, TotpVerificationRequest,
-    TotpVerificationView, UpdateAdditionalAuthRequest,
+    OperationStageEvidenceView, PhpFpmManagedConfigView, PhpFpmRuntimeView, PhpFpmView,
+    ProblemDetails, ReauthPurpose, ReauthRequest, ReauthView, Role, RollbackSupport,
+    SERVICE_CONTROL_OPERATION, ServiceAction, ServiceCategory, ServiceControlApprovalRequest,
+    ServiceControlPlanRequest, ServiceControlPlanView, ServiceRuntimeState, ServiceSummary,
+    ServiceSupport, ServiceVisibility, ServicesView, SessionView, Subject,
+    TERMINAL_MAX_FRAME_BYTES, TERMINAL_MAX_OUTPUT_BUFFER_BYTES, TerminalCapabilityView,
+    TerminalLimitsView, TerminalTicketRequest, TerminalTicketView, TotpEnrollmentConfirmRequest,
+    TotpEnrollmentConfirmView, TotpEnrollmentStartRequest, TotpEnrollmentStartView,
+    TotpRecoveryResetRequest, TotpVerificationRequest, TotpVerificationView,
+    UpdateAdditionalAuthRequest,
 };
 use sha2::{Digest, Sha256};
 use tower_http::services::{ServeDir, ServeFile};
@@ -65,6 +68,13 @@ use crate::{AgentConfig, AuthBroker, OpsBroker, SessionStore};
 
 mod activity;
 use activity::{__path_recent_operations, recent_operations};
+#[path = "api/maintenance_operations.rs"]
+mod maintenance_operations_api;
+use maintenance_operations_api::{
+    __path_approve_service_control, __path_plan_managed_config, __path_plan_managed_config_restore,
+    __path_plan_service_control, approve_service_control, plan_managed_config,
+    plan_managed_config_restore, plan_service_control,
+};
 #[path = "api/administrative_access.rs"]
 mod administrative_access_api;
 use administrative_access_api::{
@@ -185,7 +195,10 @@ impl AppState {
         approve_nginx_site_state,
         managed_config_resource,
         plan_managed_config,
+        plan_managed_config_restore,
         approve_managed_config,
+        plan_service_control,
+        approve_service_control,
         operation_events,
         operation_receipt,
         recent_operations,
@@ -220,6 +233,7 @@ impl AppState {
         NginxSitesView,
         PhpFpmView,
         PhpFpmRuntimeView,
+        PhpFpmManagedConfigView,
         CertificateInventoryView,
         CertificateSummaryView,
         CertbotIssuePlanRequest,
@@ -238,6 +252,10 @@ impl AppState {
         ManagedConfigResourceView,
         ManagedConfigPlanRequest,
         ManagedConfigPlanView,
+        ManagedConfigRestorePlanRequest,
+        ServiceControlPlanRequest,
+        ServiceControlApprovalRequest,
+        ServiceControlPlanView,
         ManagedConfigApprovalRequest,
         jw_contracts::ManagedConfigApprovalIntent,
         ServiceAction,
@@ -383,8 +401,20 @@ pub fn build_router(state: AppState) -> Router {
                 .layer(DefaultBodyLimit::max(MANAGED_CONFIG_API_BODY_MAX_BYTES)),
         )
         .route(
+            "/api/v1/operations/service/config-file/restore/plans",
+            post(plan_managed_config_restore),
+        )
+        .route(
             "/api/v1/operations/service/config-file/approvals",
             post(approve_managed_config),
+        )
+        .route(
+            "/api/v1/operations/service/lifecycle/plans",
+            post(plan_service_control),
+        )
+        .route(
+            "/api/v1/operations/service/lifecycle/approvals",
+            post(approve_service_control),
         )
         .route(
             "/api/v1/operations/{operation_id}/events",
@@ -2061,32 +2091,6 @@ async fn managed_config_resource(
     Ok(Json(resource))
 }
 
-#[utoipa::path(post, path = "/api/v1/operations/service/config-file/plans", request_body = ManagedConfigPlanRequest, responses(
-    (status = 200, description = "Immutable managed configuration plan", body = ManagedConfigPlanView),
-    (status = 400, description = "Invalid typed request", body = ProblemDetails),
-    (status = 401, description = "Authentication required", body = ProblemDetails),
-    (status = 403, description = "Role, protected resource, or CSRF rejected", body = ProblemDetails),
-    (status = 409, description = "Stale, busy, or idempotency conflict", body = ProblemDetails),
-    (status = 423, description = "Forensic lockdown", body = ProblemDetails)
-))]
-async fn plan_managed_config(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(input): Json<ManagedConfigPlanRequest>,
-) -> Result<Json<ManagedConfigPlanView>, ApiProblem> {
-    input.validate().map_err(ApiProblem::bad_request)?;
-    let now = unix_milliseconds()?;
-    let (token, session) = current_session(&state, &headers, now)?;
-    require_csrf(&headers, token.as_str())?;
-    require_administrative_access(&session)?;
-    let plan = state
-        .ops
-        .plan_managed_config(session.subject, input)
-        .await
-        .map_err(map_ops_error)?;
-    Ok(Json(plan))
-}
-
 #[utoipa::path(post, path = "/api/v1/operations/service/config-file/approvals", request_body = ManagedConfigApprovalRequest, responses(
     (status = 202, description = "Managed configuration operation accepted", body = OperationAcceptedView),
     (status = 400, description = "Invalid approval shape", body = ProblemDetails),
@@ -2106,15 +2110,17 @@ async fn approve_managed_config(
     let (token, session) = current_session(&state, &headers, now)?;
     require_csrf(&headers, token.as_str())?;
     require_administrative_access(&session)?;
-    consume_operation_authorization(
-        &state,
-        token.as_str(),
-        &session,
-        &input.plan_hash,
-        &input.reauth_token,
-        input.additional_auth_claim.as_deref(),
-        now,
-    )?;
+    if let Some(reauth_token) = input.reauth_token.as_deref() {
+        consume_operation_authorization(
+            &state,
+            token.as_str(),
+            &session,
+            &input.plan_hash,
+            reauth_token,
+            input.additional_auth_claim.as_deref(),
+            now,
+        )?;
+    }
     let actor = session.subject;
     let receipt = state
         .ops
@@ -2127,7 +2133,9 @@ async fn approve_managed_config(
         )
         .await
         .map_err(map_ops_error)?;
-    if receipt.operation_type != MANAGED_CONFIG_OPERATION {
+    if receipt.operation_type != MANAGED_CONFIG_OPERATION
+        && receipt.operation_type != MANAGED_CONFIG_RESTORE_OPERATION
+    {
         return Err(ApiProblem::internal());
     }
     let operation_id = receipt.operation_id.clone();

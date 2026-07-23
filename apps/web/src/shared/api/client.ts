@@ -33,6 +33,10 @@ import type {
   ManagedConfigPlanRequest,
   ManagedConfigPlanView,
   ManagedConfigResourceView,
+  ManagedConfigRestorePlanRequest,
+  ServiceControlApprovalRequest,
+  ServiceControlPlanRequest,
+  ServiceControlPlanView,
   NginxSiteStatePlanRequest,
   NginxSiteStatePlanView,
   NginxSitesView,
@@ -334,6 +338,39 @@ export async function approveManagedConfig(
       body: input,
       headers: mutationHeaders(),
     },
+  );
+  if (data !== undefined) return data;
+  throw new ApiError(error, response);
+}
+
+export async function planManagedConfigRestore(
+  input: ManagedConfigRestorePlanRequest,
+): Promise<ManagedConfigPlanView> {
+  const { data, error, response } = await api.POST(
+    "/api/v1/operations/service/config-file/restore/plans",
+    { body: input, headers: mutationHeaders() },
+  );
+  if (data !== undefined) return data;
+  throw new ApiError(error, response);
+}
+
+export async function planServiceControl(
+  input: ServiceControlPlanRequest,
+): Promise<ServiceControlPlanView> {
+  const { data, error, response } = await api.POST(
+    "/api/v1/operations/service/lifecycle/plans",
+    { body: input, headers: mutationHeaders() },
+  );
+  if (data !== undefined) return data;
+  throw new ApiError(error, response);
+}
+
+export async function approveServiceControl(
+  input: ServiceControlApprovalRequest,
+): Promise<OperationAcceptedView> {
+  const { data, error, response } = await api.POST(
+    "/api/v1/operations/service/lifecycle/approvals",
+    { body: input, headers: mutationHeaders() },
   );
   if (data !== undefined) return data;
   throw new ApiError(error, response);

@@ -17,7 +17,8 @@ Last reviewed: 2026-07-22
   Memcached, OpenSSH, UFW, Certbot, Fail2ban, Docker와 containerd입니다.
 - Nginx·PHP-FPM·MySQL/MariaDB·Redis·OpenSSH·UFW·Certbot은 지원표의 관찰 surface입니다.
 - 나머지 템플릿은 `known_read_only`, template 밖 로컬 unit은 `discovered_read_only`입니다.
-- start·stop·restart·enable·disable, package 설치·삭제와 범용 systemd mutation은 비목표입니다.
+- package 설치·삭제, enable·disable과 범용 systemd mutation은 비목표입니다.
+- catalog의 `managed_control` allowlist만 `service.lifecycle.set/v1` start·stop·reload·restart를 지원합니다.
 - unit 이름만으로 package version, 열린 port 또는 정상 동작을 추측하지 않습니다.
 
 ## Template authority
@@ -64,6 +65,7 @@ Last reviewed: 2026-07-22
 - 대표 service는 repository에 포함한 CC0 Simple Icons asset을 사용하고 나머지는 고정 Lucide category icon으로 fallback합니다. runtime CDN은 사용하지 않습니다.
 - 발견된 서비스도 desktop 다열 card로 표시하며 system 목록은 2~3열의 compact card로 표시합니다.
 - `관리 지원`, `알려진 읽기 전용`, `발견된 읽기 전용`, `시스템 내부`를 혼동하지 않습니다.
+- 관리 지원 카드에는 backend가 반환한 허용 action만 표시하고 stop은 downtime 확인을 거칩니다.
 - mobile 320px에서 상태·역할·지원 수준을 생략하지 않고 한 열로 reflow합니다.
 
 ## Acceptance scenarios
@@ -75,6 +77,7 @@ Last reviewed: 2026-07-22
 5. malformed·oversized·timeout command output은 정상으로 오인되지 않습니다.
 6. `/services`는 desktop·tablet·320px mobile에서 overflow 없이 동작하고 axe critical/serious 0입니다.
 7. Ubuntu VM에서 실제 Nginx와 JW Agent 내부 unit 분류, 실패 unit 노출, command bound를 검증합니다.
+8. 지원 unit의 start·stop·reload·restart와 system/JW Agent/OpenSSH unit 차단을 검증합니다.
 
 ## Evidence
 

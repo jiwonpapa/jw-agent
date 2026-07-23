@@ -3,7 +3,7 @@ use utoipa::ToSchema;
 
 use crate::{AssuranceView, SecretString, validate_digest};
 
-pub const FILE_IDLE_TIMEOUT_SECONDS: u64 = 2 * 60;
+pub const FILE_IDLE_TIMEOUT_SECONDS: u64 = 0;
 pub const FILE_MAX_LIFETIME_SECONDS: u64 = 0;
 pub const FILE_MAX_PATH_BYTES: usize = 1_024;
 pub const FILE_MAX_COMPONENT_BYTES: usize = 255;

@@ -8,9 +8,10 @@ use std::path::{Path, PathBuf};
 use jw_contracts::{
     AssuranceLevel, AssuranceView, MANAGED_CONFIG_OPERATION, OPERATION_SCHEMA_VERSION,
     ObservationStatus, PHP_FPM_CONFIG_ADAPTER_ID, PHP_FPM_CONFIG_MAX_BYTES,
-    PHP_FPM_EXTENSION_MAX_ENTRIES, PHP_FPM_SUPPORTED_VERSION, PHP_FPM_UNIT, PhpFpmRuntimeView,
-    PhpFpmView, RollbackSupport, ServiceRuntimeState, ServicesView, managed_config_bytes_supported,
-    php_fpm_config_resource_id,
+    PHP_FPM_EXTENSION_MAX_ENTRIES, PHP_FPM_GLOBAL_CONFIG_ADAPTER_ID,
+    PHP_FPM_POOL_CONFIG_ADAPTER_ID, PHP_FPM_SUPPORTED_VERSION, PHP_FPM_UNIT,
+    PhpFpmManagedConfigView, PhpFpmRuntimeView, PhpFpmView, RollbackSupport, ServiceRuntimeState,
+    ServicesView, managed_config_bytes_supported, php_fpm_config_resource_id,
 };
 
 #[derive(Clone, Debug)]
@@ -52,11 +53,36 @@ pub fn observe_php_fpm(
 
     let fpm_root = profile.php_root.join(PHP_FPM_SUPPORTED_VERSION).join("fpm");
     let php_ini = fpm_root.join("php.ini");
+    let php_fpm_global = fpm_root.join("php-fpm.conf");
+    let php_fpm_pool_www = fpm_root.join("pool.d/www.conf");
     let extension_root = fpm_root.join("conf.d");
     let (extensions, extension_count, extensions_truncated, extension_partial) =
         observe_extensions(&extension_root);
     let blocked_reason = managed_config_blocked_reason(&php_ini, service.runtime_state);
     let operation_available = blocked_reason.is_none();
+    let managed_configs = vec![
+        managed_config_view(
+            PHP_FPM_CONFIG_ADAPTER_ID,
+            "PHP 8.3 FPM · php.ini",
+            "/etc/php/8.3/fpm/php.ini",
+            &php_ini,
+            service.runtime_state,
+        ),
+        managed_config_view(
+            PHP_FPM_GLOBAL_CONFIG_ADAPTER_ID,
+            "PHP 8.3 FPM · 전역 설정",
+            "/etc/php/8.3/fpm/php-fpm.conf",
+            &php_fpm_global,
+            service.runtime_state,
+        ),
+        managed_config_view(
+            PHP_FPM_POOL_CONFIG_ADAPTER_ID,
+            "PHP 8.3 FPM · www pool",
+            "/etc/php/8.3/fpm/pool.d/www.conf",
+            &php_fpm_pool_www,
+            service.runtime_state,
+        ),
+    ];
     let runtime = PhpFpmRuntimeView {
         version: String::from(PHP_FPM_SUPPORTED_VERSION),
         unit_name: service.unit_name.clone(),
@@ -69,12 +95,17 @@ pub fn observe_php_fpm(
         extensions,
         extension_count,
         extensions_truncated,
+        managed_configs,
         managed_config_resource_id: operation_available
             .then(|| php_fpm_config_resource_id(PHP_FPM_CONFIG_ADAPTER_ID)),
         managed_config_operation_type: operation_available
             .then(|| String::from(MANAGED_CONFIG_OPERATION)),
         managed_config_schema_version: operation_available.then_some(OPERATION_SCHEMA_VERSION),
-        assurance: php_fpm_assurance(operation_available, blocked_reason.clone()),
+        assurance: php_fpm_assurance(
+            operation_available,
+            blocked_reason.clone(),
+            "표준 php.ini 한 파일",
+        ),
         blocked_reason,
     };
     PhpFpmView {
@@ -88,8 +119,29 @@ pub fn observe_php_fpm(
     }
 }
 
+fn managed_config_view(
+    adapter_id: &str,
+    display_name: &str,
+    masked_path: &str,
+    path: &Path,
+    runtime_state: ServiceRuntimeState,
+) -> PhpFpmManagedConfigView {
+    let blocked_reason = managed_config_blocked_reason(path, runtime_state);
+    let available = blocked_reason.is_none();
+    PhpFpmManagedConfigView {
+        resource_id: php_fpm_config_resource_id(adapter_id),
+        operation_type: String::from(MANAGED_CONFIG_OPERATION),
+        schema_version: OPERATION_SCHEMA_VERSION,
+        display_name: String::from(display_name),
+        masked_path: String::from(masked_path),
+        available,
+        assurance: php_fpm_assurance(available, blocked_reason.clone(), display_name),
+        blocked_reason,
+    }
+}
+
 fn managed_config_blocked_reason(
-    php_ini: &Path,
+    path: &Path,
     runtime_state: ServiceRuntimeState,
 ) -> Option<String> {
     if !matches!(
@@ -98,7 +150,7 @@ fn managed_config_blocked_reason(
     ) {
         return Some(String::from("service_inactive"));
     }
-    let metadata = match std::fs::symlink_metadata(php_ini) {
+    let metadata = match std::fs::symlink_metadata(path) {
         Ok(value) => value,
         Err(_) => return Some(String::from("resource_missing")),
     };
@@ -122,7 +174,7 @@ fn managed_config_blocked_reason(
         return Some(String::from("size_limit"));
     };
     let mut bytes = Vec::with_capacity(capacity);
-    if File::open(php_ini)
+    if File::open(path)
         .and_then(|mut source| source.read_to_end(&mut bytes))
         .is_err()
         || !managed_config_bytes_supported(&bytes)
@@ -171,16 +223,20 @@ fn extension_name(filename: &str) -> Option<String> {
     .then(|| candidate.to_owned())
 }
 
-fn php_fpm_assurance(operation_available: bool, reason: Option<String>) -> AssuranceView {
+fn php_fpm_assurance(
+    operation_available: bool,
+    reason: Option<String>,
+    resource_label: &str,
+) -> AssuranceView {
     AssuranceView {
         level: AssuranceLevel::G2ReversibleConfig,
         rollback_support: RollbackSupport::AutomaticBounded,
         operation_available,
-        scope: vec![String::from(
-            "Ubuntu PHP 8.3 FPM 표준 php.ini 한 파일과 검증된 reload",
+        scope: vec![format!(
+            "Ubuntu PHP 8.3 FPM {resource_label}과 검증된 reload"
         )],
         excluded_effects: vec![
-            String::from("pool·CLI·Apache SAPI 설정과 extension package"),
+            String::from("선택하지 않은 다른 FPM·CLI·Apache SAPI 설정과 extension package"),
             String::from("진행 중 request와 외부 root 변경"),
         ],
         apply_verifier: vec![

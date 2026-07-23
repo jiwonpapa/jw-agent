@@ -6,8 +6,9 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use jw_contracts::{
-    ObservationStatus, ServiceCategory, ServiceRuntimeState, ServiceSummary, ServiceSupport,
-    ServiceVisibility, ServicesView, sha256_digest,
+    ManagedServiceAction, OPERATION_SCHEMA_VERSION, ObservationStatus, SERVICE_CONTROL_OPERATION,
+    ServiceCategory, ServiceRuntimeState, ServiceSummary, ServiceSupport, ServiceVisibility,
+    ServicesView, service_id, service_state_digest,
 };
 use serde::Deserialize;
 
@@ -370,6 +371,29 @@ fn classify_unit(catalog: &ServiceCatalog, unit: SystemdUnit) -> ServiceSummary 
                 true,
             )
         };
+    let runtime_state = runtime_state(&unit.active_state, &unit.sub_state);
+    let active = matches!(
+        runtime_state,
+        ServiceRuntimeState::Running | ServiceRuntimeState::Active
+    );
+    let controlled = matches!(
+        unit.unit_name.as_str(),
+        "nginx.service" | "php8.3-fpm.service"
+    );
+    let allowed_actions = if controlled {
+        if active {
+            vec![
+                ManagedServiceAction::Restart,
+                ManagedServiceAction::Reload,
+                ManagedServiceAction::Stop,
+            ]
+        } else {
+            vec![ManagedServiceAction::Start]
+        }
+    } else {
+        Vec::new()
+    };
+    let state_digest = service_state_digest(&unit.unit_name, active);
     ServiceSummary {
         service_id: service_id(&unit.unit_name),
         template_id,
@@ -377,14 +401,18 @@ fn classify_unit(catalog: &ServiceCatalog, unit: SystemdUnit) -> ServiceSummary 
         display_name,
         purpose,
         category,
-        runtime_state: runtime_state(&unit.active_state, &unit.sub_state),
+        runtime_state,
         active_state: unit.active_state,
         sub_state: unit.sub_state,
         unit_file_state: unit.unit_file_state,
         visibility,
         support,
-        read_only: true,
+        read_only: !controlled,
         hidden_by_default,
+        state_digest,
+        allowed_actions,
+        operation_type: controlled.then(|| String::from(SERVICE_CONTROL_OPERATION)),
+        operation_schema_version: controlled.then_some(OPERATION_SCHEMA_VERSION),
     }
 }
 
@@ -412,13 +440,6 @@ fn runtime_state(active_state: &str, sub_state: &str) -> ServiceRuntimeState {
         ("activating" | "deactivating" | "reloading", _) => ServiceRuntimeState::Transitioning,
         _ => ServiceRuntimeState::Unknown,
     }
-}
-
-fn service_id(unit_name: &str) -> String {
-    format!(
-        "svc_{}",
-        sha256_digest(unit_name.as_bytes()).trim_start_matches("sha256:")
-    )
 }
 
 fn service_order(left: &ServiceSummary, right: &ServiceSummary) -> std::cmp::Ordering {

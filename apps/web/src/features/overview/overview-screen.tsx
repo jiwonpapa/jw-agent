@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import {
   AlertCircle,
@@ -7,8 +7,11 @@ import {
   ChevronDown,
   Clock3,
   Cpu,
+  Gauge,
   HardDrive,
   MemoryStick,
+  LoaderCircle,
+  Play,
   RotateCcw,
   Server,
   SlidersHorizontal,
@@ -17,22 +20,33 @@ import {
 } from "lucide-react";
 
 import {
+  ApiError,
+  approveManagedConfig,
+  getManagedConfigResource,
+  getOperationReceipt,
+  planManagedConfigRestore,
+  watchOperationEvents,
+} from "../../shared/api/client";
+import {
   activityQueryOptions,
   hostQueryOptions,
   nginxSitesQueryOptions,
   servicesQueryOptions,
   sessionQueryOptions,
+  queryKeys,
 } from "../../shared/api/queries";
-import type { OperationStage } from "../../shared/api/types";
+import type { ManagedConfigPlanView, OperationAcceptedView, OperationReceiptView, OperationStage } from "../../shared/api/types";
 import { OBSERVATION_LABELS } from "../../shared/content/copy";
 import { formatBytes, formatDateTime, formatDuration } from "../../shared/domain/format";
 import { AssuranceMark } from "../../shared/ui/assurance";
 import { Button } from "../../shared/ui/button";
 import { Skeleton } from "../../shared/ui/skeleton";
+import { Sheet } from "../../shared/ui/sheet";
 import { StatusMark, type StatusTone } from "../../shared/ui/status-mark";
 import { SurfaceState } from "../../shared/ui/surface-state";
 import { WorkspaceHeader } from "../../shared/ui/workspace-header";
-import { SessionAccessPanel } from "../auth/administrative-access";
+import { SessionAccessPanel, useAdministrativeAccess } from "../auth/administrative-access";
+import { useEffect, useRef, useState } from "react";
 import { ServiceOverview } from "../services/service-overview";
 
 const observationTone = {
@@ -43,11 +57,20 @@ const observationTone = {
 } as const satisfies Record<string, StatusTone>;
 
 export function OverviewScreen() {
+  const queryClient = useQueryClient();
   const host = useQuery(hostQueryOptions);
   const nginx = useQuery(nginxSitesQueryOptions);
   const services = useQuery(servicesQueryOptions);
   const activity = useQuery(activityQueryOptions);
   const session = useQuery(sessionQueryOptions).data;
+  const { requestAccess } = useAdministrativeAccess();
+  const [restoreSource, setRestoreSource] = useState<OperationReceiptView | null>(null);
+  const [restorePlan, setRestorePlan] = useState<ManagedConfigPlanView | null>(null);
+  const [restoreAccepted, setRestoreAccepted] = useState<OperationAcceptedView | null>(null);
+  const [restoreReceipt, setRestoreReceipt] = useState<OperationReceiptView | null>(null);
+  const [restoreBusy, setRestoreBusy] = useState(false);
+  const [restoreError, setRestoreError] = useState<string | null>(null);
+  const restoreKey = useRef<string | null>(null);
   const memoryUsage = host.data?.memory === null || host.data?.memory === undefined
     ? null
     : usagePercent(host.data.memory.totalBytes, host.data.memory.availableBytes);
@@ -55,6 +78,96 @@ export function OverviewScreen() {
     ? null
     : usagePercent(host.data.rootDisk.totalBytes, host.data.rootDisk.availableBytes);
   const failedServices = services.data?.services.filter((service) => service.runtimeState === "failed") ?? [];
+  const normalizedLoad = host.data?.loadAverageOne == null || host.data.logicalCpuCount == null
+    ? null
+    : Math.min(100, (host.data.loadAverageOne / host.data.logicalCpuCount) * 100);
+
+  useEffect(() => {
+    if (restoreAccepted === null) return;
+    const operation = restoreAccepted;
+    const controller = new AbortController();
+    let closeStream: () => void = () => undefined;
+    async function refresh(): Promise<void> {
+      try {
+        const receipt = await getOperationReceipt(operation.operationId, controller.signal);
+        setRestoreReceipt(receipt);
+        if (isTerminalOperation(receipt.terminalState)) {
+          closeStream();
+          setRestoreAccepted(null);
+          await Promise.all([
+            queryClient.invalidateQueries({ queryKey: queryKeys.activity }),
+            queryClient.invalidateQueries({ queryKey: queryKeys.nginxSites }),
+            queryClient.invalidateQueries({ queryKey: queryKeys.phpFpm }),
+          ]);
+        }
+      } catch (error) {
+        if (!(error instanceof DOMException && error.name === "AbortError")) setRestoreError(restoreErrorCopy(error));
+      }
+    }
+    closeStream = watchOperationEvents(operation.eventStream, () => void refresh(), () => void refresh());
+    void refresh();
+    return () => { controller.abort(); closeStream(); };
+  }, [restoreAccepted, queryClient]);
+
+  async function beginRestore(source: OperationReceiptView, administrativeConfirmed = false): Promise<void> {
+    if (!administrativeConfirmed && session?.administrativeAccess !== "administrative") {
+      requestAccess(() => void beginRestore(source, true));
+      return;
+    }
+    if (!source.restoreAvailable || source.resourceId == null) return;
+    setRestoreSource(source);
+    setRestorePlan(null);
+    setRestoreReceipt(null);
+    setRestoreError(null);
+    setRestoreBusy(true);
+    const idempotencyKey = `web_${crypto.randomUUID()}`;
+    restoreKey.current = idempotencyKey;
+    try {
+      const resource = await getManagedConfigResource(source.resourceId);
+      setRestorePlan(await planManagedConfigRestore({
+        schemaVersion: resource.schemaVersion,
+        operationType: "service.config_file.restore/v1",
+        sourceOperationId: source.operationId,
+        expectedContentDigest: resource.contentDigest,
+        expectedMetadataDigest: resource.metadataDigest,
+        idempotencyKey,
+      }));
+    } catch (error) {
+      setRestoreError(restoreErrorCopy(error));
+    } finally {
+      setRestoreBusy(false);
+    }
+  }
+
+  async function approveRestore(): Promise<void> {
+    if (restorePlan === null || restoreKey.current === null || restoreBusy) return;
+    setRestoreBusy(true);
+    setRestoreError(null);
+    try {
+      setRestoreAccepted(await approveManagedConfig({
+        schemaVersion: restorePlan.schemaVersion,
+        planId: restorePlan.planId,
+        planHash: restorePlan.planHash,
+        idempotencyKey: restoreKey.current,
+        reauthToken: null,
+        additionalAuthClaim: null,
+        approvalIntent: { validationConfirmed: true, serviceActionConfirmed: true },
+      }));
+    } catch (error) {
+      setRestoreError(restoreErrorCopy(error));
+    } finally {
+      setRestoreBusy(false);
+    }
+  }
+
+  function closeRestore(): void {
+    if (restoreAccepted !== null) return;
+    setRestoreSource(null);
+    setRestorePlan(null);
+    setRestoreReceipt(null);
+    setRestoreError(null);
+    restoreKey.current = null;
+  }
 
   return (
     <div className="animate-state-in">
@@ -109,7 +222,7 @@ export function OverviewScreen() {
             action={{ label: "다시 관찰", onClick: () => void host.refetch() }}
           />
         ) : (
-          <dl className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+          <dl className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
             <Metric
               icon={Server}
               label="호스트"
@@ -122,9 +235,17 @@ export function OverviewScreen() {
               value={host.data.cpuUsagePercent == null ? "알 수 없음" : `${String(Math.round(host.data.cpuUsagePercent))}% 사용`}
               detail={host.data.logicalCpuCount == null
                 ? "논리 CPU 수 없음"
-                : `${String(host.data.logicalCpuCount)} vCPU · 1분 부하 ${host.data.loadAverageOne?.toFixed(2) ?? "없음"}`}
+                : `${String(host.data.logicalCpuCount)} vCPU`}
               meterValue={host.data.cpuUsagePercent ?? null}
               meterTone={usageTone(host.data.cpuUsagePercent ?? null, 80, 95)}
+            />
+            <Metric
+              icon={Gauge}
+              label="로드 평균"
+              value={host.data.loadAverageOne == null ? "알 수 없음" : `1분 ${host.data.loadAverageOne.toFixed(2)}`}
+              detail={`1분 ${host.data.loadAverageOne?.toFixed(2) ?? "-"} · 5분 ${host.data.loadAverageFive?.toFixed(2) ?? "-"} · 15분 ${host.data.loadAverageFifteen?.toFixed(2) ?? "-"}`}
+              meterValue={normalizedLoad}
+              meterTone={usageTone(normalizedLoad, 75, 95)}
             />
             <Metric
               icon={MemoryStick}
@@ -330,6 +451,11 @@ export function OverviewScreen() {
                     {operation.rollbackResult ? (
                       <p className="mt-4 flex items-center gap-2 text-warning"><RotateCcw aria-hidden="true" className="size-4" />원복 결과: {operation.rollbackResult}</p>
                     ) : null}
+                    {operation.restoreAvailable ? (
+                      <Button className="mt-4" size="compact" variant="secondary" onClick={() => void beginRestore(operation)}>
+                        <RotateCcw aria-hidden="true" className="size-4" />이 변경 전으로 복원
+                      </Button>
+                    ) : null}
                   </div>
                 </details>
               </li>
@@ -337,8 +463,50 @@ export function OverviewScreen() {
           </ul>
         )}
       </section>
+      <Sheet open={restoreSource !== null} onOpenChange={(open) => { if (!open) closeRestore(); }} title="설정 복원" description="선택한 작업 직전 snapshot으로 복원" side="right" size="wide">
+        <RestorePanel source={restoreSource} plan={restorePlan} accepted={restoreAccepted} receipt={restoreReceipt} busy={restoreBusy} error={restoreError} onApprove={() => void approveRestore()} />
+      </Sheet>
     </div>
   );
+}
+
+function RestorePanel({ source, plan, accepted, receipt, busy, error, onApprove }: {
+  source: OperationReceiptView | null;
+  plan: ManagedConfigPlanView | null;
+  accepted: OperationAcceptedView | null;
+  receipt: OperationReceiptView | null;
+  busy: boolean;
+  error: string | null;
+  onApprove: () => void;
+}) {
+  if (source === null) return null;
+  if (busy && plan === null) return <div className="flex items-center gap-3 text-sm text-muted"><LoaderCircle aria-hidden="true" className="size-5 animate-spin" />snapshot과 현재 설정을 대조합니다.</div>;
+  if (receipt !== null && isTerminalOperation(receipt.terminalState)) {
+    const success = receipt.terminalState === "SUCCEEDED";
+    return <section className={success ? "rounded-panel border border-success/35 bg-success/5 p-5" : "rounded-panel border border-warning/35 bg-warning/5 p-5"}><h3 className="font-semibold text-text">{success ? "설정 복원 완료" : receipt.terminalState === "ROLLED_BACK" ? "복원 실패 후 현재 설정 유지" : "수동 확인 필요"}</h3><p className="mt-1 text-sm text-muted">{receipt.displayName} · {receipt.terminalState}</p></section>;
+  }
+  if (accepted !== null) return <div className="flex min-h-48 items-center justify-center gap-3"><LoaderCircle aria-hidden="true" className="size-6 animate-spin text-action" /><p className="text-sm text-muted">복원 설정을 검증하고 서비스를 reload합니다.</p></div>;
+  if (plan === null) return <p role="alert" className="text-sm text-danger">{error ?? "복원 계획을 만들지 못했습니다."}</p>;
+  return (
+    <div>
+      <section className="rounded-panel border border-warning/35 bg-warning/5 p-5"><h3 className="font-semibold text-text">{source.displayName}의 변경 직전 상태로 복원합니다</h3><p className="mt-1 text-sm leading-6 text-muted">현재 설정을 다시 snapshot한 뒤 복원본을 문법 검사합니다. 검증 실패 시 현재 설정으로 돌아옵니다.</p></section>
+      <dl className="mt-4 grid gap-3 rounded-panel border border-border p-4 text-sm sm:grid-cols-2"><OperationField label="원본 작업" value={source.operationId} mono /><OperationField label="변경 줄" value={`+${String(plan.addedLines)} / -${String(plan.removedLines)}`} /></dl>
+      <details className="mt-4 rounded-panel border border-border p-4"><summary className="cursor-pointer text-sm font-semibold text-text">복원 영향과 복구 경로</summary><ul className="mt-3 space-y-1 text-sm text-muted">{[...plan.impact, ...plan.recoveryPath].map((item) => <li key={item}>· {item}</li>)}</ul></details>
+      {error ? <p role="alert" className="mt-4 text-sm font-medium text-danger">{error}</p> : null}
+      <Button className="mt-5 w-full" disabled={busy} onClick={onApprove}>{busy ? <LoaderCircle aria-hidden="true" className="size-4 animate-spin" /> : <Play aria-hidden="true" className="size-4" />}{busy ? "승인 중" : "복원 적용"}</Button>
+    </div>
+  );
+}
+
+function isTerminalOperation(stage: OperationStage): boolean {
+  return ["SUCCEEDED", "ROLLED_BACK", "RECOVERY_REQUIRED", "REJECTED", "EXPIRED", "CANCELLED_BEFORE_APPLY"].includes(stage);
+}
+
+function restoreErrorCopy(error: unknown): string {
+  if (!(error instanceof ApiError)) return "설정 복원 작업을 완료하지 못했습니다.";
+  if (error.status === 409) return "snapshot을 사용할 수 없거나 현재 설정이 바뀌었습니다. 이력을 새로 불러온 뒤 다시 시도하세요.";
+  if (error.status === 423) return "감사 원장 무결성 잠금으로 복원이 차단되었습니다.";
+  return error.message;
 }
 
 function ActionLink({ to, title, description }: {

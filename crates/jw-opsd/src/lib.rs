@@ -12,6 +12,7 @@ mod nginx;
 mod nginx_diagnostic;
 mod php_fpm_diagnostic;
 mod runner;
+mod service_control;
 mod snapshot;
 
 pub use certbot_runner::{CertbotRunner, UdsCertbotRunner};

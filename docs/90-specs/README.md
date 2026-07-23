@@ -10,6 +10,9 @@ Last reviewed: 2026-07-22
 - [OPS-NGINX-SITE-STATE-V1](operations/nginx-site-state-set-v1.md) — Accepted, P2 active implementation
 - [OPS-PUBLIC-ACCESS-PROFILE-V1](operations/public-access-profile-v1.md) — Accepted
 - [OPS-MANAGED-CONFIG-FILE-V1](operations/managed-config-file-v1.md) — Accepted, Nginx active-resource implementation `VM_PASS`
+- [OPS-PHP-FPM-CONFIG-V1](operations/php-fpm-config-v1.md) — Accepted, strict multi-resource profile pending current VM gate
+- [OPS-MANAGED-CONFIG-RESTORE-V1](operations/managed-config-restore-v1.md) — Accepted
+- [OPS-SERVICE-CONTROL-V1](operations/service-control-v1.md) — Accepted
 - [OPS-CERTBOT-CERTIFICATE-V1](operations/certbot-certificate-v1.md) — Accepted, runner/inventory/renew-test, private-LAN issuance failure and protected-vhost attach rollback `VM_PASS`; public-CA success pending
 
 ## Access specs
@@ -32,6 +35,7 @@ Last reviewed: 2026-07-22
 ## UI specs
 
 - [UI-OVERVIEW-V1](ui/overview-v1.md) — Accepted
+- [UI-MANAGED-CONFIG-WIZARD-V1](ui/managed-config-wizard-v1.md) — Accepted
 - [UI-LOGIN-SESSION-V1](ui/login-session-v1.md) — Accepted
 - [UI-RESPONSIVE-SHELL-V1](ui/responsive-shell-v1.md) — Accepted
 - [UI-ROLLBACK-ASSURANCE-V1](ui/rollback-assurance-v1.md) — Accepted
@@ -55,6 +59,7 @@ Last reviewed: 2026-07-22
 - [ADR-0014 CodeMirror managed config editor](adr/0014-codemirror-config-editor.md) — Accepted
 - [ADR-0015 PHP-FPM managed config envelope](adr/0015-php-fpm-managed-config-envelope.md) — Accepted
 - [ADR-0016 TOTP crypto and enrollment boundary](adr/0016-totp-crypto-and-enrollment-boundary.md) — Accepted
+- [ADR-0017 Risk-tiered operation approval](adr/0017-risk-tiered-operation-approval.md) — Accepted
 
 ## Spec template requirements
 

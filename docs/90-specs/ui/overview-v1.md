@@ -16,7 +16,8 @@ Last reviewed: 2026-07-21
 - write/forensic-lockdown capability
 - canonical Linux subject, role, public/recovery access status
 - attention items
-- CPU 200ms delta, memory와 root filesystem resource observations
+- CPU 200ms delta, load average 1·5·15, memory와 root filesystem resource observations
+- 최근 bounded load sample과 logical CPU로 정규화한 코어당 부하
 - Nginx site inventory
 - recent operation receipts
 
@@ -28,7 +29,7 @@ Last reviewed: 2026-07-21
 ## Layout
 
 1. 계정·현재 session과 management mode를 첫 화면에서 펼쳐 표시
-2. CPU·memory·root disk를 숫자, ring과 progress bar로 함께 표시하는 resource card rail
+2. CPU·load 1·5·15·memory·root disk를 숫자, ring·progress bar·짧은 추세로 함께 표시하는 resource rail
 3. 원인·영향·권장 조치를 함께 표시하며 여러 문제를 숨기지 않는 Attention Queue
 4. catalog 기반 주요 서비스 card grid
 5. Nginx site card grid
@@ -75,4 +76,5 @@ Last reviewed: 2026-07-21
 - keyboard reaches every action
 - light/dark snapshots and axe critical/serious 0
 - CPU·memory·root disk의 숫자와 접근 가능한 graph label 일치
+- load 1·5·15, logical CPU와 코어당 부하의 숫자·경고가 일치
 - 최근 receipt를 펼치면 actor, operation type, before/after digest와 stage가 표시
