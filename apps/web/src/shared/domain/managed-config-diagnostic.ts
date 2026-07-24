@@ -48,12 +48,20 @@ export function operationResultLabel(resultCode: string): string {
     config_replaced: "설정 파일 원자 교체",
     nginx_config_valid: "Nginx 문법검사 통과",
     nginx_reloaded: "Nginx reload 완료",
+    apache_config_valid: "Apache 문법검사 통과",
+    apache_reloaded: "Apache reload 완료",
+    apache_config_invalid: "Apache 문법검사 실패",
+    apache_config_test_timeout: "Apache 문법검사 시간 초과",
     php_fpm_config_valid: "PHP-FPM 설정 문법검사 통과",
     php_fpm_reloaded: "PHP-FPM reload 완료",
     php_fpm_config_invalid: "PHP-FPM 설정 문법검사 실패",
     managed_config_verified: "설정·서비스 상태 검증 완료",
     nginx_config_test_failed: "Nginx 문법검사 실패",
     rollback_verified: "이전 설정 복원·재검증 완료",
+    ufw_rule_apply_started: "UFW 규칙 적용 시작",
+    ufw_rule_applied: "UFW 규칙 명령 완료",
+    ufw_rule_verified: "UFW 규칙 상태 검증 완료",
+    ufw_rule_restored: "UFW 이전 규칙 상태 복구 완료",
   };
   return labels[resultCode] ?? resultCode;
 }

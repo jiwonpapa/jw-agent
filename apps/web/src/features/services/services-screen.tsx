@@ -166,7 +166,7 @@ export function ServicesScreen() {
           />
           <SystemServices services={system} search={systemSearch} onSearch={setSystemSearch} />
           <p className="border-t border-border pt-5 text-xs text-muted">
-            템플릿 {inventory.data.templateProfile} · 최대 512개 · Nginx와 PHP 8.3 FPM만 lifecycle 제어 지원
+            템플릿 {inventory.data.templateProfile} · 최대 512개 · Nginx, Apache, PHP 8.3 FPM lifecycle 제어 지원
           </p>
         </>
       )}

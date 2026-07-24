@@ -3,7 +3,7 @@
 Status: Accepted  
 Authority: Authentication Specification  
 Owner: Security Maintainer  
-Last reviewed: 2026-07-23
+Last reviewed: 2026-07-24
 
 ## Purpose
 
@@ -14,7 +14,6 @@ Last reviewed: 2026-07-23
 - UID 0 로그인, root password, root shell·PTY·SFTP
 - 브라우저·DB·로그에 Linux password 또는 TOTP code 저장
 - arbitrary command, argv 또는 arbitrary root path 전달
-- 관리 모드를 Linux `sudo` credential cache로 사용
 - 관리 모드를 Linux `sudo` credential cache로 사용
 
 ## Contract
@@ -54,7 +53,8 @@ Last reviewed: 2026-07-23
 - standard mode에서 모든 root plan·approval API server-side denial
 - administrative mode에서도 arbitrary shell/root file endpoint 부재
 - password/TOTP가 URL, storage, SQLite audit, log, screenshot, trace에 없음
-- 관리 모드 안의 G2 설정은 반복 비밀번호 없이 승인되며 stop·large deletion은 추가 위험 확인을 요구
+- 관리 모드 안의 G2 설정은 `저장` 한 번으로 plan·승인·검증·적용되며 반복 비밀번호 없이 승인됨
+- stop·large deletion은 추가 위험 확인을 요구
 - 개요 default-expanded session panel과 다른 route account drawer
 
-`jw-agent_0.2.0~p2.18_amd64.deb`에서 구현되었으며 Ubuntu 24.04 VM의 전체 `p2-vm` 26개 gate가 관리 모드 진입 뒤 Nginx·PHP-FPM·Certbot typed operation, TOTP 결합, PAM limiter 분리와 secret scan을 검증했습니다. SHA-256은 `80d7339e379bef72414c2294dcd8399f64818775abbff267577e7d6d50f3e7ba`입니다.
+`jw-agent_0.2.0~p2.20_amd64.deb`에서 재검증되었으며 Ubuntu 24.04 VM의 전체 `p2-vm` 28개 gate가 관리 모드 진입 뒤 Nginx·Apache·PHP-FPM·UFW typed operation, TOTP 결합, PAM limiter 분리와 secret scan을 검증했습니다. SHA-256은 `8fbca64eaa2d47ccfa49fabdfaa7c5bcff1b31de382ad3ca91693146277e170a`입니다.

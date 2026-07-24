@@ -19,8 +19,9 @@ export const NAV_GROUPS = [
     ],
   },
   {
-    label: "관리",
+    label: "보안",
     items: [
+      { href: "/firewall", label: "방화벽", key: "firewall" },
       { href: "/settings/access", label: "접속 및 보안", key: "access" },
     ],
   },

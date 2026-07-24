@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+pub(crate) mod apache;
 pub(crate) mod independent_edge;
 pub(crate) mod php_fpm;
 pub(crate) mod public_recovery;
@@ -7,6 +8,7 @@ mod receipt;
 pub(crate) mod service_control;
 pub(crate) mod service_inventory;
 pub(crate) mod totp;
+pub(crate) mod ufw;
 
 use std::env;
 use std::ffi::{OsStr, OsString};
@@ -393,6 +395,8 @@ test "$(systemctl show -p ProtectSystem --value jw-opsd.service)" = strict
 test "$(systemctl show -p MemoryDenyWriteExecute --value jw-agentd.service)" = yes
 test "$(systemctl show -p MemoryDenyWriteExecute --value jw-opsd.service)" = yes
 systemctl cat jw-opsd.service | grep -Fq 'IPAddressDeny=any'
+systemctl cat jw-opsd.service | grep -Fq 'RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK'
+systemctl cat jw-opsd.service | grep -Fq 'ReadWritePaths=/run/jw-agent /var/lib/jw-agent/opsd /etc/nginx /etc/apache2 /etc/php/8.3/fpm -/etc/ufw'
 systemctl cat jw-certd@.service | grep -Fq 'RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6'
 ! systemctl cat jw-certd@.service | grep -Fq 'IPAddressDeny=any'
 systemctl cat jw-authd@.service | grep -Fq 'CollectMode=inactive-or-failed'
@@ -428,9 +432,9 @@ ops_pid=$(systemctl show -p MainPID --value jw-opsd.service)
 test "$agent_pid" -gt 1
 test "$ops_pid" -gt 1
 test "$(awk '/^CapEff:/{print $2}' "/proc/$agent_pid/status")" = 0000000000000000
-test "$(awk '/^CapEff:/{print $2}' "/proc/$ops_pid/status")" = 0000000000000400
-test "$(systemctl show -p PrivateNetwork --value jw-opsd.service)" = yes
-test -z "$(sudo nsenter --target "$ops_pid" --net ss -H -ltnup)"
+test "$(awk '/^CapEff:/{print $2}' "/proc/$ops_pid/status")" = 0000000000001400
+test "$(systemctl show -p PrivateNetwork --value jw-opsd.service)" = no
+! sudo ss -H -ltnup | grep -F 'jw-opsd'
 test "$(ss -H -ltn 'sport = :8787' | awk '{print $4}')" = 127.0.0.1:8787
 test "$(find /proc -maxdepth 2 -name comm -readable -exec grep -l '^jw-authd$' {} + 2>/dev/null | wc -l)" -eq 0
 test "$(find /proc -maxdepth 2 -name comm -readable -exec grep -l '^jw-certd$' {} + 2>/dev/null | wc -l)" -eq 0
@@ -601,7 +605,7 @@ pub fn gate_p2_nginx_operation(_root: &Path, timeout: Duration) -> Result<(), St
         let mut session = P2ApiSession::login(&config, &password, timeout)?;
         session.enter_administrative(&config, &password, timeout)?;
         session.require_management_site_protected(&config, timeout)?;
-        let enabled = session.operate(&config, &password, P2_VALID_SITE, "enabled", timeout)?;
+        let enabled = session.operate(&config, P2_VALID_SITE, "enabled", timeout)?;
         require_terminal(&enabled, "SUCCEEDED", "valid site enable")?;
         let runtime = config.ssh(
         "sudo test -L /etc/nginx/sites-enabled/jw-agent-vm-operation.conf && sudo systemctl is-active --quiet nginx.service",
@@ -610,25 +614,23 @@ pub fn gate_p2_nginx_operation(_root: &Path, timeout: Duration) -> Result<(), St
         )?;
         require_success(&runtime, "enabled Nginx fixture", false)?;
 
-        let noop = session.operate(&config, &password, P2_VALID_SITE, "enabled", timeout)?;
+        let noop = session.operate(&config, P2_VALID_SITE, "enabled", timeout)?;
         require_terminal(&noop, "SUCCEEDED", "already-target no-op")?;
         if !noop.contains("\"resultCode\":\"verified_noop\"") {
             return Err(String::from("no-op receipt omitted verified_noop evidence"));
         }
 
-        let disabled = session.operate(&config, &password, P2_VALID_SITE, "disabled", timeout)?;
+        let disabled = session.operate(&config, P2_VALID_SITE, "disabled", timeout)?;
         require_terminal(&disabled, "SUCCEEDED", "valid site disable")?;
         require_link_absent(&config, P2_VALID_SITE, timeout)?;
         restart_edge_and_agentd_and_wait(&config, timeout)?;
 
-        let syntax_rollback =
-            session.operate(&config, &password, P2_INVALID_SITE, "enabled", timeout)?;
+        let syntax_rollback = session.operate(&config, P2_INVALID_SITE, "enabled", timeout)?;
         require_terminal(&syntax_rollback, "ROLLED_BACK", "syntax failure rollback")?;
         require_link_absent(&config, P2_INVALID_SITE, timeout)?;
 
         install_reload_fail_once(&config, timeout)?;
-        let reload_rollback =
-            session.operate(&config, &password, P2_VALID_SITE, "enabled", timeout)?;
+        let reload_rollback = session.operate(&config, P2_VALID_SITE, "enabled", timeout)?;
         require_terminal(&reload_rollback, "ROLLED_BACK", "reload failure rollback")?;
         if !reload_rollback.contains("\"resultCode\":\"nginx_reload_failed\"") {
             return Err(String::from(
@@ -640,7 +642,7 @@ pub fn gate_p2_nginx_operation(_root: &Path, timeout: Duration) -> Result<(), St
 
         mount_small_snapshot_filesystem(&config, timeout)?;
         session.wait_for_operation_available(&config, timeout)?;
-        let disk_guard = session.operate(&config, &password, P2_VALID_SITE, "enabled", timeout)?;
+        let disk_guard = session.operate(&config, P2_VALID_SITE, "enabled", timeout)?;
         require_terminal(&disk_guard, "CANCELLED_BEFORE_APPLY", "snapshot disk guard")?;
         if !disk_guard.contains("\"resultCode\":\"snapshot_space_insufficient\"") {
             return Err(String::from(
@@ -1837,13 +1839,8 @@ pub fn gate_p2_managed_config(_root: &Path, timeout: Duration) -> Result<(), Str
         )?;
         require_success(&removed, "internal temporary removal", false)?;
 
-        let saved = session.operate_managed_config(
-            &config,
-            &password,
-            P2_MANAGED_SITE,
-            &managed_saved,
-            timeout,
-        )?;
+        let saved =
+            session.operate_managed_config(&config, P2_MANAGED_SITE, &managed_saved, timeout)?;
         require_terminal(&saved, "SUCCEEDED", "managed config save")?;
         if !saved.contains("\"resultCode\":\"config_verified\"") {
             return Err(String::from(
@@ -1852,13 +1849,8 @@ pub fn gate_p2_managed_config(_root: &Path, timeout: Duration) -> Result<(), Str
         }
         require_file_equals(&config, P2_MANAGED_SITE, managed_saved.as_bytes(), timeout)?;
 
-        let noop = session.operate_managed_config(
-            &config,
-            &password,
-            P2_MANAGED_SITE,
-            &managed_saved,
-            timeout,
-        )?;
+        let noop =
+            session.operate_managed_config(&config, P2_MANAGED_SITE, &managed_saved, timeout)?;
         require_terminal(&noop, "SUCCEEDED", "managed config no-op")?;
         if !noop.contains("\"resultCode\":\"verified_noop\"") {
             return Err(String::from(
@@ -1868,7 +1860,6 @@ pub fn gate_p2_managed_config(_root: &Path, timeout: Duration) -> Result<(), Str
 
         let syntax_rollback = session.operate_managed_config(
             &config,
-            &password,
             P2_MANAGED_SITE,
             "server { this_is_not_valid_nginx_syntax; }\n",
             timeout,
@@ -1888,7 +1879,6 @@ pub fn gate_p2_managed_config(_root: &Path, timeout: Duration) -> Result<(), Str
         install_reload_fail_once(&config, timeout)?;
         let reload_rollback = session.operate_managed_config(
             &config,
-            &password,
             P2_MANAGED_SITE,
             P2_MANAGED_RELOAD_CHANGE,
             timeout,
@@ -1915,7 +1905,7 @@ pub fn gate_p2_managed_config(_root: &Path, timeout: Duration) -> Result<(), Str
         install_nginx_fixture(&config, P2_MANAGED_SITE, P2_MANAGED_EXTERNAL, timeout)?;
         let syntax = config.ssh("sudo nginx -t", None, timeout)?;
         require_success(&syntax, "external managed config edit syntax", false)?;
-        let stale = session.approve_managed_config(&config, &password, &stale_plan, timeout)?;
+        let stale = session.approve_managed_config(&config, &stale_plan, timeout)?;
         require_terminal(
             &stale,
             "CANCELLED_BEFORE_APPLY",
@@ -1942,12 +1932,7 @@ pub fn gate_p2_managed_config(_root: &Path, timeout: Duration) -> Result<(), Str
                 "inactive managed config denial omitted resource_not_active",
             ));
         }
-        let proposals = config.ssh(
-            "sudo test -d /var/lib/jw-agent/opsd/proposals && sudo test -z \"$(sudo find /var/lib/jw-agent/opsd/proposals -mindepth 1 -maxdepth 1 -type d -print -quit)\"",
-            None,
-            timeout,
-        )?;
-        require_success(&proposals, "managed config proposal cleanup", false)
+        Ok(())
     })();
     let cleanup = cleanup_managed_config_fixture(&config, timeout);
     let nginx_result = match (result, cleanup) {
@@ -1959,7 +1944,8 @@ pub fn gate_p2_managed_config(_root: &Path, timeout: Duration) -> Result<(), Str
         )),
     };
     nginx_result?;
-    php_fpm::gate_p2_php_fpm(_root, timeout)
+    php_fpm::gate_p2_php_fpm(_root, timeout)?;
+    apache::gate_p2_apache_managed_config(_root, timeout)
 }
 
 pub fn gate_p2_forensic_lockdown(_root: &Path, timeout: Duration) -> Result<(), String> {
@@ -2453,7 +2439,6 @@ impl P2ApiSession {
     fn operate(
         &mut self,
         config: &VmConfig,
-        password: &str,
         site_name: &str,
         target_state: &str,
         timeout: Duration,
@@ -2484,30 +2469,12 @@ impl P2ApiSession {
         expect_http(&plan, 200, "Nginx operation plan")?;
         let plan_id = json_string_field(&plan.body, "planId")?;
         let plan_hash = json_string_field(&plan.body, "planHash")?;
-        let reauth_body = format!(
-            "{{\"password\":{},\"purpose\":{{\"kind\":\"operation\",\"planHash\":{}}}}}",
-            json_string(password),
-            json_string(&plan_hash),
-        );
-        let reauth = public_api_request(
-            config,
-            "POST",
-            "/api/v1/auth/reauth",
-            &self.cookie_jar.path,
-            Some(&self.csrf_token),
-            Some(reauth_body.as_bytes()),
-            timeout,
-        )?;
-        expect_http(&reauth, 200, "exact-plan PAM reauthentication")?;
-        self.csrf_token = json_string_field(&reauth.body, "csrfToken")?;
-        let reauth_token = json_string_field(&reauth.body, "reauthToken")?;
         let approval_body = format!(
-            "{{\"schemaVersion\":{},\"planId\":{},\"planHash\":{},\"idempotencyKey\":{},\"reauthToken\":{}}}",
+            "{{\"schemaVersion\":{},\"planId\":{},\"planHash\":{},\"idempotencyKey\":{}}}",
             site.schema_version,
             json_string(&plan_id),
             json_string(&plan_hash),
             json_string(&idempotency_key),
-            json_string(&reauth_token),
         );
         let accepted = public_api_request(
             config,
@@ -2644,7 +2611,9 @@ impl P2ApiSession {
         expect_http(&plan, 200, "managed config plan")?;
         if !plan.body.contains("\"serviceAction\":\"reload\"")
             || !plan.body.contains("\"level\":\"g2_reversible_config\"")
-            || !plan.body.contains("\"maskedPath\":\"…/sites-available/")
+            || !plan
+                .body
+                .contains("\"maskedPath\":\"…/nginx/sites-available/")
         {
             return Err(String::from(
                 "managed config plan omitted action, assurance, or masked path",
@@ -2661,38 +2630,15 @@ impl P2ApiSession {
     fn approve_managed_config(
         &mut self,
         config: &VmConfig,
-        password: &str,
         plan: &ManagedConfigPlanFields,
         timeout: Duration,
     ) -> Result<String, String> {
-        let reauth_body = format!(
-            "{{\"password\":{},\"purpose\":{{\"kind\":\"operation\",\"planHash\":{}}}}}",
-            json_string(password),
-            json_string(&plan.plan_hash),
-        );
-        let reauth = public_api_request(
-            config,
-            "POST",
-            "/api/v1/auth/reauth",
-            &self.cookie_jar.path,
-            Some(&self.csrf_token),
-            Some(reauth_body.as_bytes()),
-            timeout,
-        )?;
-        expect_http(
-            &reauth,
-            200,
-            "managed config exact-plan PAM reauthentication",
-        )?;
-        self.csrf_token = json_string_field(&reauth.body, "csrfToken")?;
-        let reauth_token = json_string_field(&reauth.body, "reauthToken")?;
         let approval_body = format!(
-            "{{\"schemaVersion\":{},\"planId\":{},\"planHash\":{},\"idempotencyKey\":{},\"reauthToken\":{},\"approvalIntent\":{{\"validationConfirmed\":true,\"serviceActionConfirmed\":true}}}}",
+            "{{\"schemaVersion\":{},\"planId\":{},\"planHash\":{},\"idempotencyKey\":{},\"approvalIntent\":{{\"validationConfirmed\":true,\"serviceActionConfirmed\":true}}}}",
             plan.schema_version,
             json_string(&plan.plan_id),
             json_string(&plan.plan_hash),
             json_string(&plan.idempotency_key),
-            json_string(&reauth_token),
         );
         let accepted = public_api_request(
             config,
@@ -2745,19 +2691,32 @@ impl P2ApiSession {
                 "managed config event stream omitted durable stage evidence",
             ));
         }
+        validate_atom(&plan.plan_id, "managed config plan ID", "_-")?;
+        let proposal_removed = config.ssh(
+            &format!(
+                "sudo test ! -e /var/lib/jw-agent/opsd/proposals/{}",
+                plan.plan_id
+            ),
+            None,
+            timeout,
+        )?;
+        require_success(
+            &proposal_removed,
+            "managed config exact proposal cleanup",
+            false,
+        )?;
         Ok(receipt.body)
     }
 
     fn operate_managed_config(
         &mut self,
         config: &VmConfig,
-        password: &str,
         site_name: &str,
         proposed_content: &str,
         timeout: Duration,
     ) -> Result<String, String> {
         let plan = self.plan_managed_config(config, site_name, proposed_content, timeout)?;
-        self.approve_managed_config(config, password, &plan, timeout)
+        self.approve_managed_config(config, &plan, timeout)
     }
 
     fn operate_certbot_issue_staging_failure(

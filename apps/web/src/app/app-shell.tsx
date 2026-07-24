@@ -6,6 +6,7 @@ import {
   GlobeLock,
   ListTree,
   FolderOpen,
+  BrickWall,
   LogOut,
   Menu,
   PackageSearch,
@@ -38,6 +39,7 @@ const navigationIcons = {
   terminal: SquareTerminal,
   files: FolderOpen,
   access: ShieldCheck,
+  firewall: BrickWall,
 } as const;
 
 function Navigation({ compact = false, onNavigate }: { compact?: boolean; onNavigate?: () => void }) {

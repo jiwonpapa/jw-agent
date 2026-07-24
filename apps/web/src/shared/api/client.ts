@@ -34,6 +34,7 @@ import type {
   ManagedConfigPlanView,
   ManagedConfigResourceView,
   ManagedConfigRestorePlanRequest,
+  ManagedServiceConfigInventoryView,
   ServiceControlApprovalRequest,
   ServiceControlPlanRequest,
   ServiceControlPlanView,
@@ -41,7 +42,7 @@ import type {
   NginxSiteStatePlanView,
   NginxSitesView,
   OperationAcceptedView,
-  OperationApprovalRequest,
+  AdministrativeOperationApprovalRequest,
   OperationListView,
   OperationReceiptView,
   OperationStageEvidenceView,
@@ -56,6 +57,10 @@ import type {
   TotpEnrollmentConfirmView,
   TotpEnrollmentStartView,
   TotpVerificationView,
+  UfwRuleApprovalRequest,
+  UfwRulePlanRequest,
+  UfwRulePlanView,
+  UfwView,
 } from "./types";
 
 const api = createClient<paths>({
@@ -172,6 +177,21 @@ export async function getNginxSites(signal?: AbortSignal): Promise<NginxSitesVie
   const { data, error, response } = await api.GET("/api/v1/services/nginx/sites", {
     signal: signal ?? null,
   });
+  if (data !== undefined) return data;
+  throw new ApiError(error, response);
+}
+
+export async function getServiceConfigurations(
+  serviceKey: "nginx" | "apache",
+  signal?: AbortSignal,
+): Promise<ManagedServiceConfigInventoryView> {
+  const { data, error, response } = await api.GET(
+    "/api/v1/services/{service_key}/configurations",
+    {
+      params: { path: { service_key: serviceKey } },
+      signal: signal ?? null,
+    },
+  );
   if (data !== undefined) return data;
   throw new ApiError(error, response);
 }
@@ -376,6 +396,37 @@ export async function approveServiceControl(
   throw new ApiError(error, response);
 }
 
+export async function getUfw(signal?: AbortSignal): Promise<UfwView> {
+  const { data, error, response } = await api.GET("/api/v1/firewall/ufw", {
+    signal: signal ?? null,
+  });
+  if (data !== undefined) return data;
+  throw new ApiError(error, response);
+}
+
+export async function planUfwRule(input: UfwRulePlanRequest): Promise<UfwRulePlanView> {
+  const { data, error, response } = await api.POST("/api/v1/operations/ufw/rules/plans", {
+    body: input,
+    headers: mutationHeaders(),
+  });
+  if (data !== undefined) return data;
+  throw new ApiError(error, response);
+}
+
+export async function approveUfwRule(
+  input: UfwRuleApprovalRequest,
+): Promise<OperationAcceptedView> {
+  const { data, error, response } = await api.POST(
+    "/api/v1/operations/ufw/rules/approvals",
+    {
+      body: input,
+      headers: mutationHeaders(),
+    },
+  );
+  if (data !== undefined) return data;
+  throw new ApiError(error, response);
+}
+
 export async function reauthenticateForOperation(input: {
   password: string;
   planHash: string;
@@ -479,7 +530,7 @@ export async function resetTotp(input: {
 }
 
 export async function approveNginxSiteState(
-  input: OperationApprovalRequest,
+  input: AdministrativeOperationApprovalRequest,
 ): Promise<OperationAcceptedView> {
   const { data, error, response } = await api.POST(
     "/api/v1/operations/nginx/site-state/approvals",

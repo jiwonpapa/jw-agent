@@ -1,4 +1,3 @@
-use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -12,7 +11,7 @@ use jw_contracts::{
     ManagedConfigResourceView, ManagedConfigRestorePlanRequest, NGINX_SITE_STATE_OPERATION,
     NginxSiteState, NginxSiteStatePlanRequest, OperationReceiptView, OperationStage,
     OpsCapabilityResponse, OpsRejectedResponse, OpsRequest, OpsRequestBody, OpsResponse,
-    OpsResponseBody, Role, RollbackSupport, SERVICE_CONTROL_OPERATION, Subject,
+    OpsResponseBody, Role, RollbackSupport, SERVICE_CONTROL_OPERATION, Subject, UFW_RULE_OPERATION,
     nginx_enabled_state_digest as enabled_state_digest, sha256_digest,
 };
 use serde::Serialize;
@@ -45,6 +44,7 @@ use crate::snapshot::{
 
 mod managed_config_plan;
 mod service_operation;
+mod ufw_operation;
 
 const CERTBOT_STAGING_EVIDENCE_TTL_MS: i64 = 24 * 60 * 60 * 1_000;
 
@@ -478,6 +478,31 @@ impl OpsService {
                 self.approve_service_control(actor, plan_id, plan_hash, idempotency_key, now_ms)
                     .map(OpsResponseBody::OperationReceipt)
             }
+            OpsRequestBody::ObserveUfw { actor } => {
+                let _ = actor;
+                self.ufw_inventory(now_ms).map(OpsResponseBody::Ufw)
+            }
+            OpsRequestBody::PlanUfwRule { actor, plan } => {
+                self.require_write_available()?;
+                require_operator(actor)?;
+                self.plan_ufw_rule(actor, plan, now_ms)
+                    .map(OpsResponseBody::UfwRulePlan)
+            }
+            OpsRequestBody::ApproveUfwRule {
+                actor,
+                plan_id,
+                plan_hash,
+                idempotency_key,
+                impact_confirmed,
+            } => {
+                self.require_write_available()?;
+                require_operator(actor)?;
+                if !impact_confirmed {
+                    return Err(OpsError::Rejected("impact_confirmation"));
+                }
+                self.approve_ufw_rule(actor, plan_id, plan_hash, idempotency_key, now_ms)
+                    .map(OpsResponseBody::OperationReceipt)
+            }
             OpsRequestBody::ExecuteOperation {
                 actor,
                 operation_id,
@@ -510,7 +535,7 @@ impl OpsService {
             };
         }
         match Ledger::open(&self.paths) {
-            Ok(_) if nginx_runtime_present(&self.paths) => OpsCapabilityResponse {
+            Ok(_) => OpsCapabilityResponse {
                 read_only: false,
                 supported_operations: vec![
                     String::from(NGINX_SITE_STATE_OPERATION),
@@ -519,12 +544,8 @@ impl OpsService {
                     String::from(CERTBOT_RENEW_TEST_OPERATION),
                     String::from(CERTBOT_ATTACH_OPERATION),
                     String::from(SERVICE_CONTROL_OPERATION),
+                    String::from(UFW_RULE_OPERATION),
                 ],
-                forensic_lockdown: false,
-            },
-            Ok(_) => OpsCapabilityResponse {
-                read_only: true,
-                supported_operations: Vec::new(),
                 forensic_lockdown: false,
             },
             Err(OpsError::ForensicLockdown) => {
@@ -672,6 +693,7 @@ impl OpsService {
             certbot_renew: None,
             certbot_issue: Some(payload),
             certbot_attach: None,
+            ufw_rule: None,
         };
         plan.plan_hash = certbot_issue_plan_hash(&plan)?;
         let result = (|| {
@@ -784,6 +806,7 @@ impl OpsService {
             certbot_renew: Some(payload),
             certbot_issue: None,
             certbot_attach: None,
+            ufw_rule: None,
         };
         plan.plan_hash = certbot_renew_plan_hash(&plan)?;
         let mut ledger = self.open_ledger()?;
@@ -908,6 +931,7 @@ impl OpsService {
             certbot_renew: None,
             certbot_issue: None,
             certbot_attach: Some(payload),
+            ufw_rule: None,
         };
         plan.plan_hash = certbot_attach_plan_hash(&plan)?;
         let mut ledger = self.open_ledger()?;
@@ -1000,6 +1024,7 @@ impl OpsService {
             certbot_renew: None,
             certbot_issue: None,
             certbot_attach: None,
+            ufw_rule: None,
         };
         plan.plan_hash = plan_hash(&plan)?;
         let mut ledger = self.open_ledger()?;
@@ -1062,6 +1087,9 @@ impl OpsService {
         }
         if operation.plan.operation_type == SERVICE_CONTROL_OPERATION {
             return self.execute_service_control(&mut ledger, operation, now_ms);
+        }
+        if operation.plan.operation_type == UFW_RULE_OPERATION {
+            return self.execute_ufw_rule(&mut ledger, operation, now_ms);
         }
         if operation.plan.operation_type != NGINX_SITE_STATE_OPERATION {
             return Err(OpsError::ForensicLockdown);
@@ -2797,6 +2825,15 @@ impl OpsService {
                         now_ms,
                     )
                     .map(|_| ())
+                } else if operation.plan.operation_type == UFW_RULE_OPERATION {
+                    self.rollback_ufw_rule(
+                        ledger,
+                        &operation.operation_id,
+                        "restart_recovery",
+                        &sha256_digest(b"restart_recovery"),
+                        now_ms,
+                    )
+                    .map(|_| ())
                 } else {
                     self.rollback(
                         ledger,
@@ -3074,13 +3111,6 @@ fn require_operator(actor: &Subject) -> Result<(), OpsError> {
     }
 }
 
-fn nginx_runtime_present(paths: &OpsPaths) -> bool {
-    paths.nginx_available.is_dir()
-        && paths.nginx_enabled.is_dir()
-        && Path::new("/usr/sbin/nginx").is_file()
-        && Path::new("/usr/bin/systemctl").is_file()
-}
-
 fn command_digest(evidence: &CommandEvidence) -> Result<String, OpsError> {
     canonical_digest(
         b"jw-agent/command-evidence/v1",
@@ -3165,6 +3195,7 @@ mod tests {
 
     mod operation_smoke_tests;
     mod php_fpm_tests;
+    mod ufw_tests;
 
     #[test]
     fn certbot_staging_issue_is_non_persistent_and_unlocks_production_plan() -> Result<(), String> {

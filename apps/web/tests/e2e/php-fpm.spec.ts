@@ -177,13 +177,10 @@ test("PHP-FPM workspace exposes runtime facts and a typed G2 php.ini flow", asyn
   const editor = page.getByLabel("PHP 8.3 FPM php.ini 설정");
   await expect(editor).toContainText("memory_limit = 128M");
   await editor.fill("memory_limit = 256M\n");
-  await page.getByRole("button", { name: "검증하기" }).click();
+  await page.getByRole("button", { name: "저장", exact: true }).click();
 
-  await expect(page.getByRole("heading", { name: "서버 사전 검증을 통과했습니다" })).toBeVisible();
-  await expect(page.getByLabel("PHP 8.3 FPM php.ini 설정 변경 diff")).toContainText("256M");
-  await page.getByRole("button", { name: "적용 후 php8.3-fpm.service reload" }).click();
-
-  await expect(page.getByRole("heading", { name: "적용 완료" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "저장 완료" })).toBeVisible();
+  await expect(page.getByText("문법 검사, reload와 서비스 작동 확인을 마쳤습니다.")).toBeVisible();
   expect(planBodies).toHaveLength(1);
   expect(approvalBodies).toHaveLength(1);
   expect(JSON.stringify(approvalBodies)).not.toContain("password");

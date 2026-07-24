@@ -20,6 +20,7 @@ pub const SERVICE_CONTROL_RECOVERY_PATH: [&str; 3] = [
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RegisteredService {
     Nginx,
+    Apache,
     PhpFpm83,
 }
 
@@ -28,6 +29,7 @@ impl RegisteredService {
     pub const fn unit_name(self) -> &'static str {
         match self {
             Self::Nginx => "nginx.service",
+            Self::Apache => "apache2.service",
             Self::PhpFpm83 => "php8.3-fpm.service",
         }
     }
@@ -36,6 +38,7 @@ impl RegisteredService {
     pub const fn display_name(self) -> &'static str {
         match self {
             Self::Nginx => "Nginx",
+            Self::Apache => "Apache HTTP Server",
             Self::PhpFpm83 => "PHP 8.3 FPM",
         }
     }
@@ -44,6 +47,7 @@ impl RegisteredService {
     pub const fn active_command(self) -> CommandClass {
         match self {
             Self::Nginx => CommandClass::NginxActive,
+            Self::Apache => CommandClass::ApacheActive,
             Self::PhpFpm83 => CommandClass::PhpFpm83Active,
         }
     }
@@ -55,6 +59,10 @@ impl RegisteredService {
             (Self::Nginx, ManagedServiceAction::Stop) => CommandClass::NginxStop,
             (Self::Nginx, ManagedServiceAction::Restart) => CommandClass::NginxRestart,
             (Self::Nginx, ManagedServiceAction::Reload) => CommandClass::NginxReload,
+            (Self::Apache, ManagedServiceAction::Start) => CommandClass::ApacheStart,
+            (Self::Apache, ManagedServiceAction::Stop) => CommandClass::ApacheStop,
+            (Self::Apache, ManagedServiceAction::Restart) => CommandClass::ApacheRestart,
+            (Self::Apache, ManagedServiceAction::Reload) => CommandClass::ApacheReload,
             (Self::PhpFpm83, ManagedServiceAction::Start) => CommandClass::PhpFpm83Start,
             (Self::PhpFpm83, ManagedServiceAction::Stop) => CommandClass::PhpFpm83Stop,
             (Self::PhpFpm83, ManagedServiceAction::Restart) => CommandClass::PhpFpm83Restart,
@@ -67,6 +75,8 @@ impl RegisteredService {
         match (self, active) {
             (Self::Nginx, true) => CommandClass::NginxStart,
             (Self::Nginx, false) => CommandClass::NginxStop,
+            (Self::Apache, true) => CommandClass::ApacheStart,
+            (Self::Apache, false) => CommandClass::ApacheStop,
             (Self::PhpFpm83, true) => CommandClass::PhpFpm83Start,
             (Self::PhpFpm83, false) => CommandClass::PhpFpm83Stop,
         }
@@ -74,10 +84,14 @@ impl RegisteredService {
 }
 
 pub fn registered_service(service_identifier: &str) -> Result<RegisteredService, OpsError> {
-    [RegisteredService::Nginx, RegisteredService::PhpFpm83]
-        .into_iter()
-        .find(|service| service_id(service.unit_name()) == service_identifier)
-        .ok_or(OpsError::Rejected("service_not_managed"))
+    [
+        RegisteredService::Nginx,
+        RegisteredService::Apache,
+        RegisteredService::PhpFpm83,
+    ]
+    .into_iter()
+    .find(|service| service_id(service.unit_name()) == service_identifier)
+    .ok_or(OpsError::Rejected("service_not_managed"))
 }
 
 pub fn management_edge_ready(runner: &dyn OperationRunner) -> Result<bool, OpsError> {

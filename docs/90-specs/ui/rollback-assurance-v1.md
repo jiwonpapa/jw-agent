@@ -3,7 +3,7 @@
 Status: Accepted  
 Authority: UI Specification  
 Owner: Product Designer  
-Last reviewed: 2026-07-21
+Last reviewed: 2026-07-24
 
 ## User job
 
@@ -65,28 +65,32 @@ Last reviewed: 2026-07-21
 
 ### 변경 plan
 
-승인 CTA 위에 다음을 펼친 상태로 표시합니다.
+일상적인 G2 설정 편집은 편집기 위에 다음 세 항목을 간결하게 표시합니다.
 
-1. current → target
-2. 영향받는 exact resource
-3. reload·restart·예상 중단
-4. snapshot과 자동 원복 범위
-5. 원복되지 않는 효과
-6. apply·rollback verifier
-7. 원복 실패 시 `RECOVERY_REQUIRED`와 복구 경로
+1. 영향받는 exact resource와 service action
+2. 저장 전 문법 검사와 적용 후 상태 확인
+3. 실패 시 이전 설정 자동 복구
 
-작은 confirm modal 또는 tooltip만으로 이 고지를 대체하지 않습니다. 승인에는 exact-plan PAM 재인증, plan hash, idempotency key가 필요합니다.
+원복 범위·제외 효과·apply/rollback verifier·수동 복구 경로·plan hash는
+같은 화면의 keyboard 접근 가능한 `기술 세부정보`에 둡니다. 별도 wizard,
+반복 checkbox, routine G2 작업마다 PAM 비밀번호를 요구하지 않습니다.
+유효한 관리 모드가 plan 승인 capability이며 plan hash와 idempotency key는
+backend 계약에서 계속 강제합니다.
+
+stop·large deletion·관리 접속 경로 변경은 routine G2와 분리하여 명시적 위험
+확인과 정책상 필요한 추가 인증을 요구합니다.
 
 ### 실행과 결과
 
-- timeline은 snapshot·apply·verify·rollback 단계를 숨기지 않습니다.
+- 기본 결과는 성공·자동 원복·수동 복구 필요만 표시하고 전체 timeline은
+  `기술 세부정보`에서 확인할 수 있습니다.
 - 실패 후 검증된 복원은 `실패 · 원복 완료`로 표시합니다.
 - 복원 검증 실패는 `실패 · 수동 복구 필요`로 표시하고 성공 색상·아이콘을 사용하지 않습니다.
 - 결과 receipt는 계획 당시 보장과 실제 실행 결과를 함께 보존합니다.
 
 ## Responsive and accessibility
 
-- 320px mobile에서도 보장 표시와 원복 범위를 CTA 위에 유지합니다.
+- 320px mobile에서도 자동 원복 여부와 service action을 CTA 위에 유지합니다.
 - 색상만으로 보장 수준을 전달하지 않습니다.
 - badge·icon에는 화면에 보이는 text label이 따라야 합니다.
 - 보장 상세는 keyboard와 screen reader로 접근할 수 있습니다.
@@ -103,7 +107,8 @@ Last reviewed: 2026-07-21
 - 설정 목록에서 mutation 진입 전 보장 표시를 확인할 수 있음
 - `G0`, `G1`, `G2`, unknown·stale·unsupported가 서로 다른 text 상태로 표시됨
 - `G1`, unknown·stale·unsupported에는 mutation CTA가 없음
-- `G2` plan에서 scope·제외 효과·verifier·recovery path가 승인 CTA보다 먼저 표시됨
+- `G2` 편집기에서 exact resource·validator·service action·자동 원복 여부가 저장 CTA와 함께 표시됨
+- scope·제외 효과·verifier·recovery path는 같은 화면의 기술 세부정보에서 접근 가능
 - double click과 browser retry가 operation을 중복 생성하지 않음
 - validation/reload 실패 후 `ROLLED_BACK`과 `RECOVERY_REQUIRED`가 명확히 구분됨
 - refresh·SSE reconnect 후 canonical assurance와 operation state를 재조회함

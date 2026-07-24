@@ -42,6 +42,8 @@ function ServiceFamilyCard({ services, onAction }: { services: ServiceSummary[];
   const state = aggregateServiceState(services);
   const href = lead.templateId === "nginx"
     ? "/services/nginx"
+    : lead.templateId === "apache-httpd"
+      ? "/services/apache"
     : lead.templateId === "php-fpm"
       ? "/services/php-fpm"
     : lead.templateId === "certbot"

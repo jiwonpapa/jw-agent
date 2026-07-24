@@ -1,4 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { Link } from "@tanstack/react-router";
 import {
   ArrowRight,
   CheckCircle2,
@@ -6,7 +7,6 @@ import {
   FilePenLine,
   FileLock2,
   Info,
-  KeyRound,
   LoaderCircle,
   RotateCcw,
   Server,
@@ -14,7 +14,7 @@ import {
   TriangleAlert,
   XCircle,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState, type SyntheticEvent } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import {
   ApiError,
@@ -24,7 +24,6 @@ import {
   getOperationReceipt,
   planNginxSiteState,
   planManagedConfig,
-  reauthenticateForOperation,
   watchOperationEvents,
 } from "../../shared/api/client";
 import { nginxSitesQueryOptions, queryKeys, sessionQueryOptions } from "../../shared/api/queries";
@@ -44,12 +43,7 @@ import {
   operationResultLabel,
 } from "../../shared/domain/managed-config-diagnostic";
 import { AssuranceDetails, AssuranceMark } from "../../shared/ui/assurance";
-import {
-  AdditionalAuthCodeField,
-  useAdditionalAuthRequired,
-} from "../../shared/ui/additional-auth-code";
 import { Button } from "../../shared/ui/button";
-import { Input } from "../../shared/ui/input";
 import { BulletList, isTerminalStage } from "../../shared/ui/operation-details";
 import { Sheet } from "../../shared/ui/sheet";
 import { Skeleton } from "../../shared/ui/skeleton";
@@ -291,26 +285,13 @@ export function NginxScreen() {
       });
       approvalKey.current = idempotencyKey;
       setConfigPlan(nextPlan);
-    } catch (error) {
-      setErrorMessage(operationErrorCopy(error, "설정 변경 계획을 만들지 못했습니다."));
-      await queryClient.invalidateQueries({ queryKey: queryKeys.nginxSites });
-    } finally {
-      requestInFlight.current = false;
       setPlanning(false);
-    }
-  }
-
-  async function approveConfigPlan(): Promise<void> {
-    if (requestInFlight.current || configPlan === null || approvalKey.current === null) return;
-    requestInFlight.current = true;
-    setExecuting(true);
-    setErrorMessage(null);
-    try {
+      setExecuting(true);
       const operation = await approveManagedConfig({
-        schemaVersion: configPlan.schemaVersion,
-        planId: configPlan.planId,
-        planHash: configPlan.planHash,
-        idempotencyKey: approvalKey.current,
+        schemaVersion: nextPlan.schemaVersion,
+        planId: nextPlan.planId,
+        planHash: nextPlan.planHash,
+        idempotencyKey,
         reauthToken: null,
         additionalAuthClaim: null,
         approvalIntent: {
@@ -320,9 +301,12 @@ export function NginxScreen() {
       });
       setAccepted(operation);
     } catch (error) {
-      setErrorMessage(operationErrorCopy(error, "승인한 설정 작업을 완료하지 못했습니다."));
+      setConfigDiagnosticLine(operationDiagnosticLine(error));
+      setErrorMessage(operationErrorCopy(error, "설정을 검증하거나 저장하지 못했습니다."));
+      await queryClient.invalidateQueries({ queryKey: queryKeys.nginxSites });
     } finally {
       requestInFlight.current = false;
+      setPlanning(false);
       setExecuting(false);
     }
   }
@@ -360,25 +344,17 @@ export function NginxScreen() {
     }
   }
 
-  async function approvePlan(password: string, additionalAuthCode: string): Promise<void> {
+  async function approvePlan(): Promise<void> {
     if (requestInFlight.current || plan === null || approvalKey.current === null) return;
     requestInFlight.current = true;
     setExecuting(true);
     setErrorMessage(null);
     try {
-      const reauth = await reauthenticateForOperation({
-        password,
-        planHash: plan.planHash,
-        additionalAuthCode,
-      });
-      queryClient.setQueryData(queryKeys.session, reauth.session);
       const operation = await approveNginxSiteState({
         schemaVersion: plan.schemaVersion,
         planId: plan.planId,
         planHash: plan.planHash,
         idempotencyKey: approvalKey.current,
-        reauthToken: reauth.reauthToken,
-        additionalAuthClaim: reauth.additionalAuthClaim ?? null,
       });
       setAccepted(operation);
     } catch (error) {
@@ -418,9 +394,14 @@ export function NginxScreen() {
                 : "canonical 상태 조회 중"}
             </p>
           </div>
-          {sitesQuery.data?.truncated ? (
-            <StatusMark label="일부 결과만 표시" tone="warning" />
-          ) : null}
+          <div className="flex flex-wrap items-center gap-2">
+            {sitesQuery.data?.truncated ? (
+              <StatusMark label="일부 결과만 표시" tone="warning" />
+            ) : null}
+            <Button asChild variant="secondary">
+              <Link to="/services/nginx/configurations">nginx.conf · conf.d 설정</Link>
+            </Button>
+          </div>
         </div>
 
         {sitesQuery.isPending ? (
@@ -501,6 +482,10 @@ export function NginxScreen() {
             diagnosticLine={configDiagnosticLine}
             onDraftChange={(value) => {
               setConfigDiagnosticLine(null);
+              setConfigPlan(null);
+              setAccepted(null);
+              setReceipt(null);
+              setErrorMessage(null);
               setConfigDraft(value);
             }}
             onBack={() => {
@@ -510,8 +495,7 @@ export function NginxScreen() {
               setReceipt(null);
               setErrorMessage(null);
             }}
-            onCreatePlan={() => void createConfigPlan(selected)}
-            onApprove={approveConfigPlan}
+            onSave={() => void createConfigPlan(selected)}
             onRevise={(line) => {
               setConfigDiagnosticLine(line);
               setConfigPlan(null);
@@ -650,7 +634,7 @@ function SiteInspector({
   executing: boolean;
   errorMessage: string | null;
   onCreatePlan: () => void;
-  onApprove: (password: string, additionalAuthCode: string) => Promise<void>;
+  onApprove: () => Promise<void>;
   loadingConfig: boolean;
   onEditConfig: () => void;
 }) {
@@ -734,21 +718,8 @@ function OperationPlan({
   receipt: OperationReceiptView | null;
   executing: boolean;
   errorMessage: string | null;
-  onApprove: (password: string, additionalAuthCode: string) => Promise<void>;
+  onApprove: () => Promise<void>;
 }) {
-  const [password, setPassword] = useState("");
-  const [additionalAuthCode, setAdditionalAuthCode] = useState("");
-  const additionalAuthRequired = useAdditionalAuthRequired();
-
-  async function submit(event: SyntheticEvent<HTMLFormElement>): Promise<void> {
-    event.preventDefault();
-    const submittedPassword = password;
-    const submittedCode = additionalAuthCode;
-    setPassword("");
-    setAdditionalAuthCode("");
-    await onApprove(submittedPassword, submittedCode);
-  }
-
   if (receipt !== null) return <OperationResult receipt={receipt} />;
 
   if (accepted !== null) {
@@ -813,30 +784,17 @@ function OperationPlan({
         </p>
       ) : null}
 
-      <form className="mt-6" onSubmit={(event) => void submit(event)}>
-        <label htmlFor="operation-password" className="mb-2 block text-sm font-medium text-text">
-          Linux 계정 비밀번호로 이 계획 승인
-        </label>
-        <Input
-          id="operation-password"
-          type="password"
-          autoComplete="current-password"
-          maxLength={1024}
-          required
-          disabled={executing}
-          value={password}
-          onChange={(event) => setPassword(event.currentTarget.value)}
-        />
-        <AdditionalAuthCodeField id="nginx-state-operation-totp" value={additionalAuthCode} onChange={setAdditionalAuthCode} disabled={executing} />
-        <Button className="mt-4 w-full" type="submit" disabled={executing || password.length === 0 || (additionalAuthRequired && additionalAuthCode.length !== 6)}>
+      <div className="mt-6">
+        <p className="text-sm leading-6 text-muted">
+          현재 관리 모드 권한으로 실행합니다. 비밀번호를 다시 입력하지 않습니다.
+        </p>
+        <Button className="mt-4 w-full" disabled={executing} onClick={() => void onApprove()}>
           {executing ? (
             <LoaderCircle aria-hidden="true" className="size-4 animate-spin" />
-          ) : (
-            <KeyRound aria-hidden="true" className="size-4" />
-          )}
-          {executing ? "적용·검증·원복 판단 중" : "재인증 후 실행"}
+          ) : null}
+          {executing ? "적용·검증·원복 판단 중" : "변경 적용"}
         </Button>
-      </form>
+      </div>
     </div>
   );
 }
@@ -979,9 +937,17 @@ function canEditConfig(row: NginxRowView): row is NginxRowView & {
 function operationErrorCopy(error: unknown, fallback: string): string {
   if (!(error instanceof ApiError)) return fallback;
   if (error.status === 401) return "재인증에 실패했거나 세션이 만료되었습니다.";
-  if (error.status === 403) return "현재 계정 또는 exact-plan 재인증으로 승인할 수 없습니다.";
+  if (error.status === 403) return "관리 모드가 만료되었거나 현재 계정에 변경 권한이 없습니다.";
   if (error.status === 409) return "계획이 만료·변경되었거나 다른 작업이 진행 중입니다. 상태를 다시 확인하세요.";
   if (error.status === 423) return "감사 원장 무결성 잠금으로 모든 변경이 차단되었습니다.";
   if (error.status === 428) return "설정된 추가 인증 수단을 사용할 수 없어 변경이 차단되었습니다.";
   return fallback;
+}
+
+function operationDiagnosticLine(error: unknown): number | null {
+  if (!(error instanceof ApiError)) return null;
+  const match = error.code.match(/_(?:line_)?(\d+)$/u);
+  if (match === null) return null;
+  const line = Number.parseInt(match[1] ?? "", 10);
+  return Number.isFinite(line) && line > 0 ? line : null;
 }

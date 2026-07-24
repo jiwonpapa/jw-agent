@@ -324,6 +324,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/firewall/ufw": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["ufw"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/health": {
         parameters: {
             query?: never;
@@ -580,6 +596,38 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/operations/ufw/rules/approvals": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["approve_ufw_rule"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/operations/ufw/rules/plans": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["plan_ufw_rule"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/operations/{operation_id}": {
         parameters: {
             query?: never;
@@ -652,6 +700,22 @@ export interface paths {
             cookie?: never;
         };
         get: operations["php_fpm"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/services/{service_key}/configurations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["service_configurations"];
         put?: never;
         post?: never;
         delete?: never;
@@ -797,6 +861,13 @@ export interface components {
         };
         /** @enum {string} */
         AdministrativeAccessState: "standard" | "administrative";
+        AdministrativeOperationApprovalRequest: {
+            idempotencyKey: string;
+            planHash: string;
+            planId: string;
+            /** Format: int32 */
+            schemaVersion: number;
+        };
         /** @enum {string} */
         AssuranceLevel: "g0_observe_only" | "g1_verified_action" | "g2_reversible_config" | "g3_restore_validated_data";
         AssuranceView: {
@@ -1263,6 +1334,26 @@ export interface components {
         };
         /** @enum {string} */
         ManagedServiceAction: "start" | "stop" | "restart" | "reload";
+        ManagedServiceConfigInventoryView: {
+            configs: components["schemas"]["ManagedServiceConfigView"][];
+            displayName: string;
+            observedAt: string;
+            serviceKey: string;
+            status: components["schemas"]["ObservationStatus"];
+            truncated: boolean;
+            unitName: string;
+        };
+        ManagedServiceConfigView: {
+            assurance: components["schemas"]["AssuranceView"];
+            available: boolean;
+            blockedReason?: string | null;
+            displayName: string;
+            maskedPath: string;
+            operationType: string;
+            resourceId: string;
+            /** Format: int32 */
+            schemaVersion: number;
+        };
         MemoryObservation: {
             /** Format: int64 */
             availableBytes: number;
@@ -1626,6 +1717,80 @@ export interface components {
             /** Format: password */
             additionalAuthClaim: string;
             expiresAt: string;
+        };
+        /** @enum {string} */
+        UfwProtocol: "tcp" | "udp";
+        UfwRuleApprovalRequest: {
+            idempotencyKey: string;
+            impactConfirmed: boolean;
+            planHash: string;
+            planId: string;
+            /** Format: int32 */
+            schemaVersion: number;
+        };
+        /** @enum {string} */
+        UfwRuleMutation: "allow" | "deny" | "delete";
+        UfwRulePlanRequest: {
+            expectedStateDigest: string;
+            idempotencyKey: string;
+            mutation: components["schemas"]["UfwRuleMutation"];
+            operationType: string;
+            /** Format: int32 */
+            port?: number | null;
+            protocol?: null | components["schemas"]["UfwProtocol"];
+            ruleId?: string | null;
+            /** Format: int32 */
+            schemaVersion: number;
+            source?: string | null;
+        };
+        UfwRulePlanView: {
+            actor: components["schemas"]["Subject"];
+            assurance: components["schemas"]["AssuranceView"];
+            createdAt: string;
+            expectedStateDigest: string;
+            expiresAt: string;
+            impact: string[];
+            mutation: components["schemas"]["UfwRuleMutation"];
+            operationType: string;
+            planHash: string;
+            planId: string;
+            /** Format: int32 */
+            port: number;
+            protocol: components["schemas"]["UfwProtocol"];
+            recoveryPath: string[];
+            ruleId: string;
+            /** Format: int32 */
+            schemaVersion: number;
+            source: string;
+        };
+        UfwRuleView: {
+            action: string;
+            destination: string;
+            ipv6: boolean;
+            owned: boolean;
+            /** Format: int32 */
+            port?: number | null;
+            protected: boolean;
+            protocol?: null | components["schemas"]["UfwProtocol"];
+            ruleId?: string | null;
+            /** Format: int32 */
+            sequence: number;
+            source: string;
+            summary: string;
+        };
+        /** @enum {string} */
+        UfwStatus: "active" | "inactive" | "not_installed" | "unsupported_platform" | "unavailable";
+        UfwView: {
+            assurance: components["schemas"]["AssuranceView"];
+            blockedReason?: string | null;
+            defaultIncoming?: string | null;
+            defaultOutgoing?: string | null;
+            mutationAvailable: boolean;
+            observedAt: string;
+            rules: components["schemas"]["UfwRuleView"][];
+            stateDigest: string;
+            status: components["schemas"]["UfwStatus"];
+            truncated: boolean;
         };
         UpdateAdditionalAuthRequest: {
             policy: components["schemas"]["AdditionalAuthPolicy"];
@@ -2596,6 +2761,44 @@ export interface operations {
             };
         };
     };
+    ufw: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description UFW status and bounded rule inventory */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UfwView"];
+                };
+            };
+            /** @description Authentication required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Root observation unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
     health: {
         parameters: {
             query?: never;
@@ -3133,7 +3336,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["OperationApprovalRequest"];
+                "application/json": components["schemas"]["AdministrativeOperationApprovalRequest"];
             };
         };
         responses: {
@@ -3625,6 +3828,144 @@ export interface operations {
             };
         };
     };
+    approve_ufw_rule: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UfwRuleApprovalRequest"];
+            };
+        };
+        responses: {
+            /** @description UFW rule operation accepted */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OperationAcceptedView"];
+                };
+            };
+            /** @description Invalid approval */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Authentication required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Administrative access required */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Expired, stale, or busy rule set */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Forensic lockdown */
+            423: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    plan_ufw_rule: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UfwRulePlanRequest"];
+            };
+        };
+        responses: {
+            /** @description Immutable typed UFW rule plan */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UfwRulePlanView"];
+                };
+            };
+            /** @description Invalid typed rule */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Authentication required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Administrative access or protected rule rejected */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Stale or conflicting rule */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Forensic lockdown */
+            423: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
     operation_receipt: {
         parameters: {
             query?: never;
@@ -3790,6 +4131,47 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PhpFpmView"];
+                };
+            };
+            /** @description Authentication required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    service_configurations: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Supported service key: nginx or apache */
+                service_key: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Managed service configuration inventory */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ManagedServiceConfigInventoryView"];
+                };
+            };
+            /** @description Unsupported service key */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
                 };
             };
             /** @description Authentication required */

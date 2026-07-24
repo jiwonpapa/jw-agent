@@ -7,7 +7,7 @@ Last reviewed: 2026-07-23
 
 ## Purpose
 
-`risky_operations | all_mutations` 정책에서 PAM 재인증 뒤 RFC 6238 TOTP를 추가 step-up으로 검증합니다. 공개 HTTPS에서 탈취된 Linux 비밀번호 하나만으로 write를 승인하지 못하게 하는 것이 목적입니다.
+`risky_operations | all_mutations` 정책에서 PAM 재인증 뒤 RFC 6238 TOTP를 추가 step-up으로 검증합니다. 공개 HTTPS에서 탈취된 Linux 비밀번호 하나만으로 15분 관리 모드나 별도 고위험 작업을 승인하지 못하게 하는 것이 목적입니다.
 
 ## Non-goals
 
@@ -46,9 +46,10 @@ Last reviewed: 2026-07-23
 
 ## Verification
 
-- PAM step-up이 성공한 동일 session·UID·plan hash에만 TOTP challenge를 발급합니다.
+- 관리 모드 진입은 `administrative-access/v1` context에서 동일 session·UID의 PAM과 TOTP를 검증합니다.
+- 관리 모드 TOTP time-step은 성공 즉시 소비하며 같은 code 재사용을 거부합니다.
+- Certbot CA effect처럼 별도 operation spec이 지정한 고위험 작업은 동일 session·UID·exact plan hash의 5분 이하 single-use claim을 추가로 사용할 수 있습니다.
 - code는 HTTPS/recovery JSON body의 secret field로만 받고 즉시 zeroize합니다.
-- 성공 claim은 session, UID, provider, exact plan hash와 5분 이하 만료에 결합하며 한 번만 소비합니다.
 - clock rollback, unavailable key, duplicate code, exhausted budget는 fail closed 합니다.
 
 ## Recovery and reset
@@ -68,11 +69,11 @@ Last reviewed: 2026-07-23
 
 - enroll confirm 전 정책 활성화 거부
 - valid, wrong, expired, ±1 window, replay, duplicate request
-- PAM subject/session/plan mismatch
+- PAM subject/session/context와 고위험 plan mismatch
 - clock rollback and key missing/corrupt
 - recovery code single use, reset and session revoke
 - source·subject·global budget
 - DB/log/journal/process/URL/browser trace secret scan
 - mobile password manager·authenticator paste와 accessibility
 
-`jw-agent_0.2.0~p2.18_amd64.deb`에서 재검증되었으며 Ubuntu 24.04 VM의 `VM-P2-TOTP-STEP-UP`이 등록, 관리 모드 진입, exact-plan 승인, replay 차단, recovery reset과 encrypted-storage cleanup을 검증했습니다. SHA-256은 `80d7339e379bef72414c2294dcd8399f64818775abbff267577e7d6d50f3e7ba`입니다.
+`jw-agent_0.2.0~p2.20_amd64.deb`에서 재검증되었으며 Ubuntu 24.04 VM의 `VM-P2-TOTP-STEP-UP`이 등록, PAM+TOTP 관리 모드 진입, 그 안의 typed Nginx 승인, time-step replay 차단, recovery reset과 encrypted-storage cleanup을 검증했습니다. SHA-256은 `8fbca64eaa2d47ccfa49fabdfaa7c5bcff1b31de382ad3ca91693146277e170a`입니다.

@@ -132,7 +132,7 @@ export function AdministrativeAccessProvider({ children }: { children: ReactNode
                 <div className="text-sm leading-6">
                   <p className="font-semibold text-text">15분 제한 관리 권한</p>
                   <p className="mt-1 text-muted">진입하면 session ID가 회전하며 열린 터미널·SFTP 연결은 보안상 종료됩니다.</p>
-                  <p className="mt-1 text-muted">실제 변경은 계획 확인 후 Linux 비밀번호로 한 번 더 exact-plan 승인합니다.</p>
+                  <p className="mt-1 text-muted">15분 동안 지원되는 설정 저장에는 비밀번호를 다시 요구하지 않습니다.</p>
                 </div>
               </div>
             </div>

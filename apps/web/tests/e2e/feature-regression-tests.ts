@@ -86,7 +86,7 @@ export function registerFeatureRegressionTests(harness: FeatureRegressionHarness
     expect(closeRequests).toBe(0);
   });
 
-  test("managed Nginx wizard requires diff and exact-plan approval before reload", async ({ page }) => {
+  test("managed Nginx editor validates, saves, reloads, and records one operation", async ({ page }) => {
     const planBodies: unknown[] = [];
     const approvalBodies: unknown[] = [];
     await page.setViewportSize({ width: 390, height: 844 });
@@ -102,17 +102,10 @@ export function registerFeatureRegressionTests(harness: FeatureRegressionHarness
     await expect(editor).toContainText("listen 80;");
     await expect(page.getByText("변경 없음", { exact: true })).toBeVisible();
     await editor.fill("server {\n  listen 80;\n  client_max_body_size 20m;\n}\n");
-    await page.getByRole("button", { name: "검증하기" }).dblclick();
+    await page.getByRole("button", { name: "저장", exact: true }).dblclick();
 
-    await expect(page.getByRole("heading", { name: "서버 사전 검증을 통과했습니다" })).toBeVisible();
-    await expect(page.getByLabel("Nginx 설정 변경 diff")).toContainText("client_max_body_size 20m;");
-    await page.getByText("영향·원복·수동 복구 정보").click();
-    await expect(page.getByText(/include된 다른 파일과 active connection/)).toBeVisible();
-    const approval = page.getByRole("button", { name: "적용 후 nginx.service reload" });
-    await approval.dblclick();
-
-    await expect(page.getByRole("heading", { name: "적용 완료" })).toBeVisible();
-    await expect(page.getByText("설정·문법·reload·서비스 상태를 확인했습니다.")).toBeVisible();
+    await expect(page.getByRole("heading", { name: "저장 완료" })).toBeVisible();
+    await expect(page.getByText("문법 검사, reload와 서비스 작동 확인을 마쳤습니다.")).toBeVisible();
     expect(planBodies).toHaveLength(1);
     expect(approvalBodies).toHaveLength(1);
     const approvalBody = approvalBodies[0] as Record<string, unknown>;
@@ -142,13 +135,12 @@ export function registerFeatureRegressionTests(harness: FeatureRegressionHarness
     await page.getByRole("button", { name: "변경 계획 열기" }).first().click();
     await page.getByRole("button", { name: "설정 파일 편집" }).click();
     await page.getByLabel("Nginx 설정 내용").fill("server {\n  listen 80\n  broken on;\n}\n");
-    await page.getByRole("button", { name: "검증하기" }).click();
-    await page.getByRole("button", { name: "적용 후 nginx.service reload" }).click();
+    await page.getByRole("button", { name: "저장", exact: true }).click();
 
-    await expect(page.getByRole("heading", { name: "3번째 줄에서 검증 실패" })).toBeVisible();
-    await expect(page.getByText("서비스를 reload하지 않고 이전 설정으로 복원했습니다.")).toBeVisible();
+    await expect(page.getByRole("heading", { name: "저장 실패 · 이전 설정 복구 완료" })).toBeVisible();
+    await expect(page.getByText("변경을 적용하지 않고 이전 설정을 복구·검증했습니다.")).toBeVisible();
     await page.getByRole("button", { name: "3번째 줄 수정" }).click();
     await expect(page.getByLabel("Nginx 설정 내용")).toContainText("broken on;");
-    await expect(page.getByText("nginx -t가 선택한 설정의 3번째 줄을 지목했습니다.")).toBeVisible();
+    await expect(page.getByText("3번째 줄을 수정해 주세요.")).toBeVisible();
   });
 }

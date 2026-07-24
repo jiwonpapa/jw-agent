@@ -1050,6 +1050,44 @@
         }
       }
     },
+    "/api/v1/firewall/ufw": {
+      "get": {
+        "tags": [],
+        "operationId": "ufw",
+        "responses": {
+          "200": {
+            "description": "UFW status and bounded rule inventory",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UfwView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Root observation unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/health": {
       "get": {
         "tags": [],
@@ -1640,7 +1678,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/OperationApprovalRequest"
+                "$ref": "#/components/schemas/AdministrativeOperationApprovalRequest"
               }
             }
           },
@@ -2198,6 +2236,162 @@
         }
       }
     },
+    "/api/v1/operations/ufw/rules/approvals": {
+      "post": {
+        "tags": [],
+        "operationId": "approve_ufw_rule",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UfwRuleApprovalRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "UFW rule operation accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperationAcceptedView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid approval",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Administrative access required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Expired, stale, or busy rule set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "Forensic lockdown",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/operations/ufw/rules/plans": {
+      "post": {
+        "tags": [],
+        "operationId": "plan_ufw_rule",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UfwRulePlanRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Immutable typed UFW rule plan",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UfwRulePlanView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid typed rule",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Administrative access or protected rule rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Stale or conflicting rule",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "Forensic lockdown",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/operations/{operation_id}": {
       "get": {
         "tags": [],
@@ -2369,6 +2563,55 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/PhpFpmView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/services/{service_key}/configurations": {
+      "get": {
+        "tags": [],
+        "operationId": "service_configurations",
+        "parameters": [
+          {
+            "name": "service_key",
+            "in": "path",
+            "description": "Supported service key: nginx or apache",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Managed service configuration inventory",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManagedServiceConfigInventoryView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Unsupported service key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
                 }
               }
             }
@@ -2799,6 +3042,32 @@
           "standard",
           "administrative"
         ]
+      },
+      "AdministrativeOperationApprovalRequest": {
+        "type": "object",
+        "required": [
+          "schemaVersion",
+          "planId",
+          "planHash",
+          "idempotencyKey"
+        ],
+        "properties": {
+          "idempotencyKey": {
+            "type": "string"
+          },
+          "planHash": {
+            "type": "string"
+          },
+          "planId": {
+            "type": "string"
+          },
+          "schemaVersion": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        },
+        "additionalProperties": false
       },
       "AssuranceLevel": {
         "type": "string",
@@ -4657,6 +4926,87 @@
           "reload"
         ]
       },
+      "ManagedServiceConfigInventoryView": {
+        "type": "object",
+        "required": [
+          "observedAt",
+          "status",
+          "serviceKey",
+          "unitName",
+          "displayName",
+          "configs",
+          "truncated"
+        ],
+        "properties": {
+          "configs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ManagedServiceConfigView"
+            }
+          },
+          "displayName": {
+            "type": "string"
+          },
+          "observedAt": {
+            "type": "string"
+          },
+          "serviceKey": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ObservationStatus"
+          },
+          "truncated": {
+            "type": "boolean"
+          },
+          "unitName": {
+            "type": "string"
+          }
+        }
+      },
+      "ManagedServiceConfigView": {
+        "type": "object",
+        "required": [
+          "resourceId",
+          "operationType",
+          "schemaVersion",
+          "displayName",
+          "maskedPath",
+          "available",
+          "assurance"
+        ],
+        "properties": {
+          "assurance": {
+            "$ref": "#/components/schemas/AssuranceView"
+          },
+          "available": {
+            "type": "boolean"
+          },
+          "blockedReason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "displayName": {
+            "type": "string"
+          },
+          "maskedPath": {
+            "type": "string"
+          },
+          "operationType": {
+            "type": "string"
+          },
+          "resourceId": {
+            "type": "string"
+          },
+          "schemaVersion": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        }
+      },
       "MemoryObservation": {
         "type": "object",
         "required": [
@@ -6119,6 +6469,323 @@
           },
           "expiresAt": {
             "type": "string"
+          }
+        }
+      },
+      "UfwProtocol": {
+        "type": "string",
+        "enum": [
+          "tcp",
+          "udp"
+        ]
+      },
+      "UfwRuleApprovalRequest": {
+        "type": "object",
+        "required": [
+          "schemaVersion",
+          "planId",
+          "planHash",
+          "idempotencyKey",
+          "impactConfirmed"
+        ],
+        "properties": {
+          "idempotencyKey": {
+            "type": "string"
+          },
+          "impactConfirmed": {
+            "type": "boolean"
+          },
+          "planHash": {
+            "type": "string"
+          },
+          "planId": {
+            "type": "string"
+          },
+          "schemaVersion": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        },
+        "additionalProperties": false
+      },
+      "UfwRuleMutation": {
+        "type": "string",
+        "enum": [
+          "allow",
+          "deny",
+          "delete"
+        ]
+      },
+      "UfwRulePlanRequest": {
+        "type": "object",
+        "required": [
+          "schemaVersion",
+          "operationType",
+          "mutation",
+          "expectedStateDigest",
+          "idempotencyKey"
+        ],
+        "properties": {
+          "expectedStateDigest": {
+            "type": "string"
+          },
+          "idempotencyKey": {
+            "type": "string"
+          },
+          "mutation": {
+            "$ref": "#/components/schemas/UfwRuleMutation"
+          },
+          "operationType": {
+            "type": "string"
+          },
+          "port": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "protocol": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/UfwProtocol"
+              }
+            ]
+          },
+          "ruleId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "schemaVersion": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "source": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "UfwRulePlanView": {
+        "type": "object",
+        "required": [
+          "schemaVersion",
+          "operationType",
+          "planId",
+          "planHash",
+          "createdAt",
+          "expiresAt",
+          "actor",
+          "mutation",
+          "ruleId",
+          "protocol",
+          "port",
+          "source",
+          "expectedStateDigest",
+          "impact",
+          "recoveryPath",
+          "assurance"
+        ],
+        "properties": {
+          "actor": {
+            "$ref": "#/components/schemas/Subject"
+          },
+          "assurance": {
+            "$ref": "#/components/schemas/AssuranceView"
+          },
+          "createdAt": {
+            "type": "string"
+          },
+          "expectedStateDigest": {
+            "type": "string"
+          },
+          "expiresAt": {
+            "type": "string"
+          },
+          "impact": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "mutation": {
+            "$ref": "#/components/schemas/UfwRuleMutation"
+          },
+          "operationType": {
+            "type": "string"
+          },
+          "planHash": {
+            "type": "string"
+          },
+          "planId": {
+            "type": "string"
+          },
+          "port": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "protocol": {
+            "$ref": "#/components/schemas/UfwProtocol"
+          },
+          "recoveryPath": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "ruleId": {
+            "type": "string"
+          },
+          "schemaVersion": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "source": {
+            "type": "string"
+          }
+        }
+      },
+      "UfwRuleView": {
+        "type": "object",
+        "required": [
+          "sequence",
+          "action",
+          "source",
+          "destination",
+          "ipv6",
+          "owned",
+          "protected",
+          "summary"
+        ],
+        "properties": {
+          "action": {
+            "type": "string"
+          },
+          "destination": {
+            "type": "string"
+          },
+          "ipv6": {
+            "type": "boolean"
+          },
+          "owned": {
+            "type": "boolean"
+          },
+          "port": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "protected": {
+            "type": "boolean"
+          },
+          "protocol": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/UfwProtocol"
+              }
+            ]
+          },
+          "ruleId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sequence": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "source": {
+            "type": "string"
+          },
+          "summary": {
+            "type": "string"
+          }
+        }
+      },
+      "UfwStatus": {
+        "type": "string",
+        "enum": [
+          "active",
+          "inactive",
+          "not_installed",
+          "unsupported_platform",
+          "unavailable"
+        ]
+      },
+      "UfwView": {
+        "type": "object",
+        "required": [
+          "observedAt",
+          "status",
+          "rules",
+          "stateDigest",
+          "truncated",
+          "mutationAvailable",
+          "assurance"
+        ],
+        "properties": {
+          "assurance": {
+            "$ref": "#/components/schemas/AssuranceView"
+          },
+          "blockedReason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "defaultIncoming": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "defaultOutgoing": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "mutationAvailable": {
+            "type": "boolean"
+          },
+          "observedAt": {
+            "type": "string"
+          },
+          "rules": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UfwRuleView"
+            }
+          },
+          "stateDigest": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/UfwStatus"
+          },
+          "truncated": {
+            "type": "boolean"
           }
         }
       },

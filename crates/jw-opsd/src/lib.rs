@@ -14,6 +14,7 @@ mod php_fpm_diagnostic;
 mod runner;
 mod service_control;
 mod snapshot;
+mod ufw;
 
 pub use certbot_runner::{CertbotRunner, UdsCertbotRunner};
 pub use config::{OpsPaths, OpsPolicy};

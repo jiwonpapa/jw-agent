@@ -1,3 +1,14 @@
+jw-agent (0.2.0~p2.20) noble; urgency=medium
+
+  * Replace the multi-screen config wizard with one compact save-and-verify flow.
+  * Reuse a 15-minute administrative mode instead of repeating PAM per save.
+  * Manage standard Nginx, Apache, and PHP-FPM configuration resources.
+  * Add typed Apache lifecycle and exact validation rollback.
+  * Add bounded product-owned UFW allow, deny, and delete operations.
+  * Reject protected management ports and stale firewall plans before apply.
+
+ -- JW Agent Maintainers <maintainers@example.invalid>  Fri, 24 Jul 2026 11:15:00 +0900
+
 jw-agent (0.2.0~p2.19) noble; urgency=medium
 
   * Add an unprivileged Rust TLS management edge independent of Nginx.

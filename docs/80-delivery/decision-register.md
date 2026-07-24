@@ -3,7 +3,7 @@
 Status: Accepted  
 Authority: Delivery  
 Owner: Maintainers  
-Last reviewed: 2026-07-23
+Last reviewed: 2026-07-24
 
 ## 고정
 
@@ -56,17 +56,16 @@ P2 구현 진입은 2026-07-21 사용자 목표추진 지시와 [ADR-0010](../90
 
 ## P2 Nginx 기준선 결정과 증거
 
-- opsd는 private network namespace와 `CAP_NET_BIND_SERVICE`만 사용하며 외부 network API나 listening socket을 갖지 않습니다.
+- opsd는 host UFW netlink 제어 때문에 host network namespace와 `CAP_NET_ADMIN`을 가지며 validator용 `CAP_NET_BIND_SERVICE`만 추가로 유지합니다. `IPAddressDeny=any`, 고정 argv와 listening socket 부재로 일반 IP 통신은 계속 차단합니다.
 - 제품 관리 vhost는 legacy basename뿐 아니라 versioned content marker와 제품 include로 판정합니다. 보호 resource는 operation type/schema를 노출하지 않고 opsd plan도 재검증합니다.
 - mutation 승인은 `202 Accepted`이며 durable ledger가 실행 상태를 소유합니다. 브라우저 SSE는 durable sequence를 event ID로 사용하고 canonical receipt를 다시 조회합니다.
-- `p2-local` 23개, `p2-browser` 8개, Playwright 42개, `p2-vm` 27개 gate가 PASS했습니다.
-- VM package는 `jw-agent_0.2.0~p2.19_amd64.deb`, SHA-256 `abff57f506c5fb1f1e0041a8319c195ef87d9097171fc14a693d5ca92b85e2c7`입니다.
+- `p2-local` 23개, `p2-browser` 8개, Playwright 43개, `p2-vm` 28개 gate가 PASS했습니다.
+- VM package는 `jw-agent_0.2.0~p2.20_amd64.deb`, SHA-256 `8fbca64eaa2d47ccfa49fabdfaa7c5bcff1b31de382ad3ca91693146277e170a`입니다.
 - `jw-edge`는 non-root Rustls 9443 listener와 agentd proxy UDS만 소유합니다. `opsd`는 fixed Unix readiness 응답을 plan·apply 직전에 확인하며, 없으면 Nginx stop을 거부합니다. 전체 VM lane은 Nginx inactive 상태의 authenticated UI·API 지속성을 검증했습니다.
 - Ubuntu systemd 서비스 목록은 템플릿 주요 서비스, 로컬 발견 unit과 시스템 내부 unit을 G0로 분리하며 failed unit을 숨기지 않습니다.
 - 로컬 콘솔은 Linux UID·non-root 경계를 명시하고 자원 사용률, 서비스 family, 현재 UID의 typed-operation 영수증만 요약합니다. opsd 임의 명령·전체 사용자 감사 조회 권한은 추가하지 않습니다.
-- managed Nginx config는 활성 exact symlink, root:root, UTF-8 24 KiB content와 exact managed-config plan 256 KiB envelope, reload profile만 `VM_PASS + G2`입니다.
-- PHP 8.3 FPM config는 표준 apt layout, root:root UTF-8 128 KiB content, fixed `php-fpm8.3 -t`·reload profile만 `VM_PASS + G2`이며 pool·extension package·다른 SAPI/version은 제외합니다.
-- 현재 `SUPPORTED + VM_PASS + G2` write 표면은 `nginx.site_state.set/v1`, active Nginx와 PHP 8.3 FPM profile의 `service.config_file.set/v1`, 보호 vhost의 `certbot.certificate.attach/v1`입니다. `certbot.certificate.renew_test/v1`은 `SUPPORTED + VM_PASS + G1`이며, `certbot.certificate.issue/v1`은 실패 안전성까지 `VM_PASS`이나 공인 CA 성공은 `UNVERIFIED`입니다.
+- managed service config는 Ubuntu 표준 Nginx `nginx.conf`·active `conf.d`·active site, Apache `apache2.conf`·`ports.conf`·active conf/site, PHP 8.3 FPM `php.ini`·`php-fpm.conf`·pool만 허용합니다. root:root regular file, fixed validator, reload, active read-back과 exact rollback이 `VM_PASS + G2`이며 임의 path·비활성 include·다른 PHP version은 제외합니다.
+- 현재 `SUPPORTED + VM_PASS + G2` write 표면은 `nginx.site_state.set/v1`, 위 allowlisted `service.config_file.set/v1`, `ufw.rule.set/v1`의 제품 소유 rule effect와 보호 vhost의 `certbot.certificate.attach/v1`입니다. Apache lifecycle도 VM에서 검증했습니다. `certbot.certificate.renew_test/v1`은 `SUPPORTED + VM_PASS + G1`이며, `certbot.certificate.issue/v1`은 실패 안전성까지 `VM_PASS`이나 공인 CA 성공은 `UNVERIFIED`입니다.
 - `jw-certd` one-shot network privilege boundary, sanitized inventory, PAM 승인 renewal dry-run, DNS·listener·webroot preflight, 실패 영수증과 고정 loopback SNI probe는 `VM_PASS`입니다.
 - `jw-certd`의 추가 명령은 `127.0.0.1:443` 고정 SNI fingerprint probe뿐이며 `opsd` network 차단은 유지합니다. attach 정상 경로와 probe 강제 실패의 exact rollback은 `VM_PASS + G2`입니다.
 - P2D terminal은 system OpenSSH client, one-shot memory/FIFO password broker, same-origin WSS, non-root PTY와 metadata-only audit로 `VM_PASS + G1`입니다. SFTP list/stat/text-read/download는 fixed OpenSSH subsystem과 canonical home confinement으로 `VM_PASS + G0`입니다. 일반 파일 create/replace는 PAM plan, fsync·atomic rename, mode·size·digest read-back과 metadata-only audit로 `VM_PASS + G1`입니다. package는 sshd 정책을 자동 변경하지 않으며 VM fixture만 loopback password 인증을 허용합니다. delete·move·chmod·root/system path 쓰기는 제외합니다.
@@ -75,7 +74,7 @@ P2 구현 진입은 2026-07-21 사용자 목표추진 지시와 [ADR-0010](../90
 - Nginx `nginx -t` stderr는 원문을 저장·노출하지 않고 selected-resource basename에 일치하는 양의 줄 번호만 `result_code`에 남깁니다. verified rollback 후 UI가 그 줄로 복귀하며 위치가 없으면 추측하지 않습니다.
 - terminal·SFTP memory-only session은 authenticated app shell이 소유합니다. route 이동은 close 효과가 아니며 browser regression gate는 같은 ticket/token 재사용과 close 요청 부재를 확인합니다. p2.18 package/runtime VM gate는 실제 OpenSSH terminal·SFTP endpoint를 다시 검증했습니다. terminal과 SFTP의 자체 max lifetime은 `0`으로 명시적 종료까지 유지하되 로그인 session 만료·logout·연결 상실·서버 재시작은 계속 종료 경계입니다.
 - admin 역할의 non-root Linux 계정은 PAM과 정책상 TOTP를 거쳐 15분 관리 모드로 진입합니다. root typed plan·approval은 이 상태가 아니면 서버에서 거부하며 root 로그인·shell·범용 root 파일 API는 추가하지 않았습니다.
-- `totp/v1`은 recovery ingress의 admin PAM 뒤에만 등록·초기화할 수 있습니다. 160-bit secret은 별도 mode `0600` wrapping key로 AEAD 암호화하고 복구 코드는 digest만 저장합니다. VM gate는 연속 code 두 개, `risky_operations`, exact-plan PAM+TOTP 승인, claim replay 차단, 복구 초기화와 저장소 정리를 검증했습니다.
+- `totp/v1`은 recovery ingress의 admin PAM 뒤에만 등록·초기화할 수 있습니다. 160-bit secret은 별도 mode `0600` wrapping key로 AEAD 암호화하고 복구 코드는 digest만 저장합니다. VM gate는 연속 code 두 개, `risky_operations`, PAM+TOTP 관리 모드 진입, 동일 time-step replay 차단, 복구 초기화와 저장소 정리를 검증했습니다.
 
 ## P3 전에 선택
 

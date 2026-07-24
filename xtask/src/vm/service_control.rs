@@ -19,24 +19,26 @@ pub(crate) fn gate_p2_service_control(_root: &Path, timeout: Duration) -> Result
         timeout,
     )?;
     require_success(&prepared, "service control fixture preparation", false)?;
+    super::apache::prepare_fixture(&config, timeout)?;
     restart_edge_and_agentd_and_wait(&config, timeout)?;
 
     let result = run_scenarios(&config, &password, timeout);
-    let cleanup = config.ssh(
+    let apache_cleanup = super::apache::cleanup_fixture(&config, timeout);
+    let base_cleanup = config.ssh(
         "sudo systemctl start nginx.service php8.3-fpm.service\nsudo systemctl restart jw-opsd.service jw-agentd.service",
         None,
         timeout,
     );
+    let base_cleanup = base_cleanup
+        .and_then(|output| require_success(&output, "service control fixture cleanup", false));
+    let cleanup = match (apache_cleanup, base_cleanup) {
+        (Ok(()), Ok(())) => Ok(()),
+        (Err(error), Ok(())) | (Ok(()), Err(error)) => Err(error),
+        (Err(first), Err(second)) => Err(format!("{first}; {second}")),
+    };
     match (result, cleanup) {
-        (Ok(()), Ok(output)) => require_success(&output, "service control fixture cleanup", false),
-        (Err(error), Ok(output)) => {
-            match require_success(&output, "service control fixture cleanup", false) {
-                Ok(()) => Err(error),
-                Err(cleanup_error) => Err(format!(
-                    "{error}; service control cleanup also failed: {cleanup_error}"
-                )),
-            }
-        }
+        (Ok(()), Ok(())) => Ok(()),
+        (Err(error), Ok(())) => Err(error),
         (Ok(()), Err(cleanup_error)) => Err(cleanup_error),
         (Err(error), Err(cleanup_error)) => Err(format!(
             "{error}; service control cleanup also failed: {cleanup_error}"
@@ -50,6 +52,10 @@ fn run_scenarios(config: &VmConfig, password: &str, timeout: Duration) -> Result
 
     for (unit_name, action) in [
         ("nginx.service", "reload"),
+        ("apache2.service", "reload"),
+        ("apache2.service", "restart"),
+        ("apache2.service", "stop"),
+        ("apache2.service", "start"),
         ("php8.3-fpm.service", "restart"),
         ("php8.3-fpm.service", "stop"),
         ("php8.3-fpm.service", "start"),
@@ -68,7 +74,7 @@ fn run_scenarios(config: &VmConfig, password: &str, timeout: Duration) -> Result
     }
 
     let runtime = config.ssh(
-        "systemctl is-active --quiet nginx.service\nsystemctl is-active --quiet php8.3-fpm.service\nsudo nginx -t\nsudo php-fpm8.3 -t",
+        "systemctl is-active --quiet nginx.service\nsystemctl is-active --quiet apache2.service\nsystemctl is-active --quiet php8.3-fpm.service\nsudo nginx -t\nsudo apache2ctl configtest\nsudo php-fpm8.3 -t",
         None,
         timeout,
     )?;

@@ -1174,7 +1174,7 @@ test("G1 text save requires an exact plan and keeps secrets out of navigation an
   expect(hasOverflow).toBe(false);
 });
 
-test("G2 Nginx change discloses rollback scope before exact-plan PAM approval", async ({ page }) => {
+test("G2 Nginx state change uses active management mode without repeated password", async ({ page }) => {
   let planRequests = 0;
   let approvalRequests = 0;
   const planBodies: unknown[] = [];
@@ -1204,14 +1204,13 @@ test("G2 Nginx change discloses rollback scope before exact-plan PAM approval", 
   const recoveryHeading = page.getByRole("heading", {
     name: "원복 검증도 실패하면 수동 복구가 필요합니다",
   });
-  const approvalButton = page.getByRole("button", { name: "재인증 후 실행" });
+  const approvalButton = page.getByRole("button", { name: "변경 적용" });
   const disclosureComesFirst = await recoveryHeading.evaluate((heading, button) => {
     if (!(button instanceof Element)) return false;
     return Boolean(heading.compareDocumentPosition(button) & Node.DOCUMENT_POSITION_FOLLOWING);
   }, await approvalButton.elementHandle());
   expect(disclosureComesFirst).toBe(true);
 
-  await page.getByLabel("Linux 계정 비밀번호로 이 계획 승인").fill("fixture-password");
   await approvalButton.dblclick();
   await expect(page.getByRole("heading", { name: "적용 완료" })).toBeVisible();
   await expect(page.getByText("이전 상태 저장")).toBeVisible();
@@ -1221,8 +1220,8 @@ test("G2 Nginx change discloses rollback scope before exact-plan PAM approval", 
   expect((approvalBodies[0] as Record<string, unknown>).idempotencyKey).toBe(
     (planBodies[0] as Record<string, unknown>).idempotencyKey,
   );
-  expect(JSON.stringify(approvalBodies)).not.toContain("fixture-password");
-  expect(page.url()).not.toContain("fixture-password");
+  expect(JSON.stringify(approvalBodies)).not.toContain("reauthToken");
+  expect(JSON.stringify(approvalBodies)).not.toContain("additionalAuthClaim");
   const hasOverflow = await page.evaluate(
     () => document.documentElement.scrollWidth > document.documentElement.clientWidth,
   );
@@ -1260,8 +1259,7 @@ test("rollback failure is never shown as a successful recovery", async ({ page }
   await page.goto("/services/nginx");
   await page.getByRole("button", { name: "계획 보기" }).first().click();
   await page.getByRole("button", { name: "비활성화 계획 만들기" }).click();
-  await page.getByLabel("Linux 계정 비밀번호로 이 계획 승인").fill("fixture-password");
-  await page.getByRole("button", { name: "재인증 후 실행" }).click();
+  await page.getByRole("button", { name: "변경 적용" }).click();
   await expect(page.getByRole("heading", { name: "실패 · 수동 복구 필요" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "수동 복구 경로" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "적용 완료" })).toHaveCount(0);

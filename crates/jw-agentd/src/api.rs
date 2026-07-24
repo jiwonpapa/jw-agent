@@ -23,33 +23,36 @@ use axum::{Json, Router};
 use futures_core::Stream;
 use jw_contracts::{
     AccessSettingsView, AdditionalAuthPolicy, AdditionalAuthProviderStatus,
-    AdministrativeAccessRequest, AdministrativeAccessState, AssuranceLevel, AssuranceView,
-    AuthFailureClass, AuthPurpose, AuthRequest, AuthResult, CERTBOT_ATTACH_OPERATION,
-    CERTBOT_ISSUE_OPERATION, CERTBOT_RENEW_TEST_OPERATION, CapabilityStatus, CapabilityView,
-    CertbotAttachApprovalRequest, CertbotAttachPlanRequest, CertbotAttachPlanView,
-    CertbotIssueApprovalRequest, CertbotIssuePlanInput, CertbotIssuePlanRequest,
-    CertbotIssuePlanView, CertbotIssuePreflightEvidence, CertbotRenewTestApprovalRequest,
-    CertbotRenewTestPlanRequest, CertbotRenewTestPlanView, CertificateInventoryView,
-    CertificateSummaryView, FILE_MAX_DOWNLOAD_BYTES, FILE_MAX_UPLOAD_BYTES, FileCapabilityView,
-    FileEntryView, FileKind, FileLimitsView, FileListView, FilePathRequest,
-    FileSessionCloseRequest, FileSessionHeartbeatRequest, FileSessionRequest, FileSessionView,
-    FileStatView, FileTextView, FileUploadPlanRequest, FileUploadPlanView, FileUploadResultView,
-    HealthStatus, HealthView, IPC_PROTOCOL_VERSION, IngressChannel, IntegrationCatalogView,
-    LoginRequest, MANAGED_CONFIG_OPERATION, MANAGED_CONFIG_RESTORE_OPERATION,
-    ManagedConfigApprovalRequest, ManagedConfigPlanRequest, ManagedConfigPlanView,
-    ManagedConfigResourceView, ManagedConfigRestorePlanRequest, NGINX_SITE_STATE_OPERATION,
-    NginxSiteStatePlanRequest, NginxSiteStatePlanView, NginxSitesView, ObservationStatus,
-    OperationAcceptedView, OperationApprovalRequest, OperationListView, OperationReceiptView,
-    OperationStageEvidenceView, PhpFpmManagedConfigView, PhpFpmRuntimeView, PhpFpmView,
-    ProblemDetails, ReauthPurpose, ReauthRequest, ReauthView, Role, RollbackSupport,
-    SERVICE_CONTROL_OPERATION, ServiceAction, ServiceCategory, ServiceControlApprovalRequest,
-    ServiceControlPlanRequest, ServiceControlPlanView, ServiceRuntimeState, ServiceSummary,
-    ServiceSupport, ServiceVisibility, ServicesView, SessionView, Subject,
-    TERMINAL_MAX_FRAME_BYTES, TERMINAL_MAX_OUTPUT_BUFFER_BYTES, TerminalCapabilityView,
-    TerminalLimitsView, TerminalTicketRequest, TerminalTicketView, TotpEnrollmentConfirmRequest,
-    TotpEnrollmentConfirmView, TotpEnrollmentStartRequest, TotpEnrollmentStartView,
-    TotpRecoveryResetRequest, TotpVerificationRequest, TotpVerificationView,
+    AdministrativeAccessRequest, AdministrativeAccessState, AdministrativeOperationApprovalRequest,
+    AssuranceLevel, AssuranceView, AuthFailureClass, AuthPurpose, AuthRequest, AuthResult,
+    CERTBOT_ATTACH_OPERATION, CERTBOT_ISSUE_OPERATION, CERTBOT_RENEW_TEST_OPERATION,
+    CapabilityStatus, CapabilityView, CertbotAttachApprovalRequest, CertbotAttachPlanRequest,
+    CertbotAttachPlanView, CertbotIssueApprovalRequest, CertbotIssuePlanInput,
+    CertbotIssuePlanRequest, CertbotIssuePlanView, CertbotIssuePreflightEvidence,
+    CertbotRenewTestApprovalRequest, CertbotRenewTestPlanRequest, CertbotRenewTestPlanView,
+    CertificateInventoryView, CertificateSummaryView, FILE_MAX_DOWNLOAD_BYTES,
+    FILE_MAX_UPLOAD_BYTES, FileCapabilityView, FileEntryView, FileKind, FileLimitsView,
+    FileListView, FilePathRequest, FileSessionCloseRequest, FileSessionHeartbeatRequest,
+    FileSessionRequest, FileSessionView, FileStatView, FileTextView, FileUploadPlanRequest,
+    FileUploadPlanView, FileUploadResultView, HealthStatus, HealthView, IPC_PROTOCOL_VERSION,
+    IngressChannel, IntegrationCatalogView, LoginRequest, MANAGED_CONFIG_OPERATION,
+    MANAGED_CONFIG_RESTORE_OPERATION, ManagedConfigApprovalRequest, ManagedConfigPlanRequest,
+    ManagedConfigPlanView, ManagedConfigResourceView, ManagedConfigRestorePlanRequest,
+    ManagedServiceConfigInventoryView, ManagedServiceConfigView, NginxSiteStatePlanRequest,
+    NginxSiteStatePlanView, NginxSitesView, ObservationStatus, OperationAcceptedView,
+    OperationApprovalRequest, OperationListView, OperationReceiptView, OperationStageEvidenceView,
+    PhpFpmManagedConfigView, PhpFpmRuntimeView, PhpFpmView, ProblemDetails, ReauthPurpose,
+    ReauthRequest, ReauthView, Role, RollbackSupport, SERVICE_CONTROL_OPERATION, ServiceAction,
+    ServiceCategory, ServiceControlApprovalRequest, ServiceControlPlanRequest,
+    ServiceControlPlanView, ServiceRuntimeState, ServiceSummary, ServiceSupport, ServiceVisibility,
+    ServicesView, SessionView, Subject, TERMINAL_MAX_FRAME_BYTES, TERMINAL_MAX_OUTPUT_BUFFER_BYTES,
+    TerminalCapabilityView, TerminalLimitsView, TerminalTicketRequest, TerminalTicketView,
+    TotpEnrollmentConfirmRequest, TotpEnrollmentConfirmView, TotpEnrollmentStartRequest,
+    TotpEnrollmentStartView, TotpRecoveryResetRequest, TotpVerificationRequest,
+    TotpVerificationView, UFW_RULE_OPERATION, UfwRuleApprovalRequest, UfwRuleMutation,
+    UfwRulePlanRequest, UfwRulePlanView, UfwRuleView, UfwStatus, UfwView,
     UpdateAdditionalAuthRequest,
+    validate_managed_config_resource_id as validate_contract_managed_config_resource_id,
 };
 use sha2::{Digest, Sha256};
 use tower_http::services::{ServeDir, ServeFile};
@@ -90,8 +93,13 @@ use php_fpm_api::{__path_php_fpm, php_fpm};
 #[path = "api/observation.rs"]
 mod observation_api;
 use observation_api::{
-    __path_capabilities, __path_host, __path_nginx_sites, __path_services, capabilities, host,
-    nginx_sites, services,
+    __path_capabilities, __path_host, __path_nginx_sites, __path_service_configurations,
+    __path_services, capabilities, host, nginx_sites, service_configurations, services,
+};
+#[path = "api/firewall.rs"]
+mod firewall_api;
+use firewall_api::{
+    __path_approve_ufw_rule, __path_plan_ufw_rule, __path_ufw, approve_ufw_rule, plan_ufw_rule, ufw,
 };
 #[path = "api/totp.rs"]
 mod totp_api;
@@ -175,6 +183,7 @@ impl AppState {
         host,
         capabilities,
         services,
+        service_configurations,
         php_fpm,
         nginx_sites,
         certificates,
@@ -199,6 +208,9 @@ impl AppState {
         approve_managed_config,
         plan_service_control,
         approve_service_control,
+        ufw,
+        plan_ufw_rule,
+        approve_ufw_rule,
         operation_events,
         operation_receipt,
         recent_operations,
@@ -256,8 +268,17 @@ impl AppState {
         ServiceControlPlanRequest,
         ServiceControlApprovalRequest,
         ServiceControlPlanView,
+        UfwView,
+        UfwStatus,
+        UfwRuleView,
+        UfwRuleMutation,
+        jw_contracts::UfwProtocol,
+        UfwRulePlanRequest,
+        UfwRuleApprovalRequest,
+        UfwRulePlanView,
         ManagedConfigApprovalRequest,
         jw_contracts::ManagedConfigApprovalIntent,
+        AdministrativeOperationApprovalRequest,
         ServiceAction,
         ServiceCategory,
         ServiceRuntimeState,
@@ -286,6 +307,8 @@ impl AppState {
         ServiceSupport,
         ServiceVisibility,
         ServicesView,
+        ManagedServiceConfigInventoryView,
+        ManagedServiceConfigView,
         SessionView,
         jw_contracts::Subject,
         UpdateAdditionalAuthRequest,
@@ -356,8 +379,13 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/v1/host", get(host))
         .route("/api/v1/capabilities", get(capabilities))
         .route("/api/v1/services", get(services))
+        .route(
+            "/api/v1/services/{service_key}/configurations",
+            get(service_configurations),
+        )
         .route("/api/v1/services/php-fpm", get(php_fpm))
         .route("/api/v1/services/nginx/sites", get(nginx_sites))
+        .route("/api/v1/firewall/ufw", get(ufw))
         .route("/api/v1/certificates", get(certificates))
         .route(
             "/api/v1/operations/certbot/issue/plans",
@@ -415,6 +443,11 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             "/api/v1/operations/service/lifecycle/approvals",
             post(approve_service_control),
+        )
+        .route("/api/v1/operations/ufw/rules/plans", post(plan_ufw_rule))
+        .route(
+            "/api/v1/operations/ufw/rules/approvals",
+            post(approve_ufw_rule),
         )
         .route(
             "/api/v1/operations/{operation_id}/events",
@@ -1946,44 +1979,6 @@ async fn approve_certbot_renew_test(
     Ok((StatusCode::ACCEPTED, Json(accepted)))
 }
 
-async fn nginx_mutation_gate_reason(
-    state: &AppState,
-    subject: &Subject,
-    additional_auth_policy: AdditionalAuthPolicy,
-) -> Option<String> {
-    if !matches!(subject.role, Role::Admin | Role::Operator) {
-        return Some(String::from("현재 계정은 Nginx 변경 권한이 없습니다."));
-    }
-    if additional_auth_policy != AdditionalAuthPolicy::Disabled
-        && state.store.totp().provider_status(subject.uid).ok()
-            != Some(AdditionalAuthProviderStatus::Ready)
-    {
-        return Some(String::from(
-            "설정된 추가 인증 수단이 아직 준비되지 않아 변경이 차단되었습니다.",
-        ));
-    }
-    match state.ops.capabilities().await {
-        Ok(capability) if capability.forensic_lockdown => Some(String::from(
-            "감사 원장 무결성 잠금 상태여서 모든 변경이 차단되었습니다.",
-        )),
-        Ok(capability)
-            if !capability.read_only
-                && capability
-                    .supported_operations
-                    .iter()
-                    .any(|operation| operation == NGINX_SITE_STATE_OPERATION) =>
-        {
-            None
-        }
-        Ok(_) => Some(String::from(
-            "이 서버에서는 Nginx 자동 원복 작업을 사용할 수 없습니다.",
-        )),
-        Err(_) => Some(String::from(
-            "권한 분리 서비스 상태를 확인할 수 없어 변경이 차단되었습니다.",
-        )),
-    }
-}
-
 #[utoipa::path(post, path = "/api/v1/operations/nginx/site-state/plans", request_body = NginxSiteStatePlanRequest, responses(
     (status = 200, description = "Immutable Nginx site-state plan", body = NginxSiteStatePlanView),
     (status = 400, description = "Invalid typed request", body = ProblemDetails),
@@ -2010,7 +2005,7 @@ async fn plan_nginx_site_state(
     Ok(Json(plan))
 }
 
-#[utoipa::path(post, path = "/api/v1/operations/nginx/site-state/approvals", request_body = OperationApprovalRequest, responses(
+#[utoipa::path(post, path = "/api/v1/operations/nginx/site-state/approvals", request_body = AdministrativeOperationApprovalRequest, responses(
     (status = 202, description = "Operation accepted for durable background execution", body = OperationAcceptedView),
     (status = 400, description = "Invalid approval shape", body = ProblemDetails),
     (status = 401, description = "Authentication required", body = ProblemDetails),
@@ -2022,22 +2017,13 @@ async fn plan_nginx_site_state(
 async fn approve_nginx_site_state(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Json(input): Json<OperationApprovalRequest>,
+    Json(input): Json<AdministrativeOperationApprovalRequest>,
 ) -> Result<(StatusCode, Json<OperationAcceptedView>), ApiProblem> {
     input.validate_shape().map_err(ApiProblem::bad_request)?;
     let now = unix_milliseconds()?;
     let (token, session) = current_session(&state, &headers, now)?;
     require_csrf(&headers, token.as_str())?;
     require_administrative_access(&session)?;
-    consume_operation_authorization(
-        &state,
-        token.as_str(),
-        &session,
-        &input.plan_hash,
-        &input.reauth_token,
-        input.additional_auth_claim.as_deref(),
-        now,
-    )?;
     let actor = session.subject;
     let receipt = state
         .ops
@@ -2339,17 +2325,8 @@ fn validate_operation_id(operation_id: &str) -> Result<(), ApiProblem> {
 }
 
 fn validate_managed_config_resource_id(resource_id: &str) -> Result<(), ApiProblem> {
-    if resource_id.len() < 12
-        || resource_id.len() > 64
-        || !(resource_id.starts_with("ngc_") || resource_id.starts_with("php_"))
-        || !resource_id
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
-    {
-        Err(ApiProblem::bad_request("resource_id"))
-    } else {
-        Ok(())
-    }
+    validate_contract_managed_config_resource_id(resource_id)
+        .map_err(|_| ApiProblem::bad_request("resource_id"))
 }
 
 fn last_event_sequence(headers: &HeaderMap) -> Result<u64, ApiProblem> {

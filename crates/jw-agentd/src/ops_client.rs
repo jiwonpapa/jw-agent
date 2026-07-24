@@ -10,8 +10,8 @@ use jw_contracts::{
     ManagedConfigPlanView, ManagedConfigResourceView, ManagedConfigRestorePlanRequest,
     NginxSiteStatePlanRequest, NginxSiteStatePlanView, OPS_FRAME_MAX_BYTES, OperationListView,
     OperationReceiptView, OpsCapabilityResponse, OpsRequest, OpsRequestBody, OpsResponse,
-    OpsResponseBody, ServiceControlPlanRequest, ServiceControlPlanView, Subject, decode_frame,
-    encode_frame,
+    OpsResponseBody, ServiceControlPlanRequest, ServiceControlPlanView, Subject,
+    UfwRulePlanRequest, UfwRulePlanView, UfwView, decode_frame, encode_frame,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixStream;
@@ -134,6 +134,28 @@ pub trait OpsBroker: Send + Sync {
     }
 
     fn approve_service_control<'a>(
+        &'a self,
+        _actor: Subject,
+        _plan_id: String,
+        _plan_hash: String,
+        _idempotency_key: String,
+    ) -> OpsFuture<'a, OperationReceiptView> {
+        Box::pin(async move { Err(OpsBrokerError::Unavailable) })
+    }
+
+    fn ufw_inventory<'a>(&'a self, _actor: Subject) -> OpsFuture<'a, UfwView> {
+        Box::pin(async move { Err(OpsBrokerError::Unavailable) })
+    }
+
+    fn plan_ufw_rule<'a>(
+        &'a self,
+        _actor: Subject,
+        _plan: UfwRulePlanRequest,
+    ) -> OpsFuture<'a, UfwRulePlanView> {
+        Box::pin(async move { Err(OpsBrokerError::Unavailable) })
+    }
+
+    fn approve_ufw_rule<'a>(
         &'a self,
         _actor: Subject,
         _plan_id: String,
@@ -485,6 +507,56 @@ impl OpsBroker for UdsOpsBroker {
         Box::pin(async move {
             let body = self
                 .request(OpsRequestBody::ApproveServiceControl {
+                    actor,
+                    plan_id,
+                    plan_hash,
+                    idempotency_key,
+                    impact_confirmed: true,
+                })
+                .await?;
+            let OpsResponseBody::OperationReceipt(receipt) = body else {
+                return Err(OpsBrokerError::InvalidResponse);
+            };
+            Ok(receipt)
+        })
+    }
+
+    fn ufw_inventory<'a>(&'a self, actor: Subject) -> OpsFuture<'a, UfwView> {
+        Box::pin(async move {
+            let body = self.request(OpsRequestBody::ObserveUfw { actor }).await?;
+            let OpsResponseBody::Ufw(inventory) = body else {
+                return Err(OpsBrokerError::InvalidResponse);
+            };
+            Ok(inventory)
+        })
+    }
+
+    fn plan_ufw_rule<'a>(
+        &'a self,
+        actor: Subject,
+        plan: UfwRulePlanRequest,
+    ) -> OpsFuture<'a, UfwRulePlanView> {
+        Box::pin(async move {
+            let body = self
+                .request(OpsRequestBody::PlanUfwRule { actor, plan })
+                .await?;
+            let OpsResponseBody::UfwRulePlan(plan) = body else {
+                return Err(OpsBrokerError::InvalidResponse);
+            };
+            Ok(plan)
+        })
+    }
+
+    fn approve_ufw_rule<'a>(
+        &'a self,
+        actor: Subject,
+        plan_id: String,
+        plan_hash: String,
+        idempotency_key: String,
+    ) -> OpsFuture<'a, OperationReceiptView> {
+        Box::pin(async move {
+            let body = self
+                .request(OpsRequestBody::ApproveUfwRule {
                     actor,
                     plan_id,
                     plan_hash,

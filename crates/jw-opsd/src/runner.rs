@@ -9,6 +9,7 @@ use sha2::{Digest, Sha256};
 
 use crate::digest::format_sha256;
 use crate::error::OpsError;
+use crate::ufw::UfwCommand;
 
 const EDGE_READY_SOCKET: &str = "/run/jw-agent-edge/ready.sock";
 const EDGE_READY_RESPONSE: &[u8] = b"JW-EDGE-READY-V1\n";
@@ -21,6 +22,12 @@ pub enum CommandClass {
     NginxStop,
     NginxRestart,
     NginxActive,
+    ApacheConfigTest,
+    ApacheReload,
+    ApacheStart,
+    ApacheStop,
+    ApacheRestart,
+    ApacheActive,
     JwEdgeActive,
     JwEdgeReady,
     PhpFpm83ConfigTest,
@@ -31,6 +38,9 @@ pub enum CommandClass {
     PhpFpm83Active,
     CertbotTimerEnabled,
     CertbotTimerActive,
+    UfwStatus,
+    UfwRuleAdd,
+    UfwRuleDelete,
 }
 
 impl CommandClass {
@@ -43,6 +53,12 @@ impl CommandClass {
             Self::NginxStop => "nginx_stop",
             Self::NginxRestart => "nginx_restart",
             Self::NginxActive => "nginx_active",
+            Self::ApacheConfigTest => "apache_config_test",
+            Self::ApacheReload => "apache_reload",
+            Self::ApacheStart => "apache_start",
+            Self::ApacheStop => "apache_stop",
+            Self::ApacheRestart => "apache_restart",
+            Self::ApacheActive => "apache_active",
             Self::JwEdgeActive => "jw_edge_active",
             Self::JwEdgeReady => "jw_edge_ready",
             Self::PhpFpm83ConfigTest => "php_fpm_83_config_test",
@@ -53,6 +69,9 @@ impl CommandClass {
             Self::PhpFpm83Active => "php_fpm_83_active",
             Self::CertbotTimerEnabled => "certbot_timer_enabled",
             Self::CertbotTimerActive => "certbot_timer_active",
+            Self::UfwStatus => "ufw_status",
+            Self::UfwRuleAdd => "ufw_rule_add",
+            Self::UfwRuleDelete => "ufw_rule_delete",
         }
     }
 
@@ -66,6 +85,15 @@ impl CommandClass {
             Self::NginxActive => (
                 "/usr/bin/systemctl",
                 &["is-active", "--quiet", "nginx.service"],
+            ),
+            Self::ApacheConfigTest => ("/usr/sbin/apache2ctl", &["configtest"]),
+            Self::ApacheReload => ("/usr/bin/systemctl", &["reload", "apache2.service"]),
+            Self::ApacheStart => ("/usr/bin/systemctl", &["start", "apache2.service"]),
+            Self::ApacheStop => ("/usr/bin/systemctl", &["stop", "apache2.service"]),
+            Self::ApacheRestart => ("/usr/bin/systemctl", &["restart", "apache2.service"]),
+            Self::ApacheActive => (
+                "/usr/bin/systemctl",
+                &["is-active", "--quiet", "apache2.service"],
             ),
             Self::JwEdgeActive => (
                 "/usr/bin/systemctl",
@@ -89,6 +117,7 @@ impl CommandClass {
                 "/usr/bin/systemctl",
                 &["is-active", "--quiet", "certbot.timer"],
             ),
+            Self::UfwStatus | Self::UfwRuleAdd | Self::UfwRuleDelete => ("/usr/bin/false", &[]),
         }
     }
 }
@@ -112,6 +141,10 @@ pub struct CommandEvidence {
 
 pub trait OperationRunner: Send + Sync {
     fn run(&self, class: CommandClass) -> Result<CommandEvidence, OpsError>;
+
+    fn run_ufw(&self, _command: &UfwCommand) -> Result<CommandEvidence, OpsError> {
+        Err(OpsError::Rejected("ufw_unavailable"))
+    }
 
     fn management_edge_ready(&self) -> Result<bool, OpsError> {
         if !self.run(CommandClass::JwEdgeActive)?.success {
@@ -141,6 +174,12 @@ impl FixedCommandRunner {
 
 impl OperationRunner for FixedCommandRunner {
     fn run(&self, class: CommandClass) -> Result<CommandEvidence, OpsError> {
+        if matches!(
+            class,
+            CommandClass::UfwStatus | CommandClass::UfwRuleAdd | CommandClass::UfwRuleDelete
+        ) {
+            return Err(OpsError::Rejected("typed_ufw_command_required"));
+        }
         let (executable, arguments) = class.executable_and_args();
         execute_registered(
             class,
@@ -155,6 +194,18 @@ impl OperationRunner for FixedCommandRunner {
         probe_edge_readiness(
             &self.edge_ready_socket,
             self.timeout.min(Duration::from_secs(1)),
+        )
+    }
+
+    fn run_ufw(&self, command: &UfwCommand) -> Result<CommandEvidence, OpsError> {
+        let (class, arguments) = command.registered_arguments();
+        let references = arguments.iter().map(String::as_str).collect::<Vec<_>>();
+        execute_registered(
+            class,
+            "/usr/sbin/ufw",
+            &references,
+            self.timeout,
+            self.output_cap_bytes,
         )
     }
 }
@@ -388,6 +439,21 @@ mod tests {
                 CommandClass::NginxActive,
                 "/usr/bin/systemctl",
                 &["is-active", "--quiet", "nginx.service"][..],
+            ),
+            (
+                CommandClass::ApacheConfigTest,
+                "/usr/sbin/apache2ctl",
+                &["configtest"][..],
+            ),
+            (
+                CommandClass::ApacheReload,
+                "/usr/bin/systemctl",
+                &["reload", "apache2.service"][..],
+            ),
+            (
+                CommandClass::ApacheActive,
+                "/usr/bin/systemctl",
+                &["is-active", "--quiet", "apache2.service"][..],
             ),
             (
                 CommandClass::PhpFpm83ConfigTest,

@@ -32,6 +32,7 @@ use crate::service_control::{
     service_action_from_digest,
 };
 use crate::snapshot::SnapshotRecord;
+use crate::ufw::UfwPlanPayload;
 
 mod activity;
 mod operation_views;
@@ -63,6 +64,7 @@ pub struct StoredPlan {
     pub certbot_renew: Option<CertbotRenewPlanPayload>,
     pub certbot_issue: Option<CertbotIssuePlanPayload>,
     pub certbot_attach: Option<CertbotAttachPlanPayload>,
+    pub ufw_rule: Option<UfwPlanPayload>,
 }
 
 impl StoredPlan {
@@ -189,6 +191,8 @@ impl Ledger {
             .map_err(|error| OpsError::Storage(error.to_string()))?;
         let certificate_attach_payload = serde_json::to_string(&plan.certbot_attach)
             .map_err(|error| OpsError::Storage(error.to_string()))?;
+        let ufw_rule_payload = serde_json::to_string(&plan.ufw_rule)
+            .map_err(|error| OpsError::Storage(error.to_string()))?;
         transaction.execute(
             "INSERT INTO plans (
                 plan_id, operation_type, plan_hash, actor_uid, actor_username, actor_role,
@@ -196,8 +200,8 @@ impl Ledger {
                 enabled_state_digest, created_at_ms, expires_at_ms, idempotency_key,
                 request_digest, resource_key, assurance_json, payload_json,
                 certificate_payload_json, certificate_issue_payload_json,
-                certificate_attach_payload_json
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22)",
+                certificate_attach_payload_json, ufw_rule_payload_json
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23)",
             params![
                 plan.plan_id,
                 plan.operation_type,
@@ -221,6 +225,7 @@ impl Ledger {
                 certificate_payload,
                 certificate_issue_payload,
                 certificate_attach_payload,
+                ufw_rule_payload,
             ],
         )?;
         transaction.execute(
@@ -596,7 +601,13 @@ impl Ledger {
             adapter_id: String::from(adapter.adapter_id()),
             resource_id: plan.site_id.clone(),
             display_name: plan.display_name.clone(),
-            masked_path: managed_config_masked_path(adapter, &plan.display_name),
+            masked_path: managed_config_masked_path(
+                adapter,
+                payload
+                    .basename
+                    .as_deref()
+                    .map_or(plan.display_name.as_str(), std::convert::identity),
+            ),
             current_content_digest: plan.available_digest.clone(),
             proposed_content_digest: payload.proposed_content_digest.clone(),
             metadata_digest: plan.enabled_state_digest.clone(),
@@ -1003,7 +1014,7 @@ fn load_plan_from(connection: &Connection, plan_id: &str) -> Result<StoredPlan, 
                     enabled_state_digest, created_at_ms, expires_at_ms, idempotency_key,
                     request_digest, resource_key, assurance_json, payload_json,
                     certificate_payload_json, certificate_issue_payload_json,
-                    certificate_attach_payload_json
+                    certificate_attach_payload_json, ufw_rule_payload_json
              FROM plans WHERE plan_id = ?1",
             [plan_id],
             |row| {
@@ -1030,6 +1041,7 @@ fn load_plan_from(connection: &Connection, plan_id: &str) -> Result<StoredPlan, 
                     row.get::<_, String>(19)?,
                     row.get::<_, String>(20)?,
                     row.get::<_, String>(21)?,
+                    row.get::<_, String>(22)?,
                 ))
             },
         )
@@ -1055,6 +1067,8 @@ fn load_plan_from(connection: &Connection, plan_id: &str) -> Result<StoredPlan, 
                 serde_json::from_str(&row.20).map_err(|_| OpsError::ForensicLockdown)?;
             let certbot_attach: Option<CertbotAttachPlanPayload> =
                 serde_json::from_str(&row.21).map_err(|_| OpsError::ForensicLockdown)?;
+            let ufw_rule: Option<UfwPlanPayload> =
+                serde_json::from_str(&row.22).map_err(|_| OpsError::ForensicLockdown)?;
             Ok(StoredPlan {
                 operation_type: row.0,
                 plan_id: row.1,
@@ -1080,6 +1094,7 @@ fn load_plan_from(connection: &Connection, plan_id: &str) -> Result<StoredPlan, 
                 certbot_renew,
                 certbot_issue,
                 certbot_attach,
+                ufw_rule,
             })
         })
 }
@@ -1098,6 +1113,8 @@ fn migrate(connection: &Connection) -> Result<(), OpsError> {
             connection.pragma_update(None, "user_version", 4)?;
             connection.execute_batch(include_str!("../migrations/0005_certbot_attach.sql"))?;
             connection.pragma_update(None, "user_version", 5)?;
+            connection.execute_batch(include_str!("../migrations/0006_ufw_rule.sql"))?;
+            connection.pragma_update(None, "user_version", 6)?;
         }
         1 => {
             connection.execute_batch(include_str!("../migrations/0002_managed_config.sql"))?;
@@ -1108,6 +1125,8 @@ fn migrate(connection: &Connection) -> Result<(), OpsError> {
             connection.pragma_update(None, "user_version", 4)?;
             connection.execute_batch(include_str!("../migrations/0005_certbot_attach.sql"))?;
             connection.pragma_update(None, "user_version", 5)?;
+            connection.execute_batch(include_str!("../migrations/0006_ufw_rule.sql"))?;
+            connection.pragma_update(None, "user_version", 6)?;
         }
         2 => {
             connection.execute_batch(include_str!("../migrations/0003_certbot_renew.sql"))?;
@@ -1116,18 +1135,28 @@ fn migrate(connection: &Connection) -> Result<(), OpsError> {
             connection.pragma_update(None, "user_version", 4)?;
             connection.execute_batch(include_str!("../migrations/0005_certbot_attach.sql"))?;
             connection.pragma_update(None, "user_version", 5)?;
+            connection.execute_batch(include_str!("../migrations/0006_ufw_rule.sql"))?;
+            connection.pragma_update(None, "user_version", 6)?;
         }
         3 => {
             connection.execute_batch(include_str!("../migrations/0004_certbot_issue.sql"))?;
             connection.pragma_update(None, "user_version", 4)?;
             connection.execute_batch(include_str!("../migrations/0005_certbot_attach.sql"))?;
             connection.pragma_update(None, "user_version", 5)?;
+            connection.execute_batch(include_str!("../migrations/0006_ufw_rule.sql"))?;
+            connection.pragma_update(None, "user_version", 6)?;
         }
         4 => {
             connection.execute_batch(include_str!("../migrations/0005_certbot_attach.sql"))?;
             connection.pragma_update(None, "user_version", 5)?;
+            connection.execute_batch(include_str!("../migrations/0006_ufw_rule.sql"))?;
+            connection.pragma_update(None, "user_version", 6)?;
         }
-        5 => {}
+        5 => {
+            connection.execute_batch(include_str!("../migrations/0006_ufw_rule.sql"))?;
+            connection.pragma_update(None, "user_version", 6)?;
+        }
+        6 => {}
         _ => return Err(OpsError::ForensicLockdown),
     }
     Ok(())
@@ -1318,7 +1347,7 @@ fn random_suffix() -> Result<String, OpsError> {
     Ok(format!("{:016x}", u64::from_le_bytes(bytes)))
 }
 
-fn format_time(milliseconds: i64) -> Result<String, OpsError> {
+pub(crate) fn format_time(milliseconds: i64) -> Result<String, OpsError> {
     let value = time::OffsetDateTime::from_unix_timestamp_nanos(
         i128::from(milliseconds).saturating_mul(1_000_000),
     )
@@ -1329,167 +1358,4 @@ fn format_time(milliseconds: i64) -> Result<String, OpsError> {
 }
 
 #[cfg(test)]
-mod tests {
-    use jw_contracts::{
-        AssuranceLevel, AssuranceView, NGINX_SITE_STATE_OPERATION, NginxSiteState, OperationStage,
-        Role, RollbackSupport, Subject, sha256_digest,
-    };
-
-    use crate::config::OpsPaths;
-
-    use super::{
-        CHECKPOINT_PENDING_KEY, Connection, Ledger, StoredPlan, Transition,
-        clear_completed_checkpoint,
-    };
-
-    mod activity_tests;
-
-    #[test]
-    fn idempotency_reuses_same_plan_and_rejects_different_meaning() -> Result<(), String> {
-        let root = test_root("idempotency")?;
-        let paths = OpsPaths::for_test(&root);
-        let mut ledger = Ledger::open(&paths).map_err(|error| error.to_string())?;
-        let plan = fixture_plan();
-        let first = ledger
-            .create_or_reuse_plan(&plan)
-            .map_err(|error| error.to_string())?;
-        let second = ledger
-            .create_or_reuse_plan(&plan)
-            .map_err(|error| error.to_string())?;
-        assert_eq!(first.plan_id, second.plan_id);
-        let mut conflict = plan;
-        conflict.plan_id = String::from("plan-other");
-        conflict.request_digest = sha256_digest(b"different");
-        assert!(matches!(
-            ledger.create_or_reuse_plan(&conflict),
-            Err(crate::error::OpsError::Rejected("idempotency_conflict"))
-        ));
-        std::fs::remove_dir_all(root).map_err(|error| error.to_string())
-    }
-
-    #[test]
-    fn tampered_event_enters_forensic_lockdown() -> Result<(), String> {
-        let root = test_root("tamper")?;
-        let paths = OpsPaths::for_test(&root);
-        let mut ledger = Ledger::open(&paths).map_err(|error| error.to_string())?;
-        ledger
-            .create_or_reuse_plan(&fixture_plan())
-            .map_err(|error| error.to_string())?;
-        drop(ledger);
-        let connection =
-            rusqlite::Connection::open(&paths.database).map_err(|error| error.to_string())?;
-        connection
-            .execute(
-                "UPDATE ledger_events SET result_code = 'forged' WHERE sequence = 1",
-                [],
-            )
-            .map_err(|error| error.to_string())?;
-        drop(connection);
-        assert!(matches!(
-            Ledger::open(&paths),
-            Err(crate::error::OpsError::ForensicLockdown)
-        ));
-        std::fs::remove_dir_all(root).map_err(|error| error.to_string())
-    }
-
-    #[test]
-    fn deleting_required_checkpoint_enters_forensic_lockdown() -> Result<(), String> {
-        let root = test_root("checkpoint-delete")?;
-        let paths = OpsPaths::for_test(&root);
-        let mut ledger = Ledger::open(&paths).map_err(|error| error.to_string())?;
-        let plan = ledger
-            .create_or_reuse_plan(&fixture_plan())
-            .map_err(|error| error.to_string())?;
-        let operation = ledger
-            .begin_operation(
-                "op-1",
-                &plan.plan_id,
-                &plan.plan_hash,
-                &plan.idempotency_key,
-                &plan.actor,
-                1_500,
-            )
-            .map_err(|error| error.to_string())?;
-        ledger
-            .transition(
-                &operation.operation_id,
-                Transition {
-                    expected: &[OperationStage::Approved],
-                    next: OperationStage::CancelledBeforeApply,
-                    result_code: "test_cancel",
-                    evidence_digest: &sha256_digest(b"test_cancel"),
-                    after_digest: None,
-                    rollback_result: None,
-                    now_ms: 1_501,
-                },
-            )
-            .map_err(|error| error.to_string())?;
-        drop(ledger);
-        std::fs::remove_file(&paths.checkpoint).map_err(|error| error.to_string())?;
-        assert!(matches!(
-            Ledger::open(&paths),
-            Err(crate::error::OpsError::ForensicLockdown)
-        ));
-        std::fs::remove_dir_all(root).map_err(|error| error.to_string())
-    }
-
-    #[test]
-    fn missing_operation_has_a_typed_error() -> Result<(), String> {
-        let root = test_root("missing-operation")?;
-        let paths = OpsPaths::for_test(&root);
-        let ledger = Ledger::open(&paths).map_err(|error| error.to_string())?;
-        assert!(matches!(
-            ledger.load_operation("missing"),
-            Err(crate::error::OpsError::Rejected("operation_missing"))
-        ));
-        std::fs::remove_dir_all(root).map_err(|error| error.to_string())
-    }
-
-    fn fixture_plan() -> StoredPlan {
-        StoredPlan {
-            operation_type: String::from(NGINX_SITE_STATE_OPERATION),
-            plan_id: String::from("plan-1"),
-            plan_hash: sha256_digest(b"plan"),
-            actor: Subject {
-                uid: 1_000,
-                username: String::from("operator"),
-                role: Role::Admin,
-            },
-            site_id: String::from("ngs_tQ9Xog5xTe1fh8OsTIdiw6xr"),
-            display_name: String::from("example.com"),
-            current_state: NginxSiteState::Disabled,
-            target_state: NginxSiteState::Enabled,
-            available_digest: sha256_digest(b"server {}\n"),
-            enabled_state_digest: sha256_digest(b"disabled"),
-            created_at_ms: 1_000,
-            expires_at_ms: 2_000,
-            idempotency_key: String::from("0123456789abcdef"),
-            request_digest: sha256_digest(b"request"),
-            resource_key: String::from("nginx/site/example"),
-            assurance: AssuranceView {
-                level: AssuranceLevel::G2ReversibleConfig,
-                rollback_support: RollbackSupport::AutomaticBounded,
-                operation_available: true,
-                scope: vec![String::from("enabled link")],
-                excluded_effects: vec![String::from("connections")],
-                apply_verifier: vec![String::from("read back")],
-                rollback_verifier: vec![String::from("restore")],
-                reason: None,
-            },
-            managed_config: None,
-            certbot_renew: None,
-            certbot_issue: None,
-            certbot_attach: None,
-        }
-    }
-
-    fn test_root(label: &str) -> Result<std::path::PathBuf, String> {
-        let mut random = [0_u8; 8];
-        getrandom::fill(&mut random).map_err(|error| error.to_string())?;
-        Ok(std::env::temp_dir().join(format!(
-            "jw-opsd-ledger-{label}-{}-{}",
-            std::process::id(),
-            u64::from_le_bytes(random)
-        )))
-    }
-}
+mod tests;

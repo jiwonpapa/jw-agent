@@ -5,7 +5,7 @@ use sha2::{Digest, Sha256};
 use std::fmt;
 use utoipa::ToSchema;
 
-use crate::{AssuranceView, Subject};
+use crate::{AssuranceView, Subject, UfwRulePlanRequest, UfwRulePlanView, UfwView};
 
 pub const NGINX_SITE_STATE_OPERATION: &str = "nginx.site_state.set/v1";
 pub const NGINX_LAYOUT_ID: &str = "ubuntu-nginx-sites-v1";
@@ -367,7 +367,7 @@ impl ManagedConfigPlanRequest {
         if self.operation_type != MANAGED_CONFIG_OPERATION {
             return Err("operation_type");
         }
-        validate_managed_resource_id(&self.resource_id)?;
+        validate_managed_config_resource_id(&self.resource_id)?;
         validate_digest(&self.expected_content_digest)?;
         validate_digest(&self.expected_metadata_digest)?;
         if self.proposed_content.len() > MANAGED_CONFIG_MAX_BYTES {
@@ -393,11 +393,14 @@ impl ManagedConfigPlanRequest {
     }
 }
 
-fn validate_managed_resource_id(value: &str) -> Result<(), &'static str> {
-    if value.starts_with("ngc_") {
-        validate_identifier(value, "ngc_", "resource_id")
-    } else if value.starts_with("php_") {
-        validate_identifier(value, "php_", "resource_id")
+pub fn validate_managed_config_resource_id(value: &str) -> Result<(), &'static str> {
+    if let Some(prefix) = [
+        "ngc_", "ngm_", "ngd_", "apm_", "app_", "apc_", "aps_", "php_",
+    ]
+    .into_iter()
+    .find(|prefix| value.starts_with(prefix))
+    {
+        validate_identifier(value, prefix, "resource_id")
     } else {
         Err("resource_id")
     }
@@ -538,6 +541,31 @@ pub struct ManagedConfigPlanView {
     pub impact: Vec<String>,
     pub recovery_path: Vec<String>,
     pub assurance: AssuranceView,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AdministrativeOperationApprovalRequest {
+    pub schema_version: u16,
+    pub plan_id: String,
+    pub plan_hash: String,
+    pub idempotency_key: String,
+}
+
+impl AdministrativeOperationApprovalRequest {
+    pub fn validate_shape(&self) -> Result<(), &'static str> {
+        if self.schema_version != OPERATION_SCHEMA_VERSION {
+            return Err("schema_version");
+        }
+        validate_ascii_range(&self.plan_id, 1, PLAN_ID_MAX_BYTES, "plan_id")?;
+        validate_digest(&self.plan_hash)?;
+        validate_ascii_range(
+            &self.idempotency_key,
+            IDEMPOTENCY_KEY_MIN_BYTES,
+            IDEMPOTENCY_KEY_MAX_BYTES,
+            "idempotency_key",
+        )
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, ToSchema)]
@@ -742,6 +770,20 @@ pub enum OpsRequestBody {
         idempotency_key: String,
         impact_confirmed: bool,
     },
+    ObserveUfw {
+        actor: Subject,
+    },
+    PlanUfwRule {
+        actor: Subject,
+        plan: UfwRulePlanRequest,
+    },
+    ApproveUfwRule {
+        actor: Subject,
+        plan_id: String,
+        plan_hash: String,
+        idempotency_key: String,
+        impact_confirmed: bool,
+    },
     ExecuteOperation {
         actor: Subject,
         operation_id: String,
@@ -782,6 +824,15 @@ impl OpsRequest {
         ) {
             return Err("impact_confirmation");
         }
+        if matches!(
+            &self.body,
+            OpsRequestBody::ApproveUfwRule {
+                impact_confirmed: false,
+                ..
+            }
+        ) {
+            return Err("impact_confirmation");
+        }
         if let OpsRequestBody::ApproveCertbotIssue {
             external_effect_confirmed,
             local_attach_deferred_confirmed,
@@ -811,17 +862,19 @@ impl OpsRequest {
         match &self.body {
             OpsRequestBody::Capabilities => Ok(()),
             OpsRequestBody::CertificateInventory { .. } => Ok(()),
+            OpsRequestBody::ObserveUfw { .. } => Ok(()),
             OpsRequestBody::RecentOperations { .. } => Ok(()),
             OpsRequestBody::PlanCertbotIssue { plan, .. } => plan.validate(now_unix_ms),
             OpsRequestBody::PlanCertbotRenewTest { plan, .. } => plan.validate(),
             OpsRequestBody::PlanCertbotAttach { plan, .. } => plan.validate(),
             OpsRequestBody::ReadManagedConfig { resource_id, .. } => {
-                validate_managed_resource_id(resource_id)
+                validate_managed_config_resource_id(resource_id)
             }
             OpsRequestBody::PlanNginxSiteState { plan, .. } => plan.validate(),
             OpsRequestBody::PlanManagedConfig { plan, .. } => plan.validate(),
             OpsRequestBody::PlanManagedConfigRestore { plan, .. } => plan.validate(),
             OpsRequestBody::PlanServiceControl { plan, .. } => plan.validate(),
+            OpsRequestBody::PlanUfwRule { plan, .. } => plan.validate(),
             OpsRequestBody::ApproveNginxSiteState {
                 plan_id,
                 plan_hash,
@@ -835,6 +888,12 @@ impl OpsRequest {
                 ..
             }
             | OpsRequestBody::ApproveServiceControl {
+                plan_id,
+                plan_hash,
+                idempotency_key,
+                ..
+            }
+            | OpsRequestBody::ApproveUfwRule {
                 plan_id,
                 plan_hash,
                 idempotency_key,
@@ -900,6 +959,8 @@ pub enum OpsResponseBody {
     NginxSiteStatePlan(NginxSiteStatePlanView),
     ManagedConfigPlan(ManagedConfigPlanView),
     ServiceControlPlan(ServiceControlPlanView),
+    Ufw(UfwView),
+    UfwRulePlan(UfwRulePlanView),
     OperationReceipt(OperationReceiptView),
     RecentOperations(OperationListView),
     Rejected(OpsRejectedResponse),
@@ -982,7 +1043,7 @@ mod tests {
         NGINX_CONFIG_ADAPTER_ID, NGINX_LAYOUT_ID, NGINX_SITE_STATE_OPERATION, NginxSiteState,
         NginxSiteStatePlanRequest, OPERATION_SCHEMA_VERSION, OperationStage, ServiceAction,
         nginx_config_resource_id, nginx_enabled_state_digest, nginx_management_config,
-        nginx_site_id, validate_digest,
+        nginx_site_id, validate_digest, validate_managed_config_resource_id,
     };
 
     #[test]
@@ -1082,6 +1143,23 @@ mod tests {
         request.service_action = ServiceAction::Reload;
         request.proposed_content = String::from("# jw-agent:protected-management-v1\n");
         assert_eq!(request.validate(), Err("protected_content"));
+    }
+
+    #[test]
+    fn every_registered_managed_config_prefix_uses_one_validation_contract() {
+        for prefix in [
+            "ngc_", "ngm_", "ngd_", "apm_", "app_", "apc_", "aps_", "php_",
+        ] {
+            assert!(
+                validate_managed_config_resource_id(&format!("{prefix}0123456789abcdef01234567"))
+                    .is_ok(),
+                "{prefix} was not accepted",
+            );
+        }
+        assert_eq!(
+            validate_managed_config_resource_id("etc_0123456789abcdef01234567"),
+            Err("resource_id"),
+        );
     }
 
     #[test]

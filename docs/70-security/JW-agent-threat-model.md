@@ -3,11 +3,11 @@
 Status: Accepted  
 Authority: Security  
 Owner: Security Maintainer  
-Last reviewed: 2026-07-23
+Last reviewed: 2026-07-24
 
 ## Executive summary
 
-최상위 위험은 credential stuffing, 공개 HTTP input으로 agentd를 침해한 뒤 root authd·opsd 경계를 공격하는 연쇄 경로, PAM FFI 결함, P2 path·crash recovery 오류, OpenSSH manual session 탈취, Certbot 외부효과와 package 공급망입니다. P2 Nginx site-state·Nginx와 PHP 8.3 FPM typed managed-config, Certbot one-shot renewal dry-run·guided issuance CA 실패와 보호 vhost attach의 SNI read-back·강제 실패 원복, non-root OpenSSH terminal과 home-scoped SFTP G0 read/G1 create·replace는 전용 Ubuntu 24.04 VM에서 package·PAM·TLS·실패·비밀 비노출·원장 훼손 `VM_PASS`를 획득했습니다. 다만 private-LAN `.test` 호스트와 unsigned local package 증거이므로 공인 CA 발급 성공·범용 SFTP 쓰기·운영 안전으로 과장하지 않습니다.
+최상위 위험은 credential stuffing, 공개 HTTP input으로 agentd를 침해한 뒤 root authd·opsd 경계를 공격하는 연쇄 경로, PAM FFI 결함, P2 path·crash recovery 오류, OpenSSH manual session 탈취, Certbot 외부효과와 package 공급망입니다. P2 Nginx site-state, Nginx·Apache·PHP 8.3 FPM typed managed-config와 lifecycle, 제품 소유 UFW rule, Certbot one-shot renewal dry-run·guided issuance CA 실패와 보호 vhost attach의 SNI read-back·강제 실패 원복, non-root OpenSSH terminal과 home-scoped SFTP G0 read/G1 create·replace는 전용 Ubuntu 24.04 VM에서 package·PAM·TLS·실패·비밀 비노출·원장 훼손 `VM_PASS`를 획득했습니다. 다만 private-LAN `.test` 호스트와 unsigned local package 증거이므로 공인 CA 발급 성공·범용 SFTP 쓰기·운영 안전으로 과장하지 않습니다.
 
 ## Scope and assumptions
 
@@ -57,7 +57,8 @@ Key assumptions:
 - Nginx+Certbot: optional 443 TLS compatibility ingress와 certificate lifecycle
 - agentd: non-root REST/SSE, session, observation, UI projection
 - authd+ffi-pam: root one-shot PAM/account/role verification
-- opsd: root typed safety executor; private network namespace 안에서 Nginx config test에 필요한 address family와 `CAP_NET_BIND_SERVICE`만 갖고 외부 interface·listener는 없음
+- opsd: root typed safety executor; host UFW netlink 제어용 `CAP_NET_ADMIN`과 설정 validator용
+  `CAP_NET_BIND_SERVICE`만 가지며 `IPAddressDeny=any`, fixed argv, 외부 listener 부재를 유지
 - OpenSSH: agentd loopback client의 non-root terminal·SFTP backend
 - Ubuntu services: PAM/NSS, systemd, Nginx and observed services
 - Local stores: agentd session/settings SQLite와 opsd WAL/FULL ledger·checkpoint·snapshot authority
@@ -71,7 +72,8 @@ Key assumptions:
 - agentd → authd: password-bearing one-request bounded frame over UDS; peer UID, timeout, zeroize and generic response required.
 - authd → PAM/NSS: password, service name, remote address; authenticate, account check, canonical user and group role.
 - agentd → opsd: versioned typed UDS; password·path·shell·user argv never cross.
-- opsd → Ubuntu/Nginx/Certbot: allowlisted resource, fixed argv, snapshot·read-back·rollback; first implementation is Nginx site state.
+- opsd → Ubuntu/Nginx/Apache/PHP-FPM/UFW: allowlisted resource와 fixed argv만 사용하고,
+  snapshot·read-back·rollback을 수행. UFW는 제품 소유 comment 규칙만 변경하며 IP 통신은 deny.
 - agentd → loopback OpenSSH: short-lived user-bound ticket, strict host key and non-root Linux identity; opsd를 통과하지 않음.
 - daemon → local stores: session digest, observation, ledger, snapshot; ownership, transaction, fsync, quota and secret exclusion required.
 - Maintainer → package → Host: root binaries, PAM policy, systemd socket, Nginx template; signature, SBOM and install evidence required.
@@ -173,7 +175,7 @@ flowchart LR
 
 | Threat ID | Threat source | Prerequisites | Threat action | Impact | Impacted assets | Existing controls (evidence) | Gaps | Recommended mitigations | Detection ideas | Likelihood | Impact severity | Priority |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
-| TM-001 | Internet credential attacker | public mode and valid/reused Linux account password | credential stuffing then product login or later SSH reuse | account compromise and management data exposure | password, session, host | root deny/group role, source·subject·global budgets, edge limit, `totp/v1` exact-plan step-up; Linux account·SSH recovery와 TOTP replay/reset VM 검증 | login 자체는 password-only이며 distributed/CDN rate model과 console recovery runbook 미검증 | keep limiter/SSH/TOTP regression gates; add supported proxy model only by new contract | source/subject/global failures, TOTP rejection, success-after-fail alert | high | high | critical |
+| TM-001 | Internet credential attacker | public mode and valid/reused Linux account password | credential stuffing then product login or later SSH reuse | account compromise and management data exposure | password, session, host | root deny/group role, source·subject·global budgets, edge limit, `totp/v1` 관리 모드와 고위험 exact-plan step-up; Linux account·SSH recovery와 TOTP replay/reset VM 검증 | login 자체는 password-only이며 distributed/CDN rate model과 console recovery runbook 미검증 | keep limiter/SSH/TOTP regression gates; add supported proxy model only by new contract | source/subject/global failures, TOTP rejection, success-after-fail alert | high | high | critical |
 | TM-002 | remote input attacker | parser/session bug in public agentd | agentd compromise then authd/opsd UDS abuse | root helper attack and host integrity loss | agentd, authd, opsd, host | body/frame caps, UDS-only listeners, peer UID and systemd sandboxes in `crates/` and `packaging/systemd/` | Linux socket/sandbox negatives and parser fuzzing 없음 | VM peer/malformed/timeout tests, parser fuzz targets, keep opsd typed and read-only until P2 gate | socket rejection, daemon crash/restart metrics | medium | high | critical |
 | TM-003 | PAM/FFI attacker | crafted conversation or unsafe binding flaw | root authd memory/logic compromise | root code execution or credential theft | password, authd, host | isolated `ffi-pam`, bounded single-secret conversation, one-shot authd, no network, zeroizing buffers | independent unsafe review and real PAM adversarial evidence 없음 | audit pointer ownership, run sanitizer/fuzz fixture where supported, VM multi-prompt/timeout/crash cases | authd crash, unsupported conversation and timeout events | medium | high | critical |
 | TM-004 | web attacker/session thief | XSS, CSRF, stolen browser or recovery session | impersonate role or alter access policy | sensitive reads and weakened future policy | session, settings | digest-only opaque sessions, rotation, exact Host/Origin, CSRF, ingress split, CSP/no-store and single-use reauth; real HTTPS browser expiry recovery 검증 | public-disable session revoke와 shared-device cache의 운영 브라우저 증거 없음 | preserve real-edge Playwright regression, verify revoke-on-public-disable before P2 activation | session lifecycle, ingress mismatch, rejected Origin | medium | high | high |

@@ -41,7 +41,6 @@ export function useManagedConfigWorkflow(refreshQueryKey: readonly unknown[]) {
   const [executing, setExecuting] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const requestInFlight = useRef(false);
-  const approvalKey = useRef<string | null>(null);
 
   useEffect(() => {
     if (accepted === null) return;
@@ -99,12 +98,12 @@ export function useManagedConfigWorkflow(refreshQueryKey: readonly unknown[]) {
     }
   }
 
-  async function createPlan(
+  async function save(
     capability: ManagedConfigCapability,
     administrativeConfirmed = false,
   ): Promise<void> {
     if (!administrativeConfirmed && session?.administrativeAccess !== "administrative") {
-      requestAccess(() => void createPlan(capability, true));
+      requestAccess(() => void save(capability, true));
       return;
     }
     if (requestInFlight.current || resource === null || draft === resource.content) return;
@@ -125,29 +124,14 @@ export function useManagedConfigWorkflow(refreshQueryKey: readonly unknown[]) {
         serviceAction: "reload",
         idempotencyKey,
       });
-      approvalKey.current = idempotencyKey;
       setPlan(nextPlan);
-    } catch (error) {
-      setDiagnosticLine(operationDiagnosticLine(error));
-      setErrorMessage(operationErrorCopy(error, "설정 변경 계획을 만들지 못했습니다."));
-      await queryClient.invalidateQueries({ queryKey: refreshQueryKey });
-    } finally {
-      requestInFlight.current = false;
       setPlanning(false);
-    }
-  }
-
-  async function approve(): Promise<void> {
-    if (requestInFlight.current || plan === null || approvalKey.current === null) return;
-    requestInFlight.current = true;
-    setExecuting(true);
-    setErrorMessage(null);
-    try {
+      setExecuting(true);
       setAccepted(await approveManagedConfig({
-        schemaVersion: plan.schemaVersion,
-        planId: plan.planId,
-        planHash: plan.planHash,
-        idempotencyKey: approvalKey.current,
+        schemaVersion: nextPlan.schemaVersion,
+        planId: nextPlan.planId,
+        planHash: nextPlan.planHash,
+        idempotencyKey,
         reauthToken: null,
         additionalAuthClaim: null,
         approvalIntent: {
@@ -156,15 +140,22 @@ export function useManagedConfigWorkflow(refreshQueryKey: readonly unknown[]) {
         },
       }));
     } catch (error) {
-      setErrorMessage(operationErrorCopy(error, "승인한 설정 작업을 완료하지 못했습니다."));
+      setDiagnosticLine(operationDiagnosticLine(error));
+      setErrorMessage(operationErrorCopy(error, "설정을 검증하거나 저장하지 못했습니다."));
+      await queryClient.invalidateQueries({ queryKey: refreshQueryKey });
     } finally {
       requestInFlight.current = false;
+      setPlanning(false);
       setExecuting(false);
     }
   }
 
   function changeDraft(value: string): void {
     setDiagnosticLine(null);
+    setPlan(null);
+    setAccepted(null);
+    setReceipt(null);
+    setErrorMessage(null);
     setDraft(value);
   }
 
@@ -188,7 +179,6 @@ export function useManagedConfigWorkflow(refreshQueryKey: readonly unknown[]) {
     setReceipt(null);
     setDiagnosticLine(null);
     setErrorMessage(null);
-    approvalKey.current = null;
   }
 
   return {
@@ -203,8 +193,7 @@ export function useManagedConfigWorkflow(refreshQueryKey: readonly unknown[]) {
     executing,
     errorMessage,
     open,
-    createPlan,
-    approve,
+    save,
     changeDraft,
     revise,
     close,
@@ -222,7 +211,7 @@ function operationErrorCopy(error: unknown, fallback: string): string {
   if (error.code.startsWith("unknown_directive_line_")) return "현재 설치된 PHP가 알지 못하는 설정 항목입니다. 표시된 줄의 이름을 확인하세요.";
   if (error.code.startsWith("invalid_directive_line_")) return "설정 형식이 올바르지 않습니다. 표시된 줄을 ‘항목 = 값’ 형식으로 수정하세요.";
   if (error.status === 401) return "재인증에 실패했거나 세션이 만료되었습니다.";
-  if (error.status === 403) return "현재 계정 또는 exact-plan 재인증으로 승인할 수 없습니다.";
+  if (error.status === 403) return "관리 모드가 만료되었거나 현재 계정에 변경 권한이 없습니다.";
   if (error.status === 409) return "계획이 만료·변경되었거나 다른 작업이 진행 중입니다. 상태를 다시 확인하세요.";
   if (error.status === 423) return "감사 원장 무결성 잠금으로 모든 변경이 차단되었습니다.";
   if (error.status === 428) return "설정된 추가 인증 수단을 사용할 수 없어 변경이 차단되었습니다.";

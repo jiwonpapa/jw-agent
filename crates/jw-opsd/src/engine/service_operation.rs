@@ -100,6 +100,7 @@ impl OpsService {
             certbot_renew: None,
             certbot_issue: None,
             certbot_attach: None,
+            ufw_rule: None,
         };
         plan.plan_hash = service_control_plan_hash(&plan)?;
         let mut ledger = self.open_ledger()?;

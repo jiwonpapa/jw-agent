@@ -75,7 +75,7 @@ fn run_scenarios(config: &VmConfig, password: &str, timeout: Duration) -> Result
         },
         timeout,
     )?;
-    let saved = session.approve_managed_config(config, password, &valid_plan, timeout)?;
+    let saved = session.approve_managed_config(config, &valid_plan, timeout)?;
     require_php_terminal(&saved, "SUCCEEDED", "PHP-FPM config save")?;
     for evidence in [
         "\"resultCode\":\"php_fpm_config_valid\"",
@@ -95,7 +95,7 @@ fn run_scenarios(config: &VmConfig, password: &str, timeout: Duration) -> Result
         &json_string_field(&saved, "operationId")?,
         timeout,
     )?;
-    let restored = session.approve_managed_config(config, password, &restore_plan, timeout)?;
+    let restored = session.approve_managed_config(config, &restore_plan, timeout)?;
     require_php_terminal(&restored, "SUCCEEDED", "PHP-FPM manual restore")?;
     if !restored.contains("\"operationType\":\"service.config_file.restore/v1\"")
         || !restored.contains("\"restoreAvailable\":true")
@@ -119,7 +119,7 @@ fn run_scenarios(config: &VmConfig, password: &str, timeout: Duration) -> Result
         },
         timeout,
     )?;
-    let rolled_back = session.approve_managed_config(config, password, &invalid_plan, timeout)?;
+    let rolled_back = session.approve_managed_config(config, &invalid_plan, timeout)?;
     require_php_terminal(&rolled_back, "ROLLED_BACK", "PHP-FPM syntax rollback")?;
     if !rolled_back.contains("\"resultCode\":\"php_fpm_config_syntax_line_")
         || !rolled_back.contains("\"rollbackResult\":\"verified\"")

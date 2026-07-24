@@ -4,12 +4,14 @@ mod assurance;
 mod auth;
 mod certificate;
 mod files;
+mod firewall;
 mod framing;
 mod integration;
 mod observation;
 mod operation;
 mod php_fpm;
 mod problem;
+mod service_config;
 mod settings;
 mod terminal;
 mod totp;
@@ -40,6 +42,11 @@ pub use files::{
     FileUploadPlanView, FileUploadResultView, FileUploadTargetState, is_reserved_upload_name,
     validate_file_path,
 };
+pub use firewall::{
+    UFW_COMMENT_PREFIX, UFW_RULE_ID_PREFIX, UFW_RULE_MAX_ENTRIES, UFW_RULE_OPERATION, UfwProtocol,
+    UfwRuleApprovalRequest, UfwRuleMutation, UfwRulePlanRequest, UfwRulePlanView, UfwRuleView,
+    UfwStatus, UfwView, ufw_protected_tcp_port,
+};
 pub use framing::{
     AUTH_FRAME_MAX_BYTES, FrameError, IPC_PROTOCOL_VERSION, OPS_FRAME_MAX_BYTES, decode_frame,
     encode_frame, read_frame, write_frame,
@@ -54,11 +61,11 @@ pub use observation::{
     ServiceRuntimeState, ServiceSummary, ServiceSupport, ServiceVisibility, ServicesView,
 };
 pub use operation::{
-    IDEMPOTENCY_KEY_MAX_BYTES, IDEMPOTENCY_KEY_MIN_BYTES, MANAGED_CONFIG_MAX_BYTES,
-    MANAGED_CONFIG_OPERATION, MANAGED_CONFIG_RESTORE_OPERATION, ManagedConfigApprovalIntent,
-    ManagedConfigApprovalRequest, ManagedConfigPlanRequest, ManagedConfigPlanView,
-    ManagedConfigResourceView, ManagedConfigRestorePlanRequest, ManagedServiceAction,
-    NGINX_CONFIG_ADAPTER_ID, NGINX_LAYOUT_ID, NGINX_MANAGED_CONFIG_MAX_BYTES,
+    AdministrativeOperationApprovalRequest, IDEMPOTENCY_KEY_MAX_BYTES, IDEMPOTENCY_KEY_MIN_BYTES,
+    MANAGED_CONFIG_MAX_BYTES, MANAGED_CONFIG_OPERATION, MANAGED_CONFIG_RESTORE_OPERATION,
+    ManagedConfigApprovalIntent, ManagedConfigApprovalRequest, ManagedConfigPlanRequest,
+    ManagedConfigPlanView, ManagedConfigResourceView, ManagedConfigRestorePlanRequest,
+    ManagedServiceAction, NGINX_CONFIG_ADAPTER_ID, NGINX_LAYOUT_ID, NGINX_MANAGED_CONFIG_MAX_BYTES,
     NGINX_MANAGEMENT_MARKER, NGINX_MANAGEMENT_PROXY_INCLUDE, NGINX_SITE_STATE_OPERATION,
     NginxSiteState, NginxSiteStatePlanRequest, NginxSiteStatePlanView, OPERATION_SCHEMA_VERSION,
     OperationAcceptedView, OperationApprovalRequest, OperationListView, OperationReceiptView,
@@ -68,14 +75,24 @@ pub use operation::{
     ServiceControlPlanView, managed_config_bytes_supported, nginx_config_resource_id,
     nginx_enabled_state_digest, nginx_internal_temporary_name, nginx_management_config,
     nginx_site_id, service_id, service_state_digest, sha256_digest, validate_digest,
+    validate_managed_config_resource_id,
 };
 pub use php_fpm::{
-    PHP_FPM_CONFIG_ADAPTER_ID, PHP_FPM_CONFIG_MAX_BYTES, PHP_FPM_EXTENSION_MAX_ENTRIES,
-    PHP_FPM_GLOBAL_CONFIG_ADAPTER_ID, PHP_FPM_POOL_CONFIG_ADAPTER_ID, PHP_FPM_SUPPORTED_VERSION,
-    PHP_FPM_UNIT, PhpFpmManagedConfigView, PhpFpmRuntimeView, PhpFpmView,
-    php_fpm_config_resource_id,
+    PHP_FPM_CONFIG_ADAPTER_ID, PHP_FPM_CONFIG_MAX_BYTES, PHP_FPM_DYNAMIC_POOL_CONFIG_ADAPTER_ID,
+    PHP_FPM_EXTENSION_MAX_ENTRIES, PHP_FPM_GLOBAL_CONFIG_ADAPTER_ID,
+    PHP_FPM_POOL_CONFIG_ADAPTER_ID, PHP_FPM_SUPPORTED_VERSION, PHP_FPM_UNIT,
+    PhpFpmManagedConfigView, PhpFpmRuntimeView, PhpFpmView, php_fpm_config_resource_id,
+    php_fpm_pool_config_resource_id,
 };
 pub use problem::ProblemDetails;
+pub use service_config::{
+    APACHE_CONF_CONFIG_ADAPTER_ID, APACHE_CONF_RESOURCE_PREFIX, APACHE_MAIN_CONFIG_ADAPTER_ID,
+    APACHE_MAIN_RESOURCE_PREFIX, APACHE_PORTS_CONFIG_ADAPTER_ID, APACHE_PORTS_RESOURCE_PREFIX,
+    APACHE_SITE_CONFIG_ADAPTER_ID, APACHE_SITE_RESOURCE_PREFIX, MANAGED_SERVICE_CONFIG_MAX_ENTRIES,
+    ManagedServiceConfigInventoryView, ManagedServiceConfigView, NGINX_CONF_D_CONFIG_ADAPTER_ID,
+    NGINX_CONF_D_RESOURCE_PREFIX, NGINX_MAIN_CONFIG_ADAPTER_ID, NGINX_MAIN_RESOURCE_PREFIX,
+    managed_service_config_resource_id,
+};
 pub use settings::{
     AccessSettingsView, AdditionalAuthPolicy, AdditionalAuthProviderStatus,
     UpdateAdditionalAuthRequest,

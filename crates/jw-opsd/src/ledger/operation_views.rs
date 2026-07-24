@@ -34,6 +34,40 @@ impl Ledger {
             assurance: plan.assurance.clone(),
         })
     }
+
+    pub(crate) fn ufw_rule_plan_view(
+        &self,
+        plan: &StoredPlan,
+    ) -> Result<jw_contracts::UfwRulePlanView, OpsError> {
+        if plan.operation_type != jw_contracts::UFW_RULE_OPERATION {
+            return Err(OpsError::Rejected("operation_type"));
+        }
+        let payload = plan.ufw_rule.as_ref().ok_or(OpsError::ForensicLockdown)?;
+        Ok(jw_contracts::UfwRulePlanView {
+            schema_version: OPERATION_SCHEMA_VERSION,
+            operation_type: plan.operation_type.clone(),
+            plan_id: plan.plan_id.clone(),
+            plan_hash: plan.plan_hash.clone(),
+            created_at: format_time(plan.created_at_ms)?,
+            expires_at: format_time(plan.expires_at_ms)?,
+            actor: plan.actor.clone(),
+            mutation: payload.requested_mutation,
+            rule_id: payload.rule.rule_id.clone(),
+            protocol: payload.rule.protocol,
+            port: payload.rule.port,
+            source: payload.rule.source.clone(),
+            expected_state_digest: plan.enabled_state_digest.clone(),
+            impact: crate::ufw::UFW_IMPACT
+                .iter()
+                .map(ToString::to_string)
+                .collect(),
+            recovery_path: crate::ufw::UFW_RECOVERY_PATH
+                .iter()
+                .map(ToString::to_string)
+                .collect(),
+            assurance: plan.assurance.clone(),
+        })
+    }
 }
 
 pub(super) fn recovery_path_for(plan: &StoredPlan) -> Vec<String> {
@@ -44,6 +78,8 @@ pub(super) fn recovery_path_for(plan: &StoredPlan) -> Vec<String> {
             .map_or(&[] as &[&str], |adapter| adapter.recovery_path())
     } else if plan.operation_type == SERVICE_CONTROL_OPERATION {
         &SERVICE_CONTROL_RECOVERY_PATH
+    } else if plan.operation_type == jw_contracts::UFW_RULE_OPERATION {
+        &crate::ufw::UFW_RECOVERY_PATH
     } else if plan.operation_type == CERTBOT_ISSUE_OPERATION {
         &CERTBOT_ISSUE_RECOVERY_PATH
     } else if plan.operation_type == jw_contracts::CERTBOT_RENEW_TEST_OPERATION {

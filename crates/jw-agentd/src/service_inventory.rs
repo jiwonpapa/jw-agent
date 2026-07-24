@@ -390,7 +390,7 @@ fn classify_unit(
     );
     let controlled = matches!(
         unit.unit_name.as_str(),
-        "nginx.service" | "php8.3-fpm.service"
+        "nginx.service" | "apache2.service" | "php8.3-fpm.service"
     );
     let allowed_actions = if controlled {
         if active {

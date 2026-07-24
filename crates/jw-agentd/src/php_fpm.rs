@@ -8,10 +8,10 @@ use std::path::{Path, PathBuf};
 use jw_contracts::{
     AssuranceLevel, AssuranceView, MANAGED_CONFIG_OPERATION, OPERATION_SCHEMA_VERSION,
     ObservationStatus, PHP_FPM_CONFIG_ADAPTER_ID, PHP_FPM_CONFIG_MAX_BYTES,
-    PHP_FPM_EXTENSION_MAX_ENTRIES, PHP_FPM_GLOBAL_CONFIG_ADAPTER_ID,
-    PHP_FPM_POOL_CONFIG_ADAPTER_ID, PHP_FPM_SUPPORTED_VERSION, PHP_FPM_UNIT,
-    PhpFpmManagedConfigView, PhpFpmRuntimeView, PhpFpmView, RollbackSupport, ServiceRuntimeState,
-    ServicesView, managed_config_bytes_supported, php_fpm_config_resource_id,
+    PHP_FPM_EXTENSION_MAX_ENTRIES, PHP_FPM_GLOBAL_CONFIG_ADAPTER_ID, PHP_FPM_SUPPORTED_VERSION,
+    PHP_FPM_UNIT, PhpFpmManagedConfigView, PhpFpmRuntimeView, PhpFpmView, RollbackSupport,
+    ServiceRuntimeState, ServicesView, managed_config_bytes_supported, php_fpm_config_resource_id,
+    php_fpm_pool_config_resource_id,
 };
 
 #[derive(Clone, Debug)]
@@ -54,13 +54,13 @@ pub fn observe_php_fpm(
     let fpm_root = profile.php_root.join(PHP_FPM_SUPPORTED_VERSION).join("fpm");
     let php_ini = fpm_root.join("php.ini");
     let php_fpm_global = fpm_root.join("php-fpm.conf");
-    let php_fpm_pool_www = fpm_root.join("pool.d/www.conf");
+    let pool_root = fpm_root.join("pool.d");
     let extension_root = fpm_root.join("conf.d");
     let (extensions, extension_count, extensions_truncated, extension_partial) =
         observe_extensions(&extension_root);
     let blocked_reason = managed_config_blocked_reason(&php_ini, service.runtime_state);
     let operation_available = blocked_reason.is_none();
-    let managed_configs = vec![
+    let mut managed_configs = vec![
         managed_config_view(
             PHP_FPM_CONFIG_ADAPTER_ID,
             "PHP 8.3 FPM · php.ini",
@@ -75,14 +75,8 @@ pub fn observe_php_fpm(
             &php_fpm_global,
             service.runtime_state,
         ),
-        managed_config_view(
-            PHP_FPM_POOL_CONFIG_ADAPTER_ID,
-            "PHP 8.3 FPM · www pool",
-            "/etc/php/8.3/fpm/pool.d/www.conf",
-            &php_fpm_pool_www,
-            service.runtime_state,
-        ),
     ];
+    managed_configs.extend(observe_pool_configs(&pool_root, service.runtime_state));
     let runtime = PhpFpmRuntimeView {
         version: String::from(PHP_FPM_SUPPORTED_VERSION),
         unit_name: service.unit_name.clone(),
@@ -117,6 +111,48 @@ pub fn observe_php_fpm(
         },
         runtimes: vec![runtime],
     }
+}
+
+fn observe_pool_configs(
+    root: &Path,
+    runtime_state: ServiceRuntimeState,
+) -> Vec<PhpFpmManagedConfigView> {
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return Vec::new();
+    };
+    let mut basenames = entries
+        .filter_map(Result::ok)
+        .filter_map(|entry| entry.file_name().to_str().map(str::to_owned))
+        .filter(|name| {
+            name.ends_with(".conf")
+                && !name.starts_with('.')
+                && name.len() <= 128
+                && name
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+        })
+        .collect::<Vec<_>>();
+    basenames.sort();
+    basenames
+        .into_iter()
+        .take(PHP_FPM_EXTENSION_MAX_ENTRIES)
+        .map(|basename| {
+            let path = root.join(&basename);
+            let blocked_reason = managed_config_blocked_reason(&path, runtime_state);
+            let available = blocked_reason.is_none();
+            let display_name = format!("PHP 8.3 FPM · {basename} pool");
+            PhpFpmManagedConfigView {
+                resource_id: php_fpm_pool_config_resource_id(&basename),
+                operation_type: String::from(MANAGED_CONFIG_OPERATION),
+                schema_version: OPERATION_SCHEMA_VERSION,
+                display_name: display_name.clone(),
+                masked_path: format!("/etc/php/8.3/fpm/pool.d/{basename}"),
+                available,
+                assurance: php_fpm_assurance(available, blocked_reason.clone(), &display_name),
+                blocked_reason,
+            }
+        })
+        .collect()
 }
 
 fn managed_config_view(
@@ -271,8 +307,16 @@ mod tests {
         let root = test_root()?;
         let fpm = root.join("8.3/fpm");
         fs::create_dir_all(fpm.join("conf.d")).map_err(|error| error.to_string())?;
+        fs::create_dir_all(fpm.join("pool.d")).map_err(|error| error.to_string())?;
         fs::write(fpm.join("php.ini"), "memory_limit = 128M\n")
             .map_err(|error| error.to_string())?;
+        fs::write(fpm.join("php-fpm.conf"), "[global]\ndaemonize = yes\n")
+            .map_err(|error| error.to_string())?;
+        fs::write(
+            fpm.join("pool.d/www.conf"),
+            "[www]\nlisten = /run/php/php8.3-fpm.sock\n",
+        )
+        .map_err(|error| error.to_string())?;
         #[cfg(unix)]
         fs::set_permissions(fpm.join("php.ini"), fs::Permissions::from_mode(0o644))
             .map_err(|error| error.to_string())?;
@@ -287,6 +331,13 @@ mod tests {
         );
         let runtime = view.runtimes.first().ok_or("runtime missing")?;
         assert_eq!(runtime.extensions, vec![String::from("curl")]);
+        assert_eq!(runtime.managed_configs.len(), 3);
+        assert!(
+            runtime
+                .managed_configs
+                .iter()
+                .any(|config| config.masked_path.ends_with("/pool.d/www.conf"))
+        );
         fs::remove_dir_all(root).map_err(|error| error.to_string())
     }
 

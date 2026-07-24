@@ -115,11 +115,10 @@ export function PhpFpmScreen() {
             diagnosticLine={workflow.diagnosticLine}
             onDraftChange={workflow.changeDraft}
             onBack={() => closeEditor(false)}
-            onCreatePlan={() => {
+            onSave={() => {
               const capability = toCapability(selectedConfig);
-              if (capability !== null) void workflow.createPlan(capability);
+              if (capability !== null) void workflow.save(capability);
             }}
-            onApprove={workflow.approve}
             onRevise={workflow.revise}
           />
         ) : (

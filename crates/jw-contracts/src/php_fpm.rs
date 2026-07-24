@@ -9,6 +9,7 @@ use crate::{AssuranceView, ObservationStatus, ServiceRuntimeState};
 pub const PHP_FPM_CONFIG_ADAPTER_ID: &str = "php-fpm/ubuntu-24.04-8.3-v1";
 pub const PHP_FPM_GLOBAL_CONFIG_ADAPTER_ID: &str = "php-fpm/ubuntu-24.04-8.3-global-v1";
 pub const PHP_FPM_POOL_CONFIG_ADAPTER_ID: &str = "php-fpm/ubuntu-24.04-8.3-pool-www-v1";
+pub const PHP_FPM_DYNAMIC_POOL_CONFIG_ADAPTER_ID: &str = "php-fpm/ubuntu-24.04-8.3-pool-v1";
 pub const PHP_FPM_CONFIG_MAX_BYTES: usize = 128 * 1_024;
 pub const PHP_FPM_SUPPORTED_VERSION: &str = "8.3";
 pub const PHP_FPM_UNIT: &str = "php8.3-fpm.service";
@@ -21,6 +22,19 @@ pub fn php_fpm_config_resource_id(adapter_id: &str) -> String {
     hasher.update(adapter_id.as_bytes());
     hasher.update([0]);
     hasher.update(b"php.ini");
+    let digest = hasher.finalize();
+    format!(
+        "php_{}",
+        URL_SAFE_NO_PAD.encode(&digest[..RESOURCE_ID_BYTES])
+    )
+}
+
+#[must_use]
+pub fn php_fpm_pool_config_resource_id(basename: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(PHP_FPM_DYNAMIC_POOL_CONFIG_ADAPTER_ID.as_bytes());
+    hasher.update([0]);
+    hasher.update(basename.as_bytes());
     let digest = hasher.finalize();
     format!(
         "php_{}",
@@ -69,4 +83,20 @@ pub struct PhpFpmView {
     pub observed_at: String,
     pub status: ObservationStatus,
     pub runtimes: Vec<PhpFpmRuntimeView>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::php_fpm_pool_config_resource_id;
+
+    #[test]
+    fn pool_resource_ids_are_stable_and_path_opaque() {
+        let first = php_fpm_pool_config_resource_id("www.conf");
+        let repeated = php_fpm_pool_config_resource_id("www.conf");
+        let second = php_fpm_pool_config_resource_id("shop.conf");
+
+        assert_eq!(first, repeated);
+        assert_ne!(first, second);
+        assert!(!first.contains("www"));
+    }
 }

@@ -7,6 +7,9 @@ export type AdministrativeAccessState = components["schemas"]["AdministrativeAcc
 export type HealthView = components["schemas"]["HealthView"];
 export type HostObservation = components["schemas"]["HostObservation"];
 export type NginxSitesView = components["schemas"]["NginxSitesView"];
+export type ManagedServiceConfigInventoryView =
+  components["schemas"]["ManagedServiceConfigInventoryView"];
+export type ManagedServiceConfigView = components["schemas"]["ManagedServiceConfigView"];
 export type PhpFpmView = components["schemas"]["PhpFpmView"];
 export type PhpFpmRuntimeView = components["schemas"]["PhpFpmRuntimeView"];
 export type PhpFpmManagedConfigView = components["schemas"]["PhpFpmManagedConfigView"];
@@ -42,6 +45,8 @@ export type ManagedConfigPlanView = components["schemas"]["ManagedConfigPlanView
 export type ManagedConfigApprovalRequest =
   components["schemas"]["ManagedConfigApprovalRequest"];
 export type ManagedConfigRestorePlanRequest = components["schemas"]["ManagedConfigRestorePlanRequest"];
+export type AdministrativeOperationApprovalRequest =
+  components["schemas"]["AdministrativeOperationApprovalRequest"];
 export type OperationApprovalRequest = components["schemas"]["OperationApprovalRequest"];
 export type OperationAcceptedView = components["schemas"]["OperationAcceptedView"];
 export type OperationReceiptView = components["schemas"]["OperationReceiptView"];
@@ -54,6 +59,14 @@ export type ManagedServiceAction = components["schemas"]["ManagedServiceAction"]
 export type ServiceControlPlanRequest = components["schemas"]["ServiceControlPlanRequest"];
 export type ServiceControlApprovalRequest = components["schemas"]["ServiceControlApprovalRequest"];
 export type ServiceControlPlanView = components["schemas"]["ServiceControlPlanView"];
+export type UfwView = components["schemas"]["UfwView"];
+export type UfwRuleView = components["schemas"]["UfwRuleView"];
+export type UfwStatus = components["schemas"]["UfwStatus"];
+export type UfwProtocol = components["schemas"]["UfwProtocol"];
+export type UfwRuleMutation = components["schemas"]["UfwRuleMutation"];
+export type UfwRulePlanRequest = components["schemas"]["UfwRulePlanRequest"];
+export type UfwRuleApprovalRequest = components["schemas"]["UfwRuleApprovalRequest"];
+export type UfwRulePlanView = components["schemas"]["UfwRulePlanView"];
 export type AccessSettingsView = components["schemas"]["AccessSettingsView"];
 export type AdditionalAuthPolicy = components["schemas"]["AdditionalAuthPolicy"];
 export type AdditionalAuthProviderStatus =

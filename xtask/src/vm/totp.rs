@@ -78,17 +78,28 @@ def reauth(purpose):
         fail("reauth_claim_missing")
     return token
 
-def enter_administrative():
+def enter_administrative(additional_auth_code=None, expected=200):
     global csrf
     session = call("POST", "/api/v1/auth/administrative-access", {
         "password": cfg["password"],
-        "additionalAuthCode": None,
-    })
+        "additionalAuthCode": additional_auth_code,
+    }, expected)
+    if expected != 200:
+        return
     if session.get("administrativeAccess") != "administrative":
         fail("administrative_access_missing")
     csrf = session.get("csrfToken")
     if not csrf:
         fail("administrative_csrf_missing")
+
+def leave_administrative():
+    global csrf
+    session = call("DELETE", "/api/v1/auth/administrative-access")
+    if session.get("administrativeAccess") != "standard":
+        fail("administrative_access_not_closed")
+    csrf = session.get("csrfToken")
+    if not csrf:
+        fail("standard_csrf_missing")
 
 def totp(secret, step):
     try:
@@ -181,25 +192,24 @@ def main():
     if settings.get("additionalAuthProvider") != "ready" or settings.get("additionalAuthPolicy") != "risky_operations":
         fail("policy_not_active")
 
+    leave_administrative()
+    enter_administrative(None, 428)
+    management_code = totp(enrollment["manualKey"], step + 1)
+    enter_administrative(management_code)
+
     site = mutable_site()
     plan, idempotency = operation_plan(site)
-    operation_claim = reauth({"kind": "operation", "planHash": plan["planHash"]})
-    verified = call("POST", "/api/v1/auth/totp/verify", {
-        "reauthToken": operation_claim,
-        "planHash": plan["planHash"],
-        "code": totp(enrollment["manualKey"], step + 1),
-    })
     approval = {
         "schemaVersion": plan["schemaVersion"],
         "planId": plan["planId"],
         "planHash": plan["planHash"],
         "idempotencyKey": idempotency,
-        "reauthToken": operation_claim,
-        "additionalAuthClaim": verified["additionalAuthClaim"],
     }
     accepted = call("POST", "/api/v1/operations/nginx/site-state/approvals", approval, 202)
-    call("POST", "/api/v1/operations/nginx/site-state/approvals", approval, 403)
     wait_for_success(accepted["operationId"])
+
+    leave_administrative()
+    enter_administrative(management_code, 403)
 
     reset_claim = reauth({"kind": "totp_recovery_reset"})
     call("POST", "/api/v1/settings/access/totp/reset", {

@@ -39,7 +39,7 @@ transfer, system paths, and root SFTP remain absent. The exact binary upload rou
 has an 8 MiB edge limit. The managed-config exception above does not widen PAM,
 terminal, SFTP control, or other JSON endpoints.
 
-P2.19 keeps recovery-only TOTP enrollment and reset, and uses the separate
+P2.20 keeps recovery-only TOTP enrollment and reset, and uses the separate
 15-minute administrative access mode for root typed operations. The mode
 requires an admin-role non-root Linux account, PAM verification, and TOTP when
 the configured policy requires it; it never creates a root web session. TOTP seeds are encrypted
@@ -57,6 +57,11 @@ The independent edge publishes only a fixed readiness response on
 an Nginx stop before side effects when the independent management path is absent.
 The readiness response is withheld while the agentd proxy UDS is unavailable;
 agentd restarts do not stop the edge process or its 9443 listener.
+
+`opsd` uses the host network namespace only for typed host UFW operations. The
+unit grants `CAP_NET_ADMIN`, `AF_NETLINK`, and optional `/etc/ufw` write access,
+while `IPAddressDeny=any`, fixed UFW argv construction, no listener, and no
+user-supplied executable or rule number remain enforced.
 
 The package creates empty `jw-agent-admin`, `jw-agent-operator`, and
 `jw-agent-viewer` groups. It never grants a user access automatically; an

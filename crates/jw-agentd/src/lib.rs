@@ -10,6 +10,7 @@ pub mod observation;
 mod openssh;
 pub mod ops_client;
 pub mod php_fpm;
+pub mod service_config_inventory;
 pub mod service_inventory;
 pub mod session;
 #[cfg(test)]

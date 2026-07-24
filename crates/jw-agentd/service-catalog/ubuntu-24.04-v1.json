@@ -15,7 +15,7 @@
       "displayName": "Apache HTTP Server",
       "purpose": "웹사이트와 웹 애플리케이션의 HTTP 요청을 처리합니다.",
       "category": "web",
-      "support": "known_read_only",
+      "support": "supported_observe",
       "unitPatterns": ["apache2.service"]
     },
     {

@@ -4,7 +4,7 @@ use std::io::{Read, Write};
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::Path;
 
-use jw_contracts::sha256_digest;
+use jw_contracts::{UfwRuleView, sha256_digest};
 use serde::{Deserialize, Serialize};
 
 use crate::config::{OpsPaths, OpsPolicy};
@@ -53,6 +53,14 @@ pub struct ServiceStateSnapshot {
     pub unit_name: String,
     pub active: bool,
     pub state_digest: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UfwSnapshot {
+    pub schema_version: u16,
+    pub state_digest: String,
+    pub rules: Vec<UfwRuleView>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -109,6 +117,17 @@ pub fn write_service_state_snapshot(
     let bytes =
         serde_json::to_vec(snapshot).map_err(|error| OpsError::Filesystem(error.to_string()))?;
     write_snapshot_bytes(paths, policy, operation_id, "service-state.json", &bytes)
+}
+
+pub fn write_ufw_snapshot(
+    paths: &OpsPaths,
+    policy: &OpsPolicy,
+    operation_id: &str,
+    snapshot: &UfwSnapshot,
+) -> Result<SnapshotRecord, OpsError> {
+    let bytes =
+        serde_json::to_vec(snapshot).map_err(|error| OpsError::Filesystem(error.to_string()))?;
+    write_snapshot_bytes(paths, policy, operation_id, "ufw-rules.json", &bytes)
 }
 
 fn write_snapshot_bytes(
@@ -186,6 +205,14 @@ pub fn read_service_state_snapshot(
     record: &SnapshotRecord,
 ) -> Result<ServiceStateSnapshot, OpsError> {
     let bytes = read_snapshot_bytes(paths, record, 64 * 1_024)?;
+    serde_json::from_slice(&bytes).map_err(|error| OpsError::Filesystem(error.to_string()))
+}
+
+pub fn read_ufw_snapshot(
+    paths: &OpsPaths,
+    record: &SnapshotRecord,
+) -> Result<UfwSnapshot, OpsError> {
+    let bytes = read_snapshot_bytes(paths, record, 256 * 1_024)?;
     serde_json::from_slice(&bytes).map_err(|error| OpsError::Filesystem(error.to_string()))
 }
 

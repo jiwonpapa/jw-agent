@@ -163,6 +163,7 @@ impl OpsService {
         let payload = ManagedConfigPlanPayload {
             proposal_relative_path: storage.proposal.relative_path,
             proposal_digest: storage.proposal.digest,
+            basename: Some(resource.basename.clone()),
             proposed_content_digest: sha256_digest(request.proposed_content.as_bytes()),
             current_bytes,
             proposed_bytes,
@@ -196,6 +197,7 @@ impl OpsService {
             certbot_renew: None,
             certbot_issue: None,
             certbot_attach: None,
+            ufw_rule: None,
         };
         plan.plan_hash = managed_config_plan_hash(&plan)?;
         let mut ledger = self.open_ledger()?;

@@ -13,6 +13,7 @@ Last reviewed: 2026-07-22
 - [OPS-PHP-FPM-CONFIG-V1](operations/php-fpm-config-v1.md) — Accepted, strict multi-resource profile pending current VM gate
 - [OPS-MANAGED-CONFIG-RESTORE-V1](operations/managed-config-restore-v1.md) — Accepted
 - [OPS-SERVICE-CONTROL-V1](operations/service-control-v1.md) — Accepted
+- [OPS-UFW-RULE-V1](operations/ufw-rule-v1.md) — Accepted, typed product-owned rule 구현·VM gate 대기
 - [OPS-CERTBOT-CERTIFICATE-V1](operations/certbot-certificate-v1.md) — Accepted, runner/inventory/renew-test, private-LAN issuance failure and protected-vhost attach rollback `VM_PASS`; public-CA success pending
 
 ## Access specs
@@ -61,6 +62,7 @@ Last reviewed: 2026-07-22
 - [ADR-0016 TOTP crypto and enrollment boundary](adr/0016-totp-crypto-and-enrollment-boundary.md) — Accepted
 - [ADR-0017 Risk-tiered operation approval](adr/0017-risk-tiered-operation-approval.md) — Accepted
 - [ADR-0018 Independent Rust management edge](adr/0018-independent-rust-management-edge.md) — Accepted
+- [ADR-0019 Managed service config and firewall boundary](adr/0019-managed-service-config-and-firewall-boundary.md) — Accepted
 
 ## Spec template requirements
 

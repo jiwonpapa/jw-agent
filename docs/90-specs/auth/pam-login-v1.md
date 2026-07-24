@@ -3,7 +3,7 @@
 Status: Accepted  
 Authority: Authentication Specification  
 Owner: Security Maintainer  
-Last reviewed: 2026-07-21
+Last reviewed: 2026-07-24
 
 ## Purpose and support
 
@@ -45,9 +45,14 @@ Ubuntu 24.04 local `pam_unix` account의 username/password를 검증하고 expli
 
 ## Session issuance
 
-Login creates a rotated opaque server-side session. Step-up creates a short single-use claim bound to session, actor UID, role and exact plan hash; it cannot create a new general session.
+Login creates a rotated opaque server-side session. Administrative step-up rotates
+the session and opens a bounded 15-minute management capability. Exact-plan
+single-use claims remain available for stop·large deletion·관리 접속 영향 작업처럼
+정책이 별도 승인을 요구하는 작업이며 새 일반 session을 만들 수 없습니다.
 
-PAM reauthentication is mandatory for write approval. Optional additional authentication is a separate policy/provider boundary and never replaces PAM account validation.
+PAM reauthentication is mandatory when entering administrative mode, not for every
+routine G2 write inside that mode. Optional additional authentication is a separate
+policy/provider boundary and never replaces PAM account validation.
 
 ## Acceptance
 
