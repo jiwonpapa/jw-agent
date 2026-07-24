@@ -218,14 +218,14 @@ fn plan(
     expect_http(&response, 200, "Apache managed config plan")?;
     let has_adapter = response
         .body
-        .contains("\"adapterId\":\"apache/ubuntu-24.04-site-enabled-v1\"");
+        .contains("\"adapterId\":\"apache/ubuntu-24.04-tree-v1\"");
     let has_masked_path = response
         .body
-        .contains("\"maskedPath\":\"…/apache2/sites-available/jw-agent-test.conf\"");
-    let has_assurance = response.body.contains("\"level\":\"g2_reversible_config\"");
-    if !(has_adapter && has_masked_path && has_assurance) {
+        .contains("\"maskedPath\":\"/etc/apache2/sites-available/jw-agent-test.conf\"");
+    let has_recovery_assurance = response.body.contains("\"level\":\"g2_reversible_config\"");
+    if !(has_adapter && has_masked_path && has_recovery_assurance) {
         return Err(format!(
-            "Apache plan evidence mismatch: adapter={has_adapter}, masked_path={has_masked_path}, assurance={has_assurance}"
+            "Apache plan evidence mismatch: adapter={has_adapter}, masked_path={has_masked_path}, recovery_assurance={has_recovery_assurance}"
         ));
     }
     Ok(ManagedConfigPlanFields {

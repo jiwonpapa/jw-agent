@@ -4,15 +4,20 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use utoipa::ToSchema;
 
-use crate::{AssuranceView, ObservationStatus};
+use crate::ObservationStatus;
 
 pub const MANAGED_SERVICE_CONFIG_MAX_ENTRIES: usize = 256;
+pub const MANAGED_SERVICE_CONFIG_MAX_DEPTH: usize = 5;
 
+pub const NGINX_TREE_CONFIG_ADAPTER_ID: &str = "nginx/ubuntu-24.04-tree-v1";
+pub const NGINX_TREE_RESOURCE_PREFIX: &str = "ngf_";
 pub const NGINX_MAIN_CONFIG_ADAPTER_ID: &str = "nginx/ubuntu-24.04-main-v1";
 pub const NGINX_CONF_D_CONFIG_ADAPTER_ID: &str = "nginx/ubuntu-24.04-conf-d-v1";
 pub const NGINX_MAIN_RESOURCE_PREFIX: &str = "ngm_";
 pub const NGINX_CONF_D_RESOURCE_PREFIX: &str = "ngd_";
 
+pub const APACHE_TREE_CONFIG_ADAPTER_ID: &str = "apache/ubuntu-24.04-tree-v1";
+pub const APACHE_TREE_RESOURCE_PREFIX: &str = "apf_";
 pub const APACHE_MAIN_CONFIG_ADAPTER_ID: &str = "apache/ubuntu-24.04-main-v1";
 pub const APACHE_PORTS_CONFIG_ADAPTER_ID: &str = "apache/ubuntu-24.04-ports-v1";
 pub const APACHE_CONF_CONFIG_ADAPTER_ID: &str = "apache/ubuntu-24.04-conf-enabled-v1";
@@ -49,9 +54,11 @@ pub struct ManagedServiceConfigView {
     pub schema_version: u16,
     pub display_name: String,
     pub masked_path: String,
+    pub relative_path: String,
+    pub loaded: bool,
+    pub service_active: bool,
     pub available: bool,
     pub blocked_reason: Option<String>,
-    pub assurance: AssuranceView,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, ToSchema)]

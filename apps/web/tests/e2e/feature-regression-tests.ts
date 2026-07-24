@@ -94,9 +94,8 @@ export function registerFeatureRegressionTests(harness: FeatureRegressionHarness
       onPlan: (body) => planBodies.push(body),
       onApproval: (body) => approvalBodies.push(body),
     });
-    await page.goto("/services/nginx");
-    await page.getByRole("button", { name: "변경 계획 열기" }).first().click();
-    await page.getByRole("button", { name: "설정 파일 편집" }).click();
+    await page.goto("/services/nginx/configurations");
+    await page.getByRole("button", { name: /example\.com/ }).click();
 
     const editor = page.getByLabel("Nginx 설정 내용");
     await expect(editor).toContainText("listen 80;");
@@ -131,9 +130,8 @@ export function registerFeatureRegressionTests(harness: FeatureRegressionHarness
   test("managed Nginx syntax failure returns to the exact diagnostic line after verified rollback", async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 });
     await harness.setupManagedConfigSyntaxFailure(page);
-    await page.goto("/services/nginx");
-    await page.getByRole("button", { name: "변경 계획 열기" }).first().click();
-    await page.getByRole("button", { name: "설정 파일 편집" }).click();
+    await page.goto("/services/nginx/configurations");
+    await page.getByRole("button", { name: /example\.com/ }).click();
     await page.getByLabel("Nginx 설정 내용").fill("server {\n  listen 80\n  broken on;\n}\n");
     await page.getByRole("button", { name: "저장", exact: true }).click();
 

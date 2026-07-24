@@ -200,6 +200,7 @@ impl NginxSiteStatePlanRequest {
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ServiceAction {
+    ValidateOnly,
     Reload,
     Restart,
 }
@@ -208,6 +209,7 @@ impl ServiceAction {
     #[must_use]
     pub const fn as_storage_value(self) -> &'static str {
         match self {
+            Self::ValidateOnly => "validate_only",
             Self::Reload => "reload",
             Self::Restart => "restart",
         }
@@ -381,7 +383,10 @@ impl ManagedConfigPlanRequest {
         {
             return Err("protected_content");
         }
-        if self.service_action != ServiceAction::Reload {
+        if !matches!(
+            self.service_action,
+            ServiceAction::Reload | ServiceAction::ValidateOnly
+        ) {
             return Err("unsupported_service_action");
         }
         validate_ascii_range(
@@ -395,7 +400,7 @@ impl ManagedConfigPlanRequest {
 
 pub fn validate_managed_config_resource_id(value: &str) -> Result<(), &'static str> {
     if let Some(prefix) = [
-        "ngc_", "ngm_", "ngd_", "apm_", "app_", "apc_", "aps_", "php_",
+        "ngc_", "ngf_", "ngm_", "ngd_", "apf_", "apm_", "app_", "apc_", "aps_", "php_",
     ]
     .into_iter()
     .find(|prefix| value.starts_with(prefix))
@@ -1140,6 +1145,8 @@ mod tests {
 
         request.service_action = ServiceAction::Restart;
         assert_eq!(request.validate(), Err("unsupported_service_action"));
+        request.service_action = ServiceAction::ValidateOnly;
+        assert!(request.validate().is_ok());
         request.service_action = ServiceAction::Reload;
         request.proposed_content = String::from("# jw-agent:protected-management-v1\n");
         assert_eq!(request.validate(), Err("protected_content"));
@@ -1148,7 +1155,7 @@ mod tests {
     #[test]
     fn every_registered_managed_config_prefix_uses_one_validation_contract() {
         for prefix in [
-            "ngc_", "ngm_", "ngd_", "apm_", "app_", "apc_", "aps_", "php_",
+            "ngc_", "ngf_", "ngm_", "ngd_", "apf_", "apm_", "app_", "apc_", "aps_", "php_",
         ] {
             assert!(
                 validate_managed_config_resource_id(&format!("{prefix}0123456789abcdef01234567"))

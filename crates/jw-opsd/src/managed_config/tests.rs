@@ -2,9 +2,9 @@ use std::fs;
 
 use jw_contracts::{
     APACHE_SITE_CONFIG_ADAPTER_ID, APACHE_SITE_RESOURCE_PREFIX, NGINX_CONFIG_ADAPTER_ID,
-    NGINX_MAIN_CONFIG_ADAPTER_ID, NGINX_MAIN_RESOURCE_PREFIX, PHP_FPM_CONFIG_ADAPTER_ID,
-    managed_service_config_resource_id, nginx_config_resource_id, php_fpm_config_resource_id,
-    php_fpm_pool_config_resource_id,
+    NGINX_MAIN_CONFIG_ADAPTER_ID, NGINX_MAIN_RESOURCE_PREFIX, NGINX_TREE_CONFIG_ADAPTER_ID,
+    NGINX_TREE_RESOURCE_PREFIX, PHP_FPM_CONFIG_ADAPTER_ID, managed_service_config_resource_id,
+    nginx_config_resource_id, php_fpm_config_resource_id, php_fpm_pool_config_resource_id,
 };
 
 use crate::config::OpsPaths;
@@ -88,6 +88,71 @@ fn discovers_nginx_main_config_by_stable_resource_id() -> Result<(), String> {
 
     assert_eq!(resource.adapter.adapter_id(), NGINX_MAIN_CONFIG_ADAPTER_ID);
     assert_eq!(resource.basename, "nginx.conf");
+    fs::remove_dir_all(root).map_err(|error| error.to_string())
+}
+
+#[test]
+fn tree_adapter_discovers_and_replaces_nested_existing_config() -> Result<(), String> {
+    let root = test_root("nginx-tree")?;
+    let paths = OpsPaths::for_test(&root);
+    let nginx_root = paths
+        .nginx_main
+        .parent()
+        .ok_or_else(|| String::from("nginx root missing"))?;
+    let snippets = nginx_root.join("snippets");
+    fs::create_dir_all(&snippets).map_err(|error| error.to_string())?;
+    fs::write(
+        snippets.join("proxy-common.conf"),
+        "proxy_set_header Host $host;\n",
+    )
+    .map_err(|error| error.to_string())?;
+    let id = managed_service_config_resource_id(
+        NGINX_TREE_RESOURCE_PREFIX,
+        NGINX_TREE_CONFIG_ADAPTER_ID,
+        "snippets/proxy-common.conf",
+    );
+
+    let before = discover_managed_config(&paths, &id).map_err(|error| error.to_string())?;
+    assert_eq!(before.display_name, "snippets/proxy-common.conf");
+    assert_eq!(
+        before
+            .view(super::managed_config_assurance(before.adapter))
+            .map_err(|error| error.to_string())?
+            .masked_path,
+        "/etc/nginx/snippets/proxy-common.conf"
+    );
+    let after = replace_managed_config(
+        &paths,
+        &before,
+        "proxy_set_header Host $host;\nproxy_set_header X-Forwarded-Proto $scheme;\n",
+    )
+    .map_err(|error| error.to_string())?;
+    assert!(after.content.contains("X-Forwarded-Proto"));
+    fs::remove_dir_all(root).map_err(|error| error.to_string())
+}
+
+#[test]
+fn tree_adapter_rejects_secret_named_resource() -> Result<(), String> {
+    let root = test_root("nginx-tree-secret")?;
+    let paths = OpsPaths::for_test(&root);
+    let nginx_root = paths
+        .nginx_main
+        .parent()
+        .ok_or_else(|| String::from("nginx root missing"))?;
+    fs::create_dir_all(nginx_root).map_err(|error| error.to_string())?;
+    fs::write(nginx_root.join("private-token.conf"), "token = example\n")
+        .map_err(|error| error.to_string())?;
+    let id = managed_service_config_resource_id(
+        NGINX_TREE_RESOURCE_PREFIX,
+        NGINX_TREE_CONFIG_ADAPTER_ID,
+        "private-token.conf",
+    );
+
+    let error = match discover_managed_config(&paths, &id) {
+        Ok(_) => return Err(String::from("secret resource was readable through opsd")),
+        Err(error) => error,
+    };
+    assert_eq!(error.code(), "protected_resource");
     fs::remove_dir_all(root).map_err(|error| error.to_string())
 }
 

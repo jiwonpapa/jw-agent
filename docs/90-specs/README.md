@@ -9,7 +9,7 @@ Last reviewed: 2026-07-22
 
 - [OPS-NGINX-SITE-STATE-V1](operations/nginx-site-state-set-v1.md) — Accepted, P2 active implementation
 - [OPS-PUBLIC-ACCESS-PROFILE-V1](operations/public-access-profile-v1.md) — Accepted
-- [OPS-MANAGED-CONFIG-FILE-V1](operations/managed-config-file-v1.md) — Accepted, Nginx active-resource implementation `VM_PASS`
+- [OPS-MANAGED-CONFIG-FILE-V1](operations/managed-config-file-v1.md) — Accepted, bounded service-root config tree and reversible file mutation
 - [OPS-PHP-FPM-CONFIG-V1](operations/php-fpm-config-v1.md) — Accepted, strict multi-resource profile pending current VM gate
 - [OPS-MANAGED-CONFIG-RESTORE-V1](operations/managed-config-restore-v1.md) — Accepted
 - [OPS-SERVICE-CONTROL-V1](operations/service-control-v1.md) — Accepted
@@ -36,7 +36,7 @@ Last reviewed: 2026-07-22
 ## UI specs
 
 - [UI-OVERVIEW-V1](ui/overview-v1.md) — Accepted
-- [UI-MANAGED-CONFIG-WIZARD-V1](ui/managed-config-wizard-v1.md) — Accepted
+- [UI-MANAGED-CONFIG-WIZARD-V1](ui/managed-config-wizard-v1.md) — Accepted, full-width file tree/editor workspace
 - [UI-LOGIN-SESSION-V1](ui/login-session-v1.md) — Accepted
 - [UI-RESPONSIVE-SHELL-V1](ui/responsive-shell-v1.md) — Accepted
 - [UI-ROLLBACK-ASSURANCE-V1](ui/rollback-assurance-v1.md) — Accepted

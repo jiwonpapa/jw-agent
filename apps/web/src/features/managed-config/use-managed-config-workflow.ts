@@ -24,6 +24,7 @@ export interface ManagedConfigCapability {
   resourceId: string;
   operationType: string;
   schemaVersion: number;
+  serviceAction?: "reload" | "validate_only";
 }
 
 export function useManagedConfigWorkflow(refreshQueryKey: readonly unknown[]) {
@@ -121,7 +122,9 @@ export function useManagedConfigWorkflow(refreshQueryKey: readonly unknown[]) {
         expectedContentDigest: resource.contentDigest,
         expectedMetadataDigest: resource.metadataDigest,
         proposedContent: draft,
-        serviceAction: "reload",
+        serviceAction:
+          capability.serviceAction ??
+          (resource.allowedServiceActions.includes("reload") ? "reload" : "validate_only"),
         idempotencyKey,
       });
       setPlan(nextPlan);

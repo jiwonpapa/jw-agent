@@ -1344,15 +1344,17 @@ export interface components {
             unitName: string;
         };
         ManagedServiceConfigView: {
-            assurance: components["schemas"]["AssuranceView"];
             available: boolean;
             blockedReason?: string | null;
             displayName: string;
+            loaded: boolean;
             maskedPath: string;
             operationType: string;
+            relativePath: string;
             resourceId: string;
             /** Format: int32 */
             schemaVersion: number;
+            serviceActive: boolean;
         };
         MemoryObservation: {
             /** Format: int64 */
@@ -1546,7 +1548,7 @@ export interface components {
         /** @enum {string} */
         RollbackSupport: "not_applicable" | "not_guaranteed" | "automatic_bounded" | "restore_validated";
         /** @enum {string} */
-        ServiceAction: "reload" | "restart";
+        ServiceAction: "validate_only" | "reload" | "restart";
         /** @enum {string} */
         ServiceCategory: "web" | "runtime" | "database" | "cache" | "access" | "security" | "certificate" | "container" | "monitoring" | "custom" | "system" | "other";
         ServiceControlApprovalRequest: {

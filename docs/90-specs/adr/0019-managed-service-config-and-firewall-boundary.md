@@ -15,15 +15,26 @@ argv는 agentd 침해를 root 명령 실행으로 확대합니다. UFW도 기존
 ## Decision
 
 - 기존 `service.config_file.set/v1` safety kernel을 재사용하고 새 설정 엔진을 만들지 않습니다.
-- Ubuntu 24.04 표준 package layout의 아래 root만 `opsd`에 추가합니다.
-  - `/etc/nginx`: `nginx.conf`, active `conf.d/*.conf`, 기존 active site
-  - `/etc/apache2`: `apache2.conf`, `ports.conf`, active `conf-enabled/*.conf`,
-    active `sites-enabled/*.conf`가 정확히 가리키는 available file
-  - `/etc/php/8.3/fpm`: `php.ini`, `php-fpm.conf`, root-owned `pool.d/*.conf`
+- Ubuntu 24.04 표준 package layout의 아래 service-owned root를 bounded tree로 관찰합니다.
+  - `/etc/nginx`
+  - `/etc/apache2`
+  - `/etc/php/8.3/fpm`
+- 해당 root 안의 기존 regular UTF-8 text config는 active·inactive 여부와 관계없이 파일 트리에
+  표시하고, 쓰기 가능 여부와 차단 사유를 파일별로 반환합니다.
+- 탐색은 depth·entry·byte 상한을 갖습니다. directory·file 생성, 삭제, 이동, rename,
+  permission·owner 변경은 제공하지 않습니다.
 - API는 path가 아닌 adapter registry가 발급한 opaque resource ID만 받습니다.
-- symlink, hardlink, 비표준 owner/mode, 비활성 include, unsupported version은 쓰기를 닫습니다.
-- 모든 설정 변경은 해당 서비스의 공식 validator, reload, active read-back과 exact file
-  rollback을 거칩니다.
+- 사용자가 입력한 path를 `opsd`에 전달하지 않습니다. resource ID는 고정 root와 발견된
+  relative path에 결합하며 apply 직전 같은 identity와 metadata를 재검증합니다.
+- symlink 자체, root 밖 canonical target, hardlink, 비표준 owner/mode, binary/NUL,
+  secret·private-key 후보, unsupported version은 쓰기를 닫습니다.
+- 서비스가 실행 중이면 `저장 → 공식 validator → reload → active/read-back`을 수행합니다.
+  서비스가 중지 상태이면 `저장 → 공식 validator → read-back`까지만 수행하고 서비스를
+  임의로 시작하지 않습니다.
+- validation, reload, active 또는 read-back 실패 시 exact file bytes·owner·mode를 원복하고
+  이전 설정을 다시 검증합니다.
+- Nginx site enable/disable은 설정 파일 편집의 주 작업이 아니며 site context의 보조
+  lifecycle action으로만 노출합니다.
 - Apache service lifecycle은 `apache2.service`의 start, stop, restart, reload만 등록합니다.
 - UFW는 별도 typed operation으로 관찰하며, 활성 UFW에 JW Agent comment가 붙은 제한 규칙만
   추가하거나 삭제합니다.
@@ -45,7 +56,8 @@ argv는 agentd 침해를 root 명령 실행으로 확대합니다. UFW도 기존
 
 ## Rejected
 
-- 범용 root 파일 CRUD와 임의 `/etc` 탐색
+- 범용 root 파일 CRUD와 service root 밖 임의 `/etc` 탐색
+- 사용자가 입력한 path·glob·depth로 탐색 범위를 늘리는 API
 - shell, user argv, `sudo` command relay
 - raw `iptables`/`nft` rule 편집
 - 기존 UFW rule 전체 restore로 다른 관리자의 동시 변경을 덮어쓰기
@@ -53,8 +65,12 @@ argv는 agentd 침해를 root 명령 실행으로 확대합니다. UFW도 기존
 
 ## Acceptance
 
-- adapter별 exact resource discovery와 inactive/symlink/hardlink 차단
-- Nginx, Apache, PHP-FPM valid save, syntax failure rollback, reload/active read-back
+- service root별 bounded recursive discovery와 safe/blocked file 구분
+- active·inactive 설정 파일 열기, inactive service의 validate-only save
+- traversal·root escape·symlink·hardlink·secret·binary 차단
+- Nginx, Apache, PHP-FPM valid save, syntax failure rollback, active service reload/read-back
+- desktop에서는 tree와 전체 폭 editor, mobile에서는 list→editor 흐름을 사용하며
+  right drawer와 별도 plan wizard를 사용하지 않음
 - Apache lifecycle success와 failure recovery
 - UFW active/inactive observation, bounded add/delete, protected rule rejection, stale rule
   cancellation, product effect rollback

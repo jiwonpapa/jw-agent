@@ -199,6 +199,41 @@ const managedConfigResource = {
   },
 };
 
+const managedConfigInventory = {
+  observedAt: "2026-07-21T02:10:00Z",
+  status: "observed",
+  serviceKey: "nginx",
+  unitName: "nginx.service",
+  displayName: "Nginx",
+  configs: [
+    {
+      resourceId: configResourceId,
+      operationType: "service.config_file.set/v1",
+      schemaVersion: 1,
+      displayName: "example.com",
+      maskedPath: "/etc/nginx/sites-available/example.com",
+      relativePath: "sites-available/example.com",
+      loaded: true,
+      serviceActive: true,
+      available: true,
+      blockedReason: null,
+    },
+    {
+      resourceId: "ngf_protectedFixture1234567",
+      operationType: "service.config_file.set/v1",
+      schemaVersion: 1,
+      displayName: "private-token.conf",
+      maskedPath: "/etc/nginx/private-token.conf",
+      relativePath: "private-token.conf",
+      loaded: false,
+      serviceActive: true,
+      available: false,
+      blockedReason: "protected_resource",
+    },
+  ],
+  truncated: false,
+};
+
 const managedConfigPlan = {
   schemaVersion: 1,
   operationType: "service.config_file.set/v1",
@@ -840,6 +875,9 @@ async function mockApi(
     if (path === "/api/v1/services/nginx/sites") {
       return route.fulfill({ json: operationOptions.nginxFixture ?? nginx });
     }
+    if (path === "/api/v1/services/nginx/configurations") {
+      return route.fulfill({ json: managedConfigInventory });
+    }
     if (path === `/api/v1/config-resources/${configResourceId}` && request.method() === "GET") {
       return route.fulfill({ json: managedConfigResource });
     }
@@ -1174,54 +1212,18 @@ test("G1 text save requires an exact plan and keeps secrets out of navigation an
   expect(hasOverflow).toBe(false);
 });
 
-test("G2 Nginx state change uses active management mode without repeated password", async ({ page }) => {
-  let planRequests = 0;
-  let approvalRequests = 0;
-  const planBodies: unknown[] = [];
-  const approvalBodies: unknown[] = [];
+test("Nginx keeps site state read-only and routes editing to the file workspace", async ({ page }) => {
   await page.setViewportSize({ width: 320, height: 800 });
-  await mockApi(page, true, health, {
-    onPlan: (body) => {
-      planRequests += 1;
-      planBodies.push(body);
-    },
-    onApproval: (body) => {
-      approvalRequests += 1;
-      approvalBodies.push(body);
-    },
-  });
+  await mockApi(page, true);
   await page.goto("/services/nginx");
 
-  await expect(
-    page.locator("span:visible").filter({ hasText: "G2 · 제한된 설정 자동 원복 지원" }).first(),
-  ).toBeVisible();
-  await page.getByRole("button", { name: "변경 계획 열기" }).first().click();
-  await page.getByRole("button", { name: "비활성화 계획 만들기" }).dblclick();
-
-  await expect(page.getByRole("heading", { name: "실행 영향" })).toBeVisible();
-  await expect(page.getByText(/sites-available 설정 내용/)).toBeVisible();
-  await expect(page.getByRole("heading", { name: "원복 검증도 실패하면 수동 복구가 필요합니다" })).toBeVisible();
-  const recoveryHeading = page.getByRole("heading", {
-    name: "원복 검증도 실패하면 수동 복구가 필요합니다",
-  });
-  const approvalButton = page.getByRole("button", { name: "변경 적용" });
-  const disclosureComesFirst = await recoveryHeading.evaluate((heading, button) => {
-    if (!(button instanceof Element)) return false;
-    return Boolean(heading.compareDocumentPosition(button) & Node.DOCUMENT_POSITION_FOLLOWING);
-  }, await approvalButton.elementHandle());
-  expect(disclosureComesFirst).toBe(true);
-
-  await approvalButton.dblclick();
-  await expect(page.getByRole("heading", { name: "적용 완료" })).toBeVisible();
-  await expect(page.getByText("이전 상태 저장")).toBeVisible();
-  expect(planRequests).toBe(1);
-  expect(approvalRequests).toBe(1);
-  expect((approvalBodies[0] as Record<string, unknown>).planHash).toBe(planHash);
-  expect((approvalBodies[0] as Record<string, unknown>).idempotencyKey).toBe(
-    (planBodies[0] as Record<string, unknown>).idempotencyKey,
-  );
-  expect(JSON.stringify(approvalBodies)).not.toContain("reauthToken");
-  expect(JSON.stringify(approvalBodies)).not.toContain("additionalAuthClaim");
+  await expect(page.getByRole("heading", { name: "Nginx" })).toBeVisible();
+  await expect(page.getByText("example.com", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: /계획/ })).toHaveCount(0);
+  await expect(page.getByText(/G2 · 제한/)).toHaveCount(0);
+  await page.getByRole("link", { name: "설정 파일 열기" }).click();
+  await expect(page).toHaveURL(/\/services\/nginx\/configurations$/);
+  await expect(page.getByRole("heading", { name: "Nginx 설정" })).toBeVisible();
   const hasOverflow = await page.evaluate(
     () => document.documentElement.scrollWidth > document.documentElement.clientWidth,
   );
@@ -1236,33 +1238,31 @@ test("G2 Nginx state change uses active management mode without repeated passwor
 
 test("G0 protected Nginx resource has no mutation action", async ({ page }) => {
   await mockApi(page, true);
-  await page.goto("/services/nginx");
-  await page.getByRole("button", { name: "상세" }).click();
-  await expect(page.getByText("JW Agent 공개 관리 리소스는 일반 Nginx 작업에서 변경할 수 없습니다.")).toBeVisible();
-  await expect(page.getByRole("button", { name: /계획 만들기/ })).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "설정 파일 편집" })).toHaveCount(0);
+  await page.goto("/services/nginx/configurations");
+  await expect(page.getByRole("button", { name: /private-token\.conf/ })).toBeDisabled();
+  await expect(page.getByRole("button", { name: /계획/ })).toHaveCount(0);
 });
 
 test("rollback failure is never shown as a successful recovery", async ({ page }) => {
   const recoveryReceipt: OperationReceiptView = {
-    ...operationReceipt,
+    ...managedConfigReceipt,
     terminalState: "RECOVERY_REQUIRED",
     rollbackResult: "rollback_verification_failed",
-    recoveryPath: operationPlan.recoveryPath,
+    recoveryPath: managedConfigPlan.recoveryPath,
     stages: [
-      ...operationReceipt.stages.slice(0, 4),
+      ...managedConfigReceipt.stages.slice(0, 4),
       { sequence: 5, stage: "ROLLING_BACK", recordedAt: "2026-07-21T02:12:04Z", resultCode: "rollback_started", evidenceDigest: availableDigest },
       { sequence: 6, stage: "RECOVERY_REQUIRED", recordedAt: "2026-07-21T02:12:05Z", resultCode: "rollback_verification_failed", evidenceDigest: availableDigest },
     ],
   };
-  await mockApi(page, true, health, { receipt: recoveryReceipt });
-  await page.goto("/services/nginx");
-  await page.getByRole("button", { name: "계획 보기" }).first().click();
-  await page.getByRole("button", { name: "비활성화 계획 만들기" }).click();
-  await page.getByRole("button", { name: "변경 적용" }).click();
-  await expect(page.getByRole("heading", { name: "실패 · 수동 복구 필요" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "수동 복구 경로" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "적용 완료" })).toHaveCount(0);
+  await mockApi(page, true, health, { configReceipt: recoveryReceipt });
+  await page.goto("/services/nginx/configurations");
+  await page.getByRole("button", { name: /example\.com/ }).click();
+  await page.getByLabel("Nginx 설정 내용").fill("server {\n  listen 8080;\n}\n");
+  await page.getByRole("button", { name: "저장", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "저장 실패 · 수동 복구 필요" })).toBeVisible();
+  await expect(page.getByText("자동 복구를 완료하지 못했습니다.")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "저장 완료" })).toHaveCount(0);
 });
 
 test("certificate inventory stays read-only and responsive without exposing key material", async ({ page }) => {

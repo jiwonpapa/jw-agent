@@ -11,8 +11,8 @@ use jw_contracts::{
     ManagedConfigResourceView, ManagedConfigRestorePlanRequest, NGINX_SITE_STATE_OPERATION,
     NginxSiteState, NginxSiteStatePlanRequest, OperationReceiptView, OperationStage,
     OpsCapabilityResponse, OpsRejectedResponse, OpsRequest, OpsRequestBody, OpsResponse,
-    OpsResponseBody, Role, RollbackSupport, SERVICE_CONTROL_OPERATION, Subject, UFW_RULE_OPERATION,
-    nginx_enabled_state_digest as enabled_state_digest, sha256_digest,
+    OpsResponseBody, Role, RollbackSupport, SERVICE_CONTROL_OPERATION, ServiceAction, Subject,
+    UFW_RULE_OPERATION, nginx_enabled_state_digest as enabled_state_digest, sha256_digest,
 };
 use serde::Serialize;
 
@@ -2078,18 +2078,14 @@ impl OpsService {
         self.remove_operation_proposal(&terminal);
         Ok(receipt)
     }
-
     fn execute_managed_config(
         &self,
         ledger: &mut Ledger,
         operation: StoredOperation,
         now_ms: i64,
     ) -> Result<OperationReceiptView, OpsError> {
-        let payload = operation
-            .plan
-            .managed_config
-            .clone()
-            .ok_or(OpsError::ForensicLockdown)?;
+        let payload = operation.plan.managed_config.clone();
+        let payload = payload.ok_or(OpsError::ForensicLockdown)?;
         let preflight = match discover_managed_config(&self.paths, &operation.plan.site_id) {
             Ok(resource)
                 if resource.content_digest == operation.plan.available_digest
@@ -2109,6 +2105,19 @@ impl OpsService {
                 return self.cancel_managed_before_apply(ledger, &operation, error.code(), now_ms);
             }
         };
+        if payload.service_action == ServiceAction::ValidateOnly
+            && self
+                .runner
+                .run(preflight.adapter.active())
+                .is_ok_and(|evidence| evidence.success)
+        {
+            return self.cancel_managed_before_apply(
+                ledger,
+                &operation,
+                "reload_required_for_active_service",
+                now_ms,
+            );
+        }
         let proposal = ProposalRecord {
             relative_path: payload.proposal_relative_path.clone(),
             digest: payload.proposal_digest.clone(),
@@ -2231,7 +2240,11 @@ impl OpsService {
             &operation.operation_id,
             Transition {
                 expected: &[OperationStage::Validating],
-                next: OperationStage::Reloading,
+                next: if payload.service_action == ServiceAction::Reload {
+                    OperationStage::Reloading
+                } else {
+                    OperationStage::Verifying
+                },
                 result_code: preflight.adapter.config_valid_code(),
                 evidence_digest: &config_digest,
                 after_digest: None,
@@ -2239,52 +2252,63 @@ impl OpsService {
                 now_ms,
             },
         )?;
-        let reload = match self.runner.run(preflight.adapter.reload()) {
-            Ok(evidence) => evidence,
-            Err(error) => {
-                let code = format!("{}_unavailable", preflight.adapter.reload().as_str());
+        let verification_digest = if payload.service_action == ServiceAction::Reload {
+            let reload = match self.runner.run(preflight.adapter.reload()) {
+                Ok(evidence) => evidence,
+                Err(error) => {
+                    let code = format!("{}_unavailable", preflight.adapter.reload().as_str());
+                    return self.rollback_managed_config(
+                        ledger,
+                        &snapshotted.operation_id,
+                        &code,
+                        &sha256_digest(error.code().as_bytes()),
+                        now_ms,
+                    );
+                }
+            };
+            let reload_digest = command_digest(&reload)?;
+            if !reload.success {
+                let code = format!("{}_failed", preflight.adapter.reload().as_str());
                 return self.rollback_managed_config(
                     ledger,
                     &snapshotted.operation_id,
                     &code,
-                    &sha256_digest(error.code().as_bytes()),
+                    &reload_digest,
                     now_ms,
                 );
             }
+            ledger.transition(
+                &operation.operation_id,
+                Transition {
+                    expected: &[OperationStage::Reloading],
+                    next: OperationStage::Verifying,
+                    result_code: preflight.adapter.reloaded_code(),
+                    evidence_digest: &reload_digest,
+                    after_digest: None,
+                    rollback_result: None,
+                    now_ms,
+                },
+            )?;
+            reload_digest
+        } else {
+            config_digest
         };
-        let reload_digest = command_digest(&reload)?;
-        if !reload.success {
-            let code = format!("{}_failed", preflight.adapter.reload().as_str());
-            return self.rollback_managed_config(
-                ledger,
-                &snapshotted.operation_id,
-                &code,
-                &reload_digest,
-                now_ms,
-            );
-        }
-        ledger.transition(
-            &operation.operation_id,
-            Transition {
-                expected: &[OperationStage::Reloading],
-                next: OperationStage::Verifying,
-                result_code: preflight.adapter.reloaded_code(),
-                evidence_digest: &reload_digest,
-                after_digest: None,
-                rollback_result: None,
-                now_ms,
-            },
-        )?;
         let read_back = discover_managed_config(&self.paths, &snapshotted.plan.site_id);
-        let active = self.runner.run(preflight.adapter.active());
-        let verified = read_back.as_ref().is_ok_and(|resource| {
+        let content_verified = read_back.as_ref().is_ok_and(|resource| {
             resource.content_digest == payload.proposed_content_digest
                 && resource.metadata_digest == snapshotted.plan.enabled_state_digest
-        }) && active.as_ref().is_ok_and(|evidence| evidence.success);
+        });
+        let active = (payload.service_action == ServiceAction::Reload)
+            .then(|| self.runner.run(preflight.adapter.active()));
+        let service_verified = active
+            .as_ref()
+            .is_none_or(|result| result.as_ref().is_ok_and(|evidence| evidence.success));
+        let verified = content_verified && service_verified;
         if !verified {
             let evidence = match active.as_ref() {
-                Ok(value) => command_digest(value)?,
-                Err(_) => sha256_digest(preflight.adapter.active().as_str().as_bytes()),
+                Some(Ok(value)) => command_digest(value)?,
+                Some(Err(_)) => sha256_digest(preflight.adapter.active().as_str().as_bytes()),
+                None => verification_digest,
             };
             return self.rollback_managed_config(
                 ledger,
@@ -2294,14 +2318,17 @@ impl OpsService {
                 now_ms,
             );
         }
-        let active = active?;
+        let succeeded_digest = match active {
+            Some(result) => command_digest(&result?)?,
+            None => verification_digest,
+        };
         let succeeded = ledger.transition(
             &operation.operation_id,
             Transition {
                 expected: &[OperationStage::Verifying],
                 next: OperationStage::Succeeded,
                 result_code: "config_verified",
-                evidence_digest: &command_digest(&active)?,
+                evidence_digest: &succeeded_digest,
                 after_digest: Some(&payload.proposed_content_digest),
                 rollback_result: None,
                 now_ms,
@@ -2357,11 +2384,20 @@ impl OpsService {
             },
         )?;
         let config = self.runner.run(adapter.config_test());
-        let active = self.runner.run(adapter.active());
+        let service_action = operation
+            .plan
+            .managed_config
+            .as_ref()
+            .map(|payload| payload.service_action)
+            .ok_or(OpsError::ForensicLockdown)?;
+        let active =
+            (service_action == ServiceAction::Reload).then(|| self.runner.run(adapter.active()));
         let valid = config
             .as_ref()
             .is_ok_and(|evidence| managed_config_test_succeeded(adapter, evidence))
-            && active.as_ref().is_ok_and(|evidence| evidence.success);
+            && active
+                .as_ref()
+                .is_none_or(|result| result.as_ref().is_ok_and(|evidence| evidence.success));
         if !valid {
             let cancelled = ledger.transition(
                 &operation.operation_id,
@@ -2379,14 +2415,17 @@ impl OpsService {
             self.remove_operation_proposal(operation);
             return Ok(receipt);
         }
-        let active = active?;
+        let evidence_digest = match active {
+            Some(result) => command_digest(&result?)?,
+            None => command_digest(&config?)?,
+        };
         let succeeded = ledger.transition(
             &operation.operation_id,
             Transition {
                 expected: &[OperationStage::Verifying],
                 next: OperationStage::Succeeded,
                 result_code: "verified_noop",
-                evidence_digest: &command_digest(&active)?,
+                evidence_digest: &evidence_digest,
                 after_digest: Some(&operation.plan.available_digest),
                 rollback_result: None,
                 now_ms,
@@ -2468,9 +2507,37 @@ impl OpsService {
                 );
             }
         };
-        let reload = match self.runner.run(restored.adapter.reload()) {
-            Ok(evidence) if evidence.success => evidence,
-            _ => {
+        let validate_only = rolling
+            .plan
+            .managed_config
+            .as_ref()
+            .is_some_and(|payload| payload.service_action == ServiceAction::ValidateOnly);
+        let runtime_evidence = if validate_only {
+            None
+        } else {
+            let reload = match self.runner.run(restored.adapter.reload()) {
+                Ok(evidence) if evidence.success => evidence,
+                _ => {
+                    return self.recovery_required(
+                        ledger,
+                        operation_id,
+                        "rollback_reload_failed",
+                        now_ms,
+                    );
+                }
+            };
+            let active = match self.runner.run(restored.adapter.active()) {
+                Ok(evidence) if evidence.success => evidence,
+                _ => {
+                    return self.recovery_required(
+                        ledger,
+                        operation_id,
+                        "rollback_active_failed",
+                        now_ms,
+                    );
+                }
+            };
+            if !reload.success {
                 return self.recovery_required(
                     ledger,
                     operation_id,
@@ -2478,32 +2545,25 @@ impl OpsService {
                     now_ms,
                 );
             }
-        };
-        let active = match self.runner.run(restored.adapter.active()) {
-            Ok(evidence) if evidence.success => evidence,
-            _ => {
-                return self.recovery_required(
-                    ledger,
-                    operation_id,
-                    "rollback_active_failed",
-                    now_ms,
-                );
-            }
+            Some(active)
         };
         if restored.content_digest != snapshot.content_digest
             || restored.metadata_digest != snapshot.metadata_digest
             || !config.success
-            || !reload.success
         {
             return self.recovery_required(ledger, operation_id, "rollback_verify_failed", now_ms);
         }
+        let rollback_evidence = match runtime_evidence {
+            Some(active) => command_digest(&active)?,
+            None => command_digest(&config)?,
+        };
         let terminal = ledger.transition(
             operation_id,
             Transition {
                 expected: &[OperationStage::RollingBack],
                 next: OperationStage::RolledBack,
                 result_code: "rollback_verified",
-                evidence_digest: &command_digest(&active)?,
+                evidence_digest: &rollback_evidence,
                 after_digest: Some(&snapshot.content_digest),
                 rollback_result: Some("verified"),
                 now_ms,

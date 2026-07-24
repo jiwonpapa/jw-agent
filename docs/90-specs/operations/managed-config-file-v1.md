@@ -7,12 +7,16 @@ Last reviewed: 2026-07-21
 
 ## 목적
 
-Ubuntu 24.04 표준 layout에서 service adapter가 등록한 텍스트 설정 resource 하나를 편집하고, 문법·서비스 상태를 검증하며 실패 시 직전 파일을 복원합니다.
+Ubuntu 24.04 표준 layout의 service-owned config root를 파일 트리로 관찰하고, 기존 텍스트
+설정 resource 하나를 편집합니다. 저장 후 공식 validator와 필요한 service reload를
+수행하며 실패 시 직전 파일을 복원합니다.
 
 ## 비목표
 
 - 사용자가 전달한 절대·상대 path의 root 파일 편집
-- directory 탐색·생성·삭제, binary file, recursive operation
+- service root 밖 directory 탐색
+- directory·file 생성·삭제·이동·rename, permission·owner 변경
+- binary file, secret·private-key 후보
 - include graph 전체나 runtime state의 완전 복원
 - database data·package·firewall·SSH daemon 설정 변경
 - SFTP를 통한 system-owned/protected 설정 우회
@@ -23,16 +27,21 @@ Ubuntu 24.04 표준 layout에서 service adapter가 등록한 텍스트 설정 r
 - Schema version: `1`
 - Target: discovery가 반환한 `resourceId`
 - Assurance target: `G2 REVERSIBLE_CONFIG`
-- 지원 adapter와 profile:
-  - `nginx/ubuntu-standard-v1`: exact `sites-enabled` symlink로 활성화된 file
-  - `nginx/ubuntu-24.04-main-v1`: exact `/etc/nginx/nginx.conf`
-  - `nginx/ubuntu-24.04-conf-d-v1`: main config가 include하는 root-owned `conf.d/*.conf`
-  - `apache/ubuntu-24.04-main-v1`: exact `/etc/apache2/apache2.conf`
-  - `apache/ubuntu-24.04-ports-v1`: exact `/etc/apache2/ports.conf`
-  - `apache/ubuntu-24.04-conf-enabled-v1`: exact enabled symlink의 available `*.conf`
-  - `apache/ubuntu-24.04-site-enabled-v1`: exact enabled symlink의 available `*.conf`
-  - [OPS-PHP-FPM-CONFIG-V1](php-fpm-config-v1.md)의 PHP 8.3 FPM resource
-- inline UTF-8 body 최대는 adapter가 소유하며 Nginx는 `24 KiB`, PHP-FPM은 `128 KiB`입니다. service action은 현재 `reload`만 허용합니다.
+- 지원 adapter와 root:
+  - `nginx/ubuntu-24.04-tree-v1`: `/etc/nginx`
+  - `apache/ubuntu-24.04-tree-v1`: `/etc/apache2`
+  - `php-fpm/ubuntu-24.04-8.3-tree-v1`: `/etc/php/8.3/fpm`
+- 기존 active-resource adapter ID는 저장된 receipt와 restore 호환을 위해 유지하지만 신규
+  inventory는 tree adapter를 사용합니다.
+- tree discovery는 최대 depth `5`, 서비스별 최대 `256` entry, regular file 최대
+  `128 KiB`로 제한합니다.
+- 목록 응답은 path·상태·차단 사유만 반환하고 복구 보장 세부정보를 파일마다 반복하지
+  않습니다. 전체 보장 계약은 선택한 resource detail과 저장 결과에서 제공합니다.
+- extension은 `.conf`, `.load`, `.ini`, 확장자 없는 표준 config file을 허용합니다.
+  certificate·private key·credential·password·secret·token 후보 이름과 PEM private-key
+  marker는 보호 resource로 차단합니다.
+- inline UTF-8 body 최대는 adapter가 소유합니다. service action은 실행 중 service의
+  `reload`, 중지 service의 `validate_only`만 허용합니다.
 - managed-config plan JSON request와 ops IPC envelope: `256 KiB`; 다른 API body는 `64 KiB`를 유지하며 NUL과 layout whitespace 외 ASCII control을 거부합니다.
 - Redis는 adapter별 fixture와 VM evidence 전 `UNSUPPORTED`입니다.
 
@@ -45,7 +54,7 @@ Plan request:
 - exact `schemaVersion`, `operationType`, `resourceId`
 - `expectedContentDigest`, `expectedMetadataDigest`
 - UTF-8 `proposedContent` 또는 별도 single-use body reference
-- `serviceAction`: `reload | restart`; adapter 허용값과 일치해야 함
+- `serviceAction`: `reload | validate_only`; inventory가 반환한 허용값과 일치해야 함
 - `idempotencyKey`: 16–64 ASCII
 
 Approval request:
@@ -67,7 +76,8 @@ plan은 resource display name, masked path, unified diff summary, current/propos
 - regular file, expected owner/mode, max size, UTF-8, no NUL
 - canonical parent와 file descriptor가 allowlisted root 안이며 symlink·hardlink policy 충족
 - current content·metadata digest가 plan과 일치
-- 비활성 site는 전체 Nginx 문법 검증 대상이 아닐 수 있으므로 `resource_not_active`로 거부
+- service root와 relative path를 재결합한 canonical file identity가 plan 때와 동일
+- service가 중지 상태이면 `validate_only`, 실행 중이면 `reload`만 허용
 - ledger continuity, snapshot 공간, temp file용 동일 filesystem 공간 확인
 - lock key `config/{adapterId}/{resourceId}`와 service action global lock
 
@@ -78,8 +88,9 @@ plan은 resource display name, masked path, unified diff summary, current/propos
 3. temp file을 대상으로 가능한 adapter syntax validation 수행
 4. validation 성공만 ledger에 기록하고 approval intent를 재확인
 5. atomic rename, directory `fsync`, content·metadata read-back
-6. fixed systemd reload/restart primitive 실행
-7. syntax, unit active, adapter health probe와 effective/read-back digest 검증
+6. `reload` plan이면 fixed systemd reload primitive 실행; `validate_only`이면 생략
+7. syntax, content/metadata read-back을 검증하고 `reload` plan이면 unit active와 adapter
+   health probe까지 검증
 8. 모든 조건이 맞을 때만 `SUCCEEDED`
 
 Nginx처럼 temp 단일 파일 검사가 불가능한 include layout은 snapshot 뒤 atomic replace하고 `nginx -t`를 실행하되, failure 시 service action 없이 즉시 파일을 원복하고 이전 config로 `nginx -t`를 재검증합니다.
@@ -94,7 +105,10 @@ Nginx처럼 temp 단일 파일 검사가 불가능한 include layout은 snapshot
 - root-only 제안 원문은 성공·취소·원복·복구필요 terminal과 만료 cleanup에서 제거
 - `.jw-agent-<16 hex>.tmp`는 operator resource에서 제외하며 restart 시 owner·hardlink를 검증한 뒤 제거
 
-보장 범위는 대상 파일 bytes·owner·mode와 해당 설정으로 재검증된 service입니다. active connection, in-memory history, 다른 관리자의 동시 외부 변경, include된 다른 파일은 제외합니다.
+보장 범위는 대상 파일 bytes·owner·mode와 수행된 validator·read-back입니다. `reload`
+plan에서만 실행 중 service 상태까지 포함합니다. active connection, in-memory history,
+다른 관리자의 동시 외부 변경, include graph에 실제로 포함되지 않은 inactive file의 runtime
+적용은 제외합니다.
 
 ## Command and evidence policy
 
@@ -107,6 +121,8 @@ executable, argv, cwd, environment allowlist, timeout, output cap은 adapter reg
 ## Acceptance scenarios
 
 - valid save and verified reload
+- inactive service validate-only save without implicit start
+- active·inactive existing config tree discovery
 - unchanged no-op
 - syntax failure with no reload
 - reload and health failure with verified rollback
@@ -116,10 +132,12 @@ executable, argv, cwd, environment allowlist, timeout, output cap은 adapter reg
 - kill at each durable stage and restart reconciliation
 - duplicate/idempotency conflict and concurrent resource/service lock
 - rollback failure produces `RECOVERY_REQUIRED` and exact runbook
-- desktop/tablet/mobile UI shows G2 scope, diff, service action and exclusions before approval
+- desktop/tablet/mobile UI는 저장을 primary action으로 제공하고 plan·G2·digest는 기술
+  세부정보에만 표시
 - selected-resource syntax diagnostic가 안전하게 추출되면 오류 줄을 editor gutter에 표시하고, 위치가 없으면 추측하지 않음
 
-Nginx active-site profile은 `0.2.0~p2.2`에서 `VM_PASS + G2`를 획득했습니다.
-Nginx main/conf.d, Apache와 동적 PHP-FPM pool profile은 신규 VM gate가 통과하기 전까지
-`CODE_ONLY`이며 운영 안전으로 표현하지 않습니다. 비활성 resource와 registry 밖 adapter는
-계속 `UNSUPPORTED`입니다.
+`jw-agent_0.2.0~p2.21_amd64.deb`의 `VM-P2-MANAGED-CONFIG`이 Nginx와 Apache
+service-tree, PHP-FPM resource의 valid save, 공식 validator, reload, syntax rollback,
+read-back과 서비스 연속성을 검증했습니다. package SHA-256은
+`f649e29e9c9560f508b8a9d57ec8b0776ed070ee35adb69986da9f95f4038865`입니다.
+registry 밖 root와 차단된 resource는 계속 `UNSUPPORTED`입니다.

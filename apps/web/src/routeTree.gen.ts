@@ -24,7 +24,7 @@ import { Route as AuthenticatedServicesNginxRouteImport } from './routes/_authen
 import { Route as AuthenticatedServicesPhpFpmRouteImport } from './routes/_authenticated.services.php-fpm'
 import { Route as AuthenticatedSessionReauthRouteImport } from './routes/_authenticated.session.reauth'
 import { Route as AuthenticatedSettingsAccessRouteImport } from './routes/_authenticated.settings.access'
-import { Route as AuthenticatedServicesNginxConfigurationsRouteImport } from './routes/_authenticated.services.nginx.configurations'
+import { Route as AuthenticatedServicesNginxConfigurationsRouteImport } from './routes/_authenticated.services.nginx_.configurations'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -110,9 +110,9 @@ const AuthenticatedSettingsAccessRoute =
   } as any)
 const AuthenticatedServicesNginxConfigurationsRoute =
   AuthenticatedServicesNginxConfigurationsRouteImport.update({
-    id: '/configurations',
-    path: '/configurations',
-    getParentRoute: () => AuthenticatedServicesNginxRoute,
+    id: '/services/nginx_/configurations',
+    path: '/services/nginx/configurations',
+    getParentRoute: () => AuthenticatedRoute,
   } as any)
 
 export interface FileRoutesByFullPath {
@@ -125,7 +125,7 @@ export interface FileRoutesByFullPath {
   '/overview': typeof AuthenticatedOverviewRoute
   '/terminal': typeof AuthenticatedTerminalRoute
   '/services/apache': typeof AuthenticatedServicesApacheRoute
-  '/services/nginx': typeof AuthenticatedServicesNginxRouteWithChildren
+  '/services/nginx': typeof AuthenticatedServicesNginxRoute
   '/services/php-fpm': typeof AuthenticatedServicesPhpFpmRoute
   '/session/reauth': typeof AuthenticatedSessionReauthRoute
   '/settings/access': typeof AuthenticatedSettingsAccessRoute
@@ -142,7 +142,7 @@ export interface FileRoutesByTo {
   '/overview': typeof AuthenticatedOverviewRoute
   '/terminal': typeof AuthenticatedTerminalRoute
   '/services/apache': typeof AuthenticatedServicesApacheRoute
-  '/services/nginx': typeof AuthenticatedServicesNginxRouteWithChildren
+  '/services/nginx': typeof AuthenticatedServicesNginxRoute
   '/services/php-fpm': typeof AuthenticatedServicesPhpFpmRoute
   '/session/reauth': typeof AuthenticatedSessionReauthRoute
   '/settings/access': typeof AuthenticatedSettingsAccessRoute
@@ -161,12 +161,12 @@ export interface FileRoutesById {
   '/_authenticated/overview': typeof AuthenticatedOverviewRoute
   '/_authenticated/terminal': typeof AuthenticatedTerminalRoute
   '/_authenticated/services/apache': typeof AuthenticatedServicesApacheRoute
-  '/_authenticated/services/nginx': typeof AuthenticatedServicesNginxRouteWithChildren
+  '/_authenticated/services/nginx': typeof AuthenticatedServicesNginxRoute
   '/_authenticated/services/php-fpm': typeof AuthenticatedServicesPhpFpmRoute
   '/_authenticated/session/reauth': typeof AuthenticatedSessionReauthRoute
   '/_authenticated/settings/access': typeof AuthenticatedSettingsAccessRoute
   '/_authenticated/services/': typeof AuthenticatedServicesIndexRoute
-  '/_authenticated/services/nginx/configurations': typeof AuthenticatedServicesNginxConfigurationsRoute
+  '/_authenticated/services/nginx_/configurations': typeof AuthenticatedServicesNginxConfigurationsRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -220,7 +220,7 @@ export interface FileRouteTypes {
     | '/_authenticated/session/reauth'
     | '/_authenticated/settings/access'
     | '/_authenticated/services/'
-    | '/_authenticated/services/nginx/configurations'
+    | '/_authenticated/services/nginx_/configurations'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -336,30 +336,15 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedSettingsAccessRouteImport
       parentRoute: typeof AuthenticatedRoute
     }
-    '/_authenticated/services/nginx/configurations': {
-      id: '/_authenticated/services/nginx/configurations'
-      path: '/configurations'
+    '/_authenticated/services/nginx_/configurations': {
+      id: '/_authenticated/services/nginx_/configurations'
+      path: '/services/nginx/configurations'
       fullPath: '/services/nginx/configurations'
       preLoaderRoute: typeof AuthenticatedServicesNginxConfigurationsRouteImport
-      parentRoute: typeof AuthenticatedServicesNginxRoute
+      parentRoute: typeof AuthenticatedRoute
     }
   }
 }
-
-interface AuthenticatedServicesNginxRouteChildren {
-  AuthenticatedServicesNginxConfigurationsRoute: typeof AuthenticatedServicesNginxConfigurationsRoute
-}
-
-const AuthenticatedServicesNginxRouteChildren: AuthenticatedServicesNginxRouteChildren =
-  {
-    AuthenticatedServicesNginxConfigurationsRoute:
-      AuthenticatedServicesNginxConfigurationsRoute,
-  }
-
-const AuthenticatedServicesNginxRouteWithChildren =
-  AuthenticatedServicesNginxRoute._addFileChildren(
-    AuthenticatedServicesNginxRouteChildren,
-  )
 
 interface AuthenticatedRouteChildren {
   AuthenticatedCertificatesRoute: typeof AuthenticatedCertificatesRoute
@@ -369,11 +354,12 @@ interface AuthenticatedRouteChildren {
   AuthenticatedOverviewRoute: typeof AuthenticatedOverviewRoute
   AuthenticatedTerminalRoute: typeof AuthenticatedTerminalRoute
   AuthenticatedServicesApacheRoute: typeof AuthenticatedServicesApacheRoute
-  AuthenticatedServicesNginxRoute: typeof AuthenticatedServicesNginxRouteWithChildren
+  AuthenticatedServicesNginxRoute: typeof AuthenticatedServicesNginxRoute
   AuthenticatedServicesPhpFpmRoute: typeof AuthenticatedServicesPhpFpmRoute
   AuthenticatedSessionReauthRoute: typeof AuthenticatedSessionReauthRoute
   AuthenticatedSettingsAccessRoute: typeof AuthenticatedSettingsAccessRoute
   AuthenticatedServicesIndexRoute: typeof AuthenticatedServicesIndexRoute
+  AuthenticatedServicesNginxConfigurationsRoute: typeof AuthenticatedServicesNginxConfigurationsRoute
 }
 
 const AuthenticatedRouteChildren: AuthenticatedRouteChildren = {
@@ -384,11 +370,13 @@ const AuthenticatedRouteChildren: AuthenticatedRouteChildren = {
   AuthenticatedOverviewRoute: AuthenticatedOverviewRoute,
   AuthenticatedTerminalRoute: AuthenticatedTerminalRoute,
   AuthenticatedServicesApacheRoute: AuthenticatedServicesApacheRoute,
-  AuthenticatedServicesNginxRoute: AuthenticatedServicesNginxRouteWithChildren,
+  AuthenticatedServicesNginxRoute: AuthenticatedServicesNginxRoute,
   AuthenticatedServicesPhpFpmRoute: AuthenticatedServicesPhpFpmRoute,
   AuthenticatedSessionReauthRoute: AuthenticatedSessionReauthRoute,
   AuthenticatedSettingsAccessRoute: AuthenticatedSettingsAccessRoute,
   AuthenticatedServicesIndexRoute: AuthenticatedServicesIndexRoute,
+  AuthenticatedServicesNginxConfigurationsRoute:
+    AuthenticatedServicesNginxConfigurationsRoute,
 }
 
 const AuthenticatedRouteWithChildren = AuthenticatedRoute._addFileChildren(

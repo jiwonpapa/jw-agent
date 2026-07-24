@@ -16,7 +16,6 @@ import { phpFpmQueryOptions, queryKeys } from "../../shared/api/queries";
 import { formatDateTime } from "../../shared/domain/format";
 import { AssuranceDetails, AssuranceMark } from "../../shared/ui/assurance";
 import { Button } from "../../shared/ui/button";
-import { Sheet } from "../../shared/ui/sheet";
 import { Skeleton } from "../../shared/ui/skeleton";
 import { StatusMark } from "../../shared/ui/status-mark";
 import { SurfaceState } from "../../shared/ui/surface-state";
@@ -36,7 +35,6 @@ const EDITOR_PROFILE: ManagedConfigEditorProfile = {
 export function PhpFpmScreen() {
   const inventory = useQuery(phpFpmQueryOptions);
   const workflow = useManagedConfigWorkflow(queryKeys.phpFpm);
-  const [editorOpen, setEditorOpen] = useState(false);
   const [selectedConfig, setSelectedConfig] = useState<PhpFpmManagedConfigView | null>(null);
   const runtime = inventory.data?.runtimes[0] ?? null;
 
@@ -44,13 +42,11 @@ export function PhpFpmScreen() {
     const capability = toCapability(config);
     if (capability === null) return;
     setSelectedConfig(config);
-    setEditorOpen(true);
     await workflow.open(capability);
   }
 
-  function closeEditor(open: boolean): void {
+  function closeEditor(): void {
     if (
-      !open &&
       workflow.resource !== null &&
       workflow.draft !== workflow.resource.content &&
       workflow.receipt?.terminalState !== "SUCCEEDED" &&
@@ -58,11 +54,53 @@ export function PhpFpmScreen() {
     ) {
       return;
     }
-    setEditorOpen(open);
-    if (!open) {
-      workflow.close();
-      setSelectedConfig(null);
-    }
+    workflow.close();
+    setSelectedConfig(null);
+  }
+
+  if (selectedConfig !== null) {
+    const capability = toCapability(selectedConfig);
+    return (
+      <div className="animate-state-in">
+        <WorkspaceHeader
+          eyebrow="Services / Runtime / Configuration"
+          title={selectedConfig.displayName}
+          description="전체 화면에서 편집합니다. 저장하면 문법 검사·reload·작동 확인을 거치며 실패 시 이전 파일을 복구합니다."
+        />
+        <section className="my-6 min-h-[75vh] rounded-panel border border-border bg-surface p-3 sm:p-6">
+          {workflow.loading ? (
+            <div className="flex min-h-72 items-center justify-center gap-3 text-sm text-muted">
+              <LoaderCircle aria-hidden="true" className="size-5 animate-spin" />
+              설정 파일을 확인하고 있습니다.
+            </div>
+          ) : workflow.resource !== null && capability !== null ? (
+            <ManagedConfigEditor
+              profile={EDITOR_PROFILE}
+              resource={workflow.resource}
+              draft={workflow.draft}
+              plan={workflow.plan}
+              accepted={workflow.accepted}
+              receipt={workflow.receipt}
+              planning={workflow.planning}
+              executing={workflow.executing}
+              errorMessage={workflow.errorMessage}
+              diagnosticLine={workflow.diagnosticLine}
+              serviceAction="reload"
+              onDraftChange={workflow.changeDraft}
+              onBack={closeEditor}
+              onSave={() => void workflow.save(capability)}
+              onRevise={workflow.revise}
+            />
+          ) : (
+            <SurfaceState
+              kind="error"
+              title="설정 편집기를 열 수 없습니다"
+              description={workflow.errorMessage ?? "지원 조건을 다시 관찰한 뒤 시도하세요."}
+            />
+          )}
+        </section>
+      </div>
+    );
   }
 
   return (
@@ -91,40 +129,6 @@ export function PhpFpmScreen() {
         <RuntimeWorkspace runtime={runtime} observedAt={inventory.data.observedAt} loadingEditor={workflow.loading} onEdit={(config) => void openEditor(config)} />
       )}
 
-      <Sheet
-        open={editorOpen}
-        onOpenChange={closeEditor}
-        title={selectedConfig?.displayName ?? "PHP 8.3 FPM 설정"}
-        description="diff·문법검사·reload·실패 시 자동 원복"
-        side="right"
-        size="fullscreen"
-      >
-        {workflow.loading ? (
-          <div className="flex items-center gap-3 text-sm text-muted"><LoaderCircle aria-hidden="true" className="size-5 animate-spin" />설정 파일과 안전 조건을 확인하고 있습니다.</div>
-        ) : workflow.resource !== null && selectedConfig !== null && toCapability(selectedConfig) !== null ? (
-          <ManagedConfigEditor
-            profile={EDITOR_PROFILE}
-            resource={workflow.resource}
-            draft={workflow.draft}
-            plan={workflow.plan}
-            accepted={workflow.accepted}
-            receipt={workflow.receipt}
-            planning={workflow.planning}
-            executing={workflow.executing}
-            errorMessage={workflow.errorMessage}
-            diagnosticLine={workflow.diagnosticLine}
-            onDraftChange={workflow.changeDraft}
-            onBack={() => closeEditor(false)}
-            onSave={() => {
-              const capability = toCapability(selectedConfig);
-              if (capability !== null) void workflow.save(capability);
-            }}
-            onRevise={workflow.revise}
-          />
-        ) : (
-          <SurfaceState kind="error" title="설정 편집기를 열 수 없습니다" description={workflow.errorMessage ?? "지원 조건을 다시 관찰한 뒤 시도하세요."} />
-        )}
-      </Sheet>
     </div>
   );
 }

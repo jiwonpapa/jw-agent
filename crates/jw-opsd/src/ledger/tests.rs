@@ -1,9 +1,11 @@
 use jw_contracts::{
-    AssuranceLevel, AssuranceView, NGINX_SITE_STATE_OPERATION, NginxSiteState, OperationStage,
-    Role, RollbackSupport, Subject, sha256_digest,
+    AssuranceLevel, AssuranceView, MANAGED_CONFIG_OPERATION, NGINX_SITE_STATE_OPERATION,
+    NGINX_TREE_CONFIG_ADAPTER_ID, NGINX_TREE_RESOURCE_PREFIX, NginxSiteState, OperationStage, Role,
+    RollbackSupport, ServiceAction, Subject, managed_service_config_resource_id, sha256_digest,
 };
 
 use crate::config::OpsPaths;
+use crate::managed_config::ManagedConfigPlanPayload;
 
 use super::{
     CHECKPOINT_PENDING_KEY, Connection, Ledger, StoredPlan, Transition, clear_completed_checkpoint,
@@ -109,6 +111,38 @@ fn missing_operation_has_a_typed_error() -> Result<(), String> {
         ledger.load_operation("missing"),
         Err(crate::error::OpsError::Rejected("operation_missing"))
     ));
+    std::fs::remove_dir_all(root).map_err(|error| error.to_string())
+}
+
+#[test]
+fn tree_plan_keeps_its_relative_path_in_the_masked_view() -> Result<(), String> {
+    let root = test_root("tree-plan-path")?;
+    let paths = OpsPaths::for_test(&root);
+    let ledger = Ledger::open(&paths).map_err(|error| error.to_string())?;
+    let mut plan = fixture_plan();
+    plan.operation_type = String::from(MANAGED_CONFIG_OPERATION);
+    plan.site_id = managed_service_config_resource_id(
+        NGINX_TREE_RESOURCE_PREFIX,
+        NGINX_TREE_CONFIG_ADAPTER_ID,
+        "sites-available/example.com",
+    );
+    plan.display_name = String::from("sites-available/example.com");
+    plan.managed_config = Some(ManagedConfigPlanPayload {
+        proposal_relative_path: String::from("proposal"),
+        proposal_digest: sha256_digest(b"proposal"),
+        basename: Some(String::from("example.com")),
+        proposed_content_digest: sha256_digest(b"server {}\n"),
+        current_bytes: 10,
+        proposed_bytes: 10,
+        added_lines: 1,
+        removed_lines: 1,
+        diff_summary: vec![String::from("changed")],
+        service_action: ServiceAction::Reload,
+    });
+    let view = ledger
+        .managed_config_plan_view(&plan)
+        .map_err(|error| error.to_string())?;
+    assert_eq!(view.masked_path, "/etc/nginx/sites-available/example.com");
     std::fs::remove_dir_all(root).map_err(|error| error.to_string())
 }
 

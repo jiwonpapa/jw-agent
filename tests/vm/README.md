@@ -25,9 +25,9 @@ JW_VM_PUBLIC_ADDRESS=192.168.0.142
 JW_VM_CA_CERT=/path/to/test-ca.crt
 JW_VM_ADMIN_USER=jwvmadmin
 JW_VM_PASSWORD_FILE=/path/to/mode-0600-fixture-password
-JW_VM_REMOTE_PACKAGE=/home/neojins/jw-agent_0.2.0~p2.20_amd64.deb
-JW_VM_EXPECTED_PACKAGE_SHA256=8fbca64eaa2d47ccfa49fabdfaa7c5bcff1b31de382ad3ca91693146277e170a
-JW_VM_EXPECTED_VERSION=0.2.0~p2.20
+JW_VM_REMOTE_PACKAGE=/home/neojins/jw-agent_0.2.0~p2.21_amd64.deb
+JW_VM_EXPECTED_PACKAGE_SHA256=f649e29e9c9560f508b8a9d57ec8b0776ed070ee35adb69986da9f95f4038865
+JW_VM_EXPECTED_VERSION=0.2.0~p2.21
 cargo xtask verify p2-vm
 ```
 
@@ -41,7 +41,7 @@ certificate를 VM management edge에 설치합니다.
 ## Current VM evidence
 
 - domain: `jw-agent-p1`, Ubuntu 24.04.4 LTS, kernel `6.8.0-136-generic`
-- package: `jw-agent 0.2.0~p2.20`, SHA-256 `8fbca64eaa2d47ccfa49fabdfaa7c5bcff1b31de382ad3ca91693146277e170a`, package/runtime gate clean
+- package: `jw-agent 0.2.0~p2.21`, SHA-256 `f649e29e9c9560f508b8a9d57ec8b0776ed070ee35adb69986da9f95f4038865`, package/runtime gate clean
 - lanes: `p2-local` 23 PASS, `p2-browser` 8 PASS with 43 browser scenarios, `p2-vm` 28 PASS
 - independent edge: non-root Rustls 9443, fixed live Unix readiness, edge-missing Nginx stop denial, Nginx inactive 상태의 authenticated UI·API continuity
 - service inventory: real Nginx and JW Agent internal classification plus a disposable failed custom unit surfaced as discovered read-only
@@ -62,7 +62,7 @@ certificate를 VM management edge에 설치합니다.
 - automated TOTP step-up: recovery-only admin enrollment, two consecutive codes, `risky_operations`, PAM+TOTP 15분 관리 모드, 동일 time-step replay denial, one-time recovery reset, session revoke, mode-0600 wrapping key and encrypted-state cleanup
 - package runtime: opsd host network namespace, exact `CAP_NET_BIND_SERVICE|CAP_NET_ADMIN`, `IPAddressDeny=any`, no listening IP socket, root-owned `0600` ledger, bounded UDS
 - local console: grouped navigation, explicit non-root Linux identity, responsive resource meters and service-family cards, current-subject typed-operation history
-- real browser: public HTTPS 관리 모드 시각 증거와 p2.20 public HTTPS·API를 유지하며 43개 mock browser scenario PASS
+- real browser: public HTTPS 관리 모드 시각 증거와 p2.21 public HTTPS·API를 유지하며 43개 mock browser scenario PASS
 
 This is a private-LAN `.test` host with a dedicated management-edge test CA.
 The Certbot runner boundary, read-only inventory, renewal dry-run, guided issue

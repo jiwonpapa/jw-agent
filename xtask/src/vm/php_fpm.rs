@@ -180,7 +180,7 @@ fn plan(
         || !response.body.contains("\"level\":\"g2_reversible_config\"")
     {
         return Err(String::from(
-            "PHP-FPM plan omitted adapter, masked path, or G2 assurance",
+            "PHP-FPM plan omitted adapter, masked path, or recovery assurance",
         ));
     }
     Ok(ManagedConfigPlanFields {
@@ -262,14 +262,15 @@ fn require_inventory_contract(body: &str) -> Result<(), String> {
 fn require_resource_contract(body: &str) -> Result<(), String> {
     if json_unsigned_field(body, "maxBytes")? == 131_072
         && body.contains("\"adapterId\":\"php-fpm/ubuntu-24.04-8.3-v1\"")
-        && body.contains("\"allowedServiceActions\":[\"reload\"]")
+        && body.contains("\"reload\"")
+        && body.contains("\"validate_only\"")
         && body.contains("\"level\":\"g2_reversible_config\"")
         && body.contains("\"rollbackSupport\":\"automatic_bounded\"")
     {
         Ok(())
     } else {
         Err(String::from(
-            "PHP-FPM resource omitted its 128 KiB bounded G2 contract",
+            "PHP-FPM resource omitted its 128 KiB bounded validation and recovery contract",
         ))
     }
 }

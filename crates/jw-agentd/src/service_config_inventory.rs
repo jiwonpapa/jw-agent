@@ -2,16 +2,13 @@ use std::fs::File;
 use std::io::Read;
 #[cfg(unix)]
 use std::os::unix::fs::MetadataExt;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use jw_contracts::{
-    APACHE_CONF_CONFIG_ADAPTER_ID, APACHE_CONF_RESOURCE_PREFIX, APACHE_MAIN_CONFIG_ADAPTER_ID,
-    APACHE_MAIN_RESOURCE_PREFIX, APACHE_PORTS_CONFIG_ADAPTER_ID, APACHE_PORTS_RESOURCE_PREFIX,
-    APACHE_SITE_CONFIG_ADAPTER_ID, APACHE_SITE_RESOURCE_PREFIX, AssuranceLevel, AssuranceView,
-    MANAGED_CONFIG_MAX_BYTES, MANAGED_CONFIG_OPERATION, MANAGED_SERVICE_CONFIG_MAX_ENTRIES,
-    ManagedServiceConfigInventoryView, ManagedServiceConfigView, NGINX_CONF_D_CONFIG_ADAPTER_ID,
-    NGINX_CONF_D_RESOURCE_PREFIX, NGINX_MAIN_CONFIG_ADAPTER_ID, NGINX_MAIN_RESOURCE_PREFIX,
-    OPERATION_SCHEMA_VERSION, ObservationStatus, RollbackSupport, ServiceRuntimeState,
+    APACHE_TREE_CONFIG_ADAPTER_ID, APACHE_TREE_RESOURCE_PREFIX, MANAGED_CONFIG_MAX_BYTES,
+    MANAGED_CONFIG_OPERATION, MANAGED_SERVICE_CONFIG_MAX_DEPTH, MANAGED_SERVICE_CONFIG_MAX_ENTRIES,
+    ManagedServiceConfigInventoryView, ManagedServiceConfigView, NGINX_TREE_CONFIG_ADAPTER_ID,
+    NGINX_TREE_RESOURCE_PREFIX, OPERATION_SCHEMA_VERSION, ObservationStatus, ServiceRuntimeState,
     ServicesView, managed_config_bytes_supported, managed_service_config_resource_id,
 };
 
@@ -46,8 +43,32 @@ pub fn observe_service_configs(
         );
     }
     match service_key {
-        "nginx" => observe_nginx(profile, services, observed_at),
-        "apache" => observe_apache(profile, services, observed_at),
+        "nginx" => observe_tree(
+            services,
+            TreeProfile {
+                service_key: "nginx",
+                unit_name: "nginx.service",
+                display_name: "Nginx",
+                masked_root: "/etc/nginx",
+                root: &profile.nginx_root,
+                adapter_id: NGINX_TREE_CONFIG_ADAPTER_ID,
+                resource_prefix: NGINX_TREE_RESOURCE_PREFIX,
+            },
+            observed_at,
+        ),
+        "apache" => observe_tree(
+            services,
+            TreeProfile {
+                service_key: "apache",
+                unit_name: "apache2.service",
+                display_name: "Apache HTTP Server",
+                masked_root: "/etc/apache2",
+                root: &profile.apache_root,
+                adapter_id: APACHE_TREE_CONFIG_ADAPTER_ID,
+                resource_prefix: APACHE_TREE_RESOURCE_PREFIX,
+            },
+            observed_at,
+        ),
         _ => empty_inventory(
             observed_at,
             service_key,
@@ -58,224 +79,142 @@ pub fn observe_service_configs(
     }
 }
 
-fn observe_nginx(
-    profile: &ServiceConfigObservationProfile,
+struct TreeProfile<'a> {
+    service_key: &'a str,
+    unit_name: &'a str,
+    display_name: &'a str,
+    masked_root: &'a str,
+    root: &'a Path,
+    adapter_id: &'a str,
+    resource_prefix: &'a str,
+}
+
+fn observe_tree(
     services: &ServicesView,
+    profile: TreeProfile<'_>,
     observed_at: String,
 ) -> ManagedServiceConfigInventoryView {
-    let unit = "nginx.service";
     let Some(service) = services
         .services
         .iter()
-        .find(|service| service.unit_name == unit)
+        .find(|service| service.unit_name == profile.unit_name)
     else {
         return empty_inventory(
             observed_at,
-            "nginx",
-            unit,
-            "Nginx",
+            profile.service_key,
+            profile.unit_name,
+            profile.display_name,
             ObservationStatus::NotInstalled,
         );
     };
-    let active = service_active(service.runtime_state);
-    let main = profile.nginx_root.join("nginx.conf");
-    let mut configs = vec![config_view(
-        NGINX_MAIN_RESOURCE_PREFIX,
-        NGINX_MAIN_CONFIG_ADAPTER_ID,
-        "nginx.conf",
-        "Nginx · nginx.conf",
-        "/etc/nginx/nginx.conf",
-        &main,
-        active,
-        "Nginx",
-    )];
-    let conf_d_active = std::fs::read_to_string(&main)
-        .is_ok_and(|content| content.contains("include /etc/nginx/conf.d/*.conf;"));
-    append_directory(
-        &mut configs,
-        &profile.nginx_root.join("conf.d"),
-        None,
-        NGINX_CONF_D_RESOURCE_PREFIX,
-        NGINX_CONF_D_CONFIG_ADAPTER_ID,
-        "Nginx · conf.d",
-        "/etc/nginx/conf.d",
-        active && conf_d_active,
-        if conf_d_active {
-            None
-        } else {
-            Some("include_not_active")
-        },
-        "Nginx",
+    let service_active = matches!(
+        service.runtime_state,
+        ServiceRuntimeState::Running | ServiceRuntimeState::Active
     );
-    finish_inventory(observed_at, "nginx", unit, "Nginx", configs)
+    let mut files = Vec::new();
+    collect_tree_files(profile.root, profile.root, 0, &mut files);
+    files.sort();
+    let truncated = files.len() > MANAGED_SERVICE_CONFIG_MAX_ENTRIES;
+    files.truncate(MANAGED_SERVICE_CONFIG_MAX_ENTRIES);
+    let configs = files
+        .into_iter()
+        .filter_map(|path| {
+            let relative = path.strip_prefix(profile.root).ok()?;
+            let relative_path = safe_relative_path(relative)?;
+            let blocked_reason = regular_file_blocked_reason(&path, &relative_path);
+            let available = blocked_reason.is_none();
+            let loaded = resource_loaded(profile.service_key, profile.root, &relative_path);
+            Some(ManagedServiceConfigView {
+                resource_id: managed_service_config_resource_id(
+                    profile.resource_prefix,
+                    profile.adapter_id,
+                    &relative_path,
+                ),
+                operation_type: String::from(MANAGED_CONFIG_OPERATION),
+                schema_version: OPERATION_SCHEMA_VERSION,
+                display_name: relative
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .map_or_else(|| relative_path.clone(), str::to_owned),
+                masked_path: format!("{}/{}", profile.masked_root, relative_path),
+                relative_path: relative_path.clone(),
+                loaded,
+                service_active,
+                available,
+                blocked_reason: blocked_reason.clone(),
+            })
+        })
+        .collect();
+    ManagedServiceConfigInventoryView {
+        observed_at,
+        status: ObservationStatus::Observed,
+        service_key: String::from(profile.service_key),
+        unit_name: String::from(profile.unit_name),
+        display_name: String::from(profile.display_name),
+        configs,
+        truncated,
+    }
 }
 
-fn observe_apache(
-    profile: &ServiceConfigObservationProfile,
-    services: &ServicesView,
-    observed_at: String,
-) -> ManagedServiceConfigInventoryView {
-    let unit = "apache2.service";
-    let Some(service) = services
-        .services
-        .iter()
-        .find(|service| service.unit_name == unit)
-    else {
-        return empty_inventory(
-            observed_at,
-            "apache",
-            unit,
-            "Apache HTTP Server",
-            ObservationStatus::NotInstalled,
-        );
-    };
-    let active = service_active(service.runtime_state);
-    let mut configs = vec![
-        config_view(
-            APACHE_MAIN_RESOURCE_PREFIX,
-            APACHE_MAIN_CONFIG_ADAPTER_ID,
-            "apache2.conf",
-            "Apache · apache2.conf",
-            "/etc/apache2/apache2.conf",
-            &profile.apache_root.join("apache2.conf"),
-            active,
-            "Apache",
-        ),
-        config_view(
-            APACHE_PORTS_RESOURCE_PREFIX,
-            APACHE_PORTS_CONFIG_ADAPTER_ID,
-            "ports.conf",
-            "Apache · ports.conf",
-            "/etc/apache2/ports.conf",
-            &profile.apache_root.join("ports.conf"),
-            active,
-            "Apache",
-        ),
-    ];
-    append_directory(
-        &mut configs,
-        &profile.apache_root.join("conf-available"),
-        Some(&profile.apache_root.join("conf-enabled")),
-        APACHE_CONF_RESOURCE_PREFIX,
-        APACHE_CONF_CONFIG_ADAPTER_ID,
-        "Apache · conf",
-        "/etc/apache2/conf-available",
-        active,
-        None,
-        "Apache",
-    );
-    append_directory(
-        &mut configs,
-        &profile.apache_root.join("sites-available"),
-        Some(&profile.apache_root.join("sites-enabled")),
-        APACHE_SITE_RESOURCE_PREFIX,
-        APACHE_SITE_CONFIG_ADAPTER_ID,
-        "Apache · site",
-        "/etc/apache2/sites-available",
-        active,
-        None,
-        "Apache",
-    );
-    finish_inventory(observed_at, "apache", unit, "Apache HTTP Server", configs)
-}
-
-#[allow(clippy::too_many_arguments)]
-fn append_directory(
-    configs: &mut Vec<ManagedServiceConfigView>,
-    available_root: &Path,
-    enabled_root: Option<&Path>,
-    prefix: &str,
-    adapter_id: &str,
-    display_prefix: &str,
-    masked_root: &str,
-    service_active: bool,
-    forced_reason: Option<&str>,
-    service_name: &str,
-) {
-    let Ok(entries) = std::fs::read_dir(available_root) else {
+fn collect_tree_files(root: &Path, directory: &Path, depth: usize, files: &mut Vec<PathBuf>) {
+    if depth > MANAGED_SERVICE_CONFIG_MAX_DEPTH || files.len() > MANAGED_SERVICE_CONFIG_MAX_ENTRIES
+    {
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(directory) else {
         return;
     };
-    let mut names = entries
+    let mut paths = entries
         .filter_map(Result::ok)
-        .filter_map(|entry| entry.file_name().to_str().map(str::to_owned))
-        .filter(|name| safe_config_basename(name))
+        .map(|entry| entry.path())
         .collect::<Vec<_>>();
-    names.sort();
-    for basename in names {
-        if configs.len() > MANAGED_SERVICE_CONFIG_MAX_ENTRIES {
-            break;
+    paths.sort();
+    for path in paths {
+        if files.len() > MANAGED_SERVICE_CONFIG_MAX_ENTRIES {
+            return;
         }
-        let enabled =
-            enabled_root.is_none_or(|root| enabled_link_matches(available_root, root, &basename));
-        let reason = forced_reason.or((!enabled).then_some("resource_not_active"));
-        configs.push(config_view_with_reason(
-            prefix,
-            adapter_id,
-            &basename,
-            &format!("{display_prefix} · {basename}"),
-            &format!("{masked_root}/{basename}"),
-            &available_root.join(&basename),
-            service_active && enabled && reason.is_none(),
-            reason,
-            service_name,
-        ));
+        let Ok(metadata) = std::fs::symlink_metadata(&path) else {
+            continue;
+        };
+        if metadata.file_type().is_symlink() {
+            continue;
+        }
+        if metadata.is_dir() {
+            collect_tree_files(root, &path, depth.saturating_add(1), files);
+        } else if metadata.is_file() && path.starts_with(root) {
+            files.push(path);
+        }
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-fn config_view(
-    prefix: &str,
-    adapter_id: &str,
-    logical_name: &str,
-    display_name: &str,
-    masked_path: &str,
-    path: &Path,
-    service_active: bool,
-    service_name: &str,
-) -> ManagedServiceConfigView {
-    config_view_with_reason(
-        prefix,
-        adapter_id,
-        logical_name,
-        display_name,
-        masked_path,
-        path,
-        service_active,
-        None,
-        service_name,
-    )
-}
-
-#[allow(clippy::too_many_arguments)]
-fn config_view_with_reason(
-    prefix: &str,
-    adapter_id: &str,
-    logical_name: &str,
-    display_name: &str,
-    masked_path: &str,
-    path: &Path,
-    service_active: bool,
-    forced_reason: Option<&str>,
-    service_name: &str,
-) -> ManagedServiceConfigView {
-    let reason = forced_reason
-        .map(str::to_owned)
-        .or_else(|| (!service_active).then(|| String::from("service_inactive")))
-        .or_else(|| regular_file_blocked_reason(path));
-    let available = reason.is_none();
-    ManagedServiceConfigView {
-        resource_id: managed_service_config_resource_id(prefix, adapter_id, logical_name),
-        operation_type: String::from(MANAGED_CONFIG_OPERATION),
-        schema_version: OPERATION_SCHEMA_VERSION,
-        display_name: String::from(display_name),
-        masked_path: String::from(masked_path),
-        available,
-        blocked_reason: reason.clone(),
-        assurance: service_config_assurance(service_name, display_name, available, reason),
+fn safe_relative_path(path: &Path) -> Option<String> {
+    if path.components().count() > MANAGED_SERVICE_CONFIG_MAX_DEPTH.saturating_add(1)
+        || path
+            .components()
+            .any(|component| !matches!(component, Component::Normal(_)))
+    {
+        return None;
     }
+    let value = path.to_str()?;
+    if value.is_empty()
+        || value.len() > 512
+        || value.split('/').any(|part| {
+            part.is_empty()
+                || part.starts_with('.')
+                || !part
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+        })
+    {
+        return None;
+    }
+    Some(String::from(value))
 }
 
-fn regular_file_blocked_reason(path: &Path) -> Option<String> {
+fn regular_file_blocked_reason(path: &Path, relative_path: &str) -> Option<String> {
+    if secret_candidate(relative_path) {
+        return Some(String::from("protected_resource"));
+    }
     let metadata = match std::fs::symlink_metadata(path) {
         Ok(value) => value,
         Err(_) => return Some(String::from("resource_missing")),
@@ -307,91 +246,64 @@ fn regular_file_blocked_reason(path: &Path) -> Option<String> {
     {
         return Some(String::from("invalid_encoding"));
     }
+    if contains_private_key_marker(&bytes) {
+        return Some(String::from("protected_resource"));
+    }
     None
 }
 
-fn enabled_link_matches(available_root: &Path, enabled_root: &Path, basename: &str) -> bool {
-    let link = enabled_root.join(basename);
-    let Ok(metadata) = std::fs::symlink_metadata(&link) else {
-        return false;
-    };
-    if !metadata.file_type().is_symlink() {
-        return false;
-    }
-    let Ok(target) = std::fs::read_link(link) else {
-        return false;
-    };
-    let Some(directory) = available_root.file_name().and_then(|name| name.to_str()) else {
-        return false;
-    };
-    let relative_target = format!("../{directory}/{basename}");
-    target == available_root.join(basename) || target == Path::new(&relative_target)
+fn secret_candidate(relative_path: &str) -> bool {
+    let lowered = relative_path.to_ascii_lowercase();
+    [
+        "private",
+        "privkey",
+        "credential",
+        "password",
+        "passwd",
+        "secret",
+        "token",
+    ]
+    .iter()
+    .any(|marker| lowered.contains(marker))
+        || [".key", ".pem", ".p12", ".pfx"]
+            .iter()
+            .any(|suffix| lowered.ends_with(suffix))
 }
 
-fn safe_config_basename(value: &str) -> bool {
-    value.ends_with(".conf")
-        && value.len() <= 128
-        && !value.starts_with('.')
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+fn contains_private_key_marker(bytes: &[u8]) -> bool {
+    [
+        b"-----BEGIN PRIVATE KEY-----".as_slice(),
+        b"-----BEGIN RSA PRIVATE KEY-----".as_slice(),
+        b"-----BEGIN EC PRIVATE KEY-----".as_slice(),
+        b"-----BEGIN OPENSSH PRIVATE KEY-----".as_slice(),
+    ]
+    .iter()
+    .any(|marker| bytes.windows(marker.len()).any(|window| window == *marker))
 }
 
-fn service_active(state: ServiceRuntimeState) -> bool {
-    matches!(
-        state,
-        ServiceRuntimeState::Running | ServiceRuntimeState::Active
-    )
-}
-
-fn service_config_assurance(
-    service_name: &str,
-    resource_name: &str,
-    operation_available: bool,
-    reason: Option<String>,
-) -> AssuranceView {
-    AssuranceView {
-        level: AssuranceLevel::G2ReversibleConfig,
-        rollback_support: RollbackSupport::AutomaticBounded,
-        operation_available,
-        scope: vec![format!(
-            "{resource_name} 한 파일과 검증된 {service_name} reload"
-        )],
-        excluded_effects: vec![
-            String::from("선택하지 않은 설정 파일과 진행 중 request"),
-            String::from("제품 밖 root 사용자의 동시 변경"),
-        ],
-        apply_verifier: vec![
-            String::from("원자 교체와 content·metadata read-back"),
-            format!("{service_name} 공식 문법 검사"),
-            format!("{service_name} reload 후 active 확인"),
-        ],
-        rollback_verifier: vec![
-            String::from("이전 bytes·owner·mode 복원"),
-            String::from("문법 검사와 reload 후 active 재확인"),
-        ],
-        reason,
+fn resource_loaded(service_key: &str, root: &Path, relative_path: &str) -> bool {
+    match service_key {
+        "nginx" => {
+            relative_path == "nginx.conf"
+                || relative_path.starts_with("conf.d/")
+                || symlink_exists_for(root, "sites-enabled", relative_path, "sites-available")
+        }
+        "apache" => {
+            matches!(relative_path, "apache2.conf" | "ports.conf" | "envvars")
+                || symlink_exists_for(root, "conf-enabled", relative_path, "conf-available")
+                || symlink_exists_for(root, "mods-enabled", relative_path, "mods-available")
+                || symlink_exists_for(root, "sites-enabled", relative_path, "sites-available")
+        }
+        _ => false,
     }
 }
 
-fn finish_inventory(
-    observed_at: String,
-    service_key: &str,
-    unit_name: &str,
-    display_name: &str,
-    mut configs: Vec<ManagedServiceConfigView>,
-) -> ManagedServiceConfigInventoryView {
-    let truncated = configs.len() > MANAGED_SERVICE_CONFIG_MAX_ENTRIES;
-    configs.truncate(MANAGED_SERVICE_CONFIG_MAX_ENTRIES);
-    ManagedServiceConfigInventoryView {
-        observed_at,
-        status: ObservationStatus::Observed,
-        service_key: String::from(service_key),
-        unit_name: String::from(unit_name),
-        display_name: String::from(display_name),
-        configs,
-        truncated,
-    }
+fn symlink_exists_for(root: &Path, enabled: &str, relative_path: &str, available: &str) -> bool {
+    let Some(basename) = relative_path.strip_prefix(&format!("{available}/")) else {
+        return false;
+    };
+    std::fs::symlink_metadata(root.join(enabled).join(basename))
+        .is_ok_and(|metadata| metadata.file_type().is_symlink())
 }
 
 fn empty_inventory(

@@ -24,7 +24,8 @@ use crate::config::OpsPaths;
 use crate::digest::ledger_event_digest;
 use crate::error::OpsError;
 use crate::managed_config::{
-    ManagedConfigPlanPayload, managed_config_adapter, managed_config_masked_path,
+    ManagedConfigAdapter, ManagedConfigPlanPayload, managed_config_adapter,
+    managed_config_masked_path,
 };
 use crate::nginx::{NGINX_IMPACT, NGINX_RECOVERY_PATH};
 use crate::service_control::{
@@ -603,10 +604,17 @@ impl Ledger {
             display_name: plan.display_name.clone(),
             masked_path: managed_config_masked_path(
                 adapter,
-                payload
-                    .basename
-                    .as_deref()
-                    .map_or(plan.display_name.as_str(), std::convert::identity),
+                if matches!(
+                    adapter,
+                    ManagedConfigAdapter::NginxTree | ManagedConfigAdapter::ApacheTree
+                ) {
+                    &plan.display_name
+                } else {
+                    payload
+                        .basename
+                        .as_deref()
+                        .map_or(plan.display_name.as_str(), std::convert::identity)
+                },
             ),
             current_content_digest: plan.available_digest.clone(),
             proposed_content_digest: payload.proposed_content_digest.clone(),

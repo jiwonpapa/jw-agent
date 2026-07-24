@@ -1829,7 +1829,11 @@ pub fn gate_p2_managed_config(_root: &Path, timeout: Duration) -> Result<(), Str
                 "internal managed-config temporary file was exposed as a site",
             ));
         }
-        let restarted = config.ssh("sudo systemctl restart jw-opsd.service", None, timeout)?;
+        let restarted = config.ssh(
+            "sudo systemctl reset-failed jw-opsd.service\nsudo systemctl restart jw-opsd.service",
+            None,
+            timeout,
+        )?;
         require_success(&restarted, "internal temporary startup cleanup", false)?;
         session.wait_for_operation_available(&config, timeout)?;
         let removed = config.ssh(
@@ -1920,16 +1924,20 @@ pub fn gate_p2_managed_config(_root: &Path, timeout: Duration) -> Result<(), Str
 
         let resource_id = session.managed_resource_id(&config, P2_MANAGED_SITE, timeout)?;
         disable_nginx_fixture(&config, P2_MANAGED_SITE, timeout)?;
-        session.require_managed_config_unavailable(&config, P2_MANAGED_SITE, timeout)?;
+        session.require_managed_config_unloaded(&config, P2_MANAGED_SITE, timeout)?;
         let inactive = session.get(
             &config,
             &format!("/api/v1/config-resources/{resource_id}"),
             timeout,
         )?;
-        expect_http(&inactive, 409, "inactive managed config resource")?;
-        if !inactive.body.contains("\"code\":\"resource_not_active\"") {
+        expect_http(&inactive, 200, "inactive managed config resource")?;
+        if !inactive
+            .body
+            .contains("\"adapterId\":\"nginx/ubuntu-24.04-tree-v1\"")
+            || !inactive.body.contains("\"validate_only\"")
+        {
             return Err(String::from(
-                "inactive managed config denial omitted resource_not_active",
+                "inactive Nginx file omitted its bounded tree editing contract",
             ));
         }
         Ok(())
@@ -2536,28 +2544,25 @@ impl P2ApiSession {
         site_name: &str,
         timeout: Duration,
     ) -> Result<String, String> {
-        let sites = self.get(config, "/api/v1/services/nginx/sites", timeout)?;
-        expect_http(&sites, 200, "managed config Nginx observation")?;
-        Ok(json_managed_config_site_fields(&sites.body, site_name)?.resource_id)
+        let inventory = self.get(config, "/api/v1/services/nginx/configurations", timeout)?;
+        expect_http(&inventory, 200, "managed config Nginx observation")?;
+        Ok(json_managed_config_tree_fields(&inventory.body, site_name)?.resource_id)
     }
 
-    fn require_managed_config_unavailable(
+    fn require_managed_config_unloaded(
         &self,
         config: &VmConfig,
         site_name: &str,
         timeout: Duration,
     ) -> Result<(), String> {
-        let sites = self.get(config, "/api/v1/services/nginx/sites", timeout)?;
-        expect_http(&sites, 200, "inactive managed config observation")?;
-        let object = json_site_object(&sites.body, site_name)?;
-        if object.contains("\"managedConfigResourceId\":null")
-            && object.contains("\"managedConfigOperationType\":null")
-            && object.contains("\"managedConfigSchemaVersion\":null")
-        {
+        let inventory = self.get(config, "/api/v1/services/nginx/configurations", timeout)?;
+        expect_http(&inventory, 200, "inactive managed config observation")?;
+        let object = json_configuration_object(&inventory.body, site_name)?;
+        if object.contains("\"loaded\":false") && object.contains("\"available\":true") {
             Ok(())
         } else {
             Err(String::from(
-                "inactive Nginx site exposed a managed config mutation contract",
+                "inactive Nginx file was not retained as a bounded editable resource",
             ))
         }
     }
@@ -2569,23 +2574,26 @@ impl P2ApiSession {
         proposed_content: &str,
         timeout: Duration,
     ) -> Result<ManagedConfigPlanFields, String> {
-        let sites = self.get(config, "/api/v1/services/nginx/sites", timeout)?;
-        expect_http(&sites, 200, "managed config Nginx observation")?;
-        let site = json_managed_config_site_fields(&sites.body, site_name)?;
+        let inventory = self.get(config, "/api/v1/services/nginx/configurations", timeout)?;
+        expect_http(&inventory, 200, "managed config Nginx observation")?;
+        let site = json_managed_config_tree_fields(&inventory.body, site_name)?;
         let resource = self.get(
             config,
             &format!("/api/v1/config-resources/{}", site.resource_id),
             timeout,
         )?;
         expect_http(&resource, 200, "managed config resource")?;
-        if json_unsigned_field(&resource.body, "maxBytes")? != 24_576
-            || !resource
-                .body
-                .contains("\"allowedServiceActions\":[\"reload\"]")
-            || !resource.body.contains("\"level\":\"g2_reversible_config\"")
+        let max_bytes = json_unsigned_field(&resource.body, "maxBytes")?;
+        let tree_adapter = resource
+            .body
+            .contains("\"adapterId\":\"nginx/ubuntu-24.04-tree-v1\"");
+        let reload = resource.body.contains("\"reload\"");
+        let validate_only = resource.body.contains("\"validate_only\"");
+        let recovery_assurance = resource.body.contains("\"level\":\"g2_reversible_config\"");
+        if max_bytes != 131_072 || !tree_adapter || !reload || !validate_only || !recovery_assurance
         {
-            return Err(String::from(
-                "managed config resource omitted its bounded G2 contract",
+            return Err(format!(
+                "managed config resource contract mismatch: max_bytes={max_bytes}, tree_adapter={tree_adapter}, reload={reload}, validate_only={validate_only}, recovery_assurance={recovery_assurance}"
             ));
         }
         let idempotency_key = operation_idempotency_key()?;
@@ -2609,14 +2617,13 @@ impl P2ApiSession {
             timeout,
         )?;
         expect_http(&plan, 200, "managed config plan")?;
-        if !plan.body.contains("\"serviceAction\":\"reload\"")
-            || !plan.body.contains("\"level\":\"g2_reversible_config\"")
-            || !plan
-                .body
-                .contains("\"maskedPath\":\"…/nginx/sites-available/")
-        {
-            return Err(String::from(
-                "managed config plan omitted action, assurance, or masked path",
+        let reload_action = plan.body.contains("\"serviceAction\":\"reload\"");
+        let recovery_assurance = plan.body.contains("\"level\":\"g2_reversible_config\"");
+        let masked_path = json_string_field(&plan.body, "maskedPath")?;
+        let expected_masked_path = format!("/etc/nginx/sites-available/{site_name}");
+        if !reload_action || !recovery_assurance || masked_path != expected_masked_path {
+            return Err(format!(
+                "managed config plan mismatch: reload_action={reload_action}, recovery_assurance={recovery_assurance}, masked_path={masked_path}"
             ));
         }
         Ok(ManagedConfigPlanFields {
@@ -3192,17 +3199,33 @@ fn json_site_fields(body: &str, site_name: &str) -> Result<NginxSiteFields, Stri
     })
 }
 
-fn json_managed_config_site_fields(
+fn json_configuration_object<'a>(body: &'a str, site_name: &str) -> Result<&'a str, String> {
+    let masked_path = format!("/etc/nginx/sites-available/{site_name}");
+    let marker = format!("\"maskedPath\":{}", json_string(&masked_path));
+    let marker_index = body
+        .find(&marker)
+        .ok_or_else(|| format!("managed Nginx config `{masked_path}` was not observed"))?;
+    let start = body[..marker_index]
+        .rfind('{')
+        .ok_or_else(|| String::from("Nginx configuration object start is missing"))?;
+    let remainder = &body[start..];
+    let end = remainder
+        .find("\"assurance\":")
+        .map_or(remainder.len(), std::convert::identity);
+    Ok(&remainder[..end])
+}
+
+fn json_managed_config_tree_fields(
     body: &str,
     site_name: &str,
 ) -> Result<ManagedConfigSiteFields, String> {
-    let object = json_site_object(body, site_name)?;
-    let schema = json_unsigned_field(object, "managedConfigSchemaVersion")?;
+    let object = json_configuration_object(body, site_name)?;
+    let schema = json_unsigned_field(object, "schemaVersion")?;
     Ok(ManagedConfigSiteFields {
         schema_version: u16::try_from(schema)
             .map_err(|_| String::from("managed config schema version overflow"))?,
-        operation_type: json_string_field(object, "managedConfigOperationType")?,
-        resource_id: json_string_field(object, "managedConfigResourceId")?,
+        operation_type: json_string_field(object, "operationType")?,
+        resource_id: json_string_field(object, "resourceId")?,
     })
 }
 

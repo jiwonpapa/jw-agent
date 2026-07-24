@@ -22,8 +22,8 @@ Nginx 443 template remains an optional compatibility path. The package must
 not edit DNS, UFW, SSH, Certbot, or unrelated Nginx sites automatically.
 An existing public-edge site remains administrator-owned: upgrading the package
 does not replace it. Managed-config plan requests alone use a reviewed `256 KiB`
-JSON envelope: Nginx content stays capped at `24 KiB`, while the fixed Ubuntu
-PHP 8.3 FPM `php.ini` adapter is capped at `128 KiB`. Other API requests retain
+JSON envelope: legacy Nginx site resources stay capped at `24 KiB`; bounded
+service-tree resources and PHP 8.3 FPM resources are capped at `128 KiB`. Other API requests retain
 the `64 KiB` application limit.
 Both public paths still accept existing valid certificate material only.
 The P2C package contains the isolated one-shot runner, sanitized read-only
@@ -39,7 +39,7 @@ transfer, system paths, and root SFTP remain absent. The exact binary upload rou
 has an 8 MiB edge limit. The managed-config exception above does not widen PAM,
 terminal, SFTP control, or other JSON endpoints.
 
-P2.20 keeps recovery-only TOTP enrollment and reset, and uses the separate
+P2.21 keeps recovery-only TOTP enrollment and reset, and uses the separate
 15-minute administrative access mode for root typed operations. The mode
 requires an admin-role non-root Linux account, PAM verification, and TOTP when
 the configured policy requires it; it never creates a root web session. TOTP seeds are encrypted

@@ -62,6 +62,7 @@ interface ManagedConfigEditorProps {
   executing: boolean;
   errorMessage: string | null;
   diagnosticLine: number | null;
+  serviceAction?: "reload" | "validate_only";
   onDraftChange: (value: string) => void;
   onBack: () => void;
   onSave: () => void;
@@ -79,6 +80,7 @@ export function ManagedConfigEditor({
   executing,
   errorMessage,
   diagnosticLine,
+  serviceAction = "reload",
   onDraftChange,
   onBack,
   onSave,
@@ -134,7 +136,9 @@ export function ManagedConfigEditor({
             <RotateCcw aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-action" />
             <p className="text-sm leading-6 text-muted">
               저장하면 <strong className="font-semibold text-text">{profile.validatorLabel}</strong> 후{" "}
-              <strong className="font-semibold text-text">{profile.serviceLabel} reload</strong>를 실행합니다.
+              <strong className="font-semibold text-text">
+                {serviceAction === "reload" ? `${profile.serviceLabel} reload` : "파일 read-back 검증"}
+              </strong>을 실행합니다.
               실패하면 이전 설정으로 자동 복구합니다.
             </p>
           </div>
@@ -151,7 +155,7 @@ export function ManagedConfigEditor({
         ) : null}
 
         {receipt !== null ? (
-          <ManagedConfigResult receipt={receipt} onRevise={onRevise} />
+          <ManagedConfigResult receipt={receipt} serviceAction={serviceAction} onRevise={onRevise} />
         ) : null}
 
         {errorMessage ? (
@@ -214,9 +218,11 @@ export function ManagedConfigEditor({
 
 function ManagedConfigResult({
   receipt,
+  serviceAction,
   onRevise,
 }: {
   receipt: OperationReceiptView;
+  serviceAction: "reload" | "validate_only";
   onRevise: (line: number | null) => void;
 }) {
   const failure = receipt.terminalState === "RECOVERY_REQUIRED";
@@ -250,7 +256,9 @@ function ManagedConfigResult({
           <h3 className="text-sm font-semibold text-text">{STAGE_LABELS[receipt.terminalState]}</h3>
           <p className="mt-1 text-sm leading-6 text-muted">
             {succeeded
-              ? "문법 검사, reload와 서비스 작동 확인을 마쳤습니다."
+              ? serviceAction === "reload"
+                ? "문법 검사, reload와 서비스 작동 확인을 마쳤습니다."
+                : "문법 검사와 파일 read-back을 마쳤습니다. 중지된 서비스는 시작하지 않았습니다."
               : rolledBack
                 ? "변경을 적용하지 않고 이전 설정을 복구·검증했습니다."
                 : "자동 복구를 완료하지 못했습니다. 기술 세부정보의 복구 경로를 확인해 주세요."}

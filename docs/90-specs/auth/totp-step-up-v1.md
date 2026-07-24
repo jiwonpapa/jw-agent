@@ -76,4 +76,4 @@ Last reviewed: 2026-07-23
 - DB/log/journal/process/URL/browser trace secret scan
 - mobile password manager·authenticator paste와 accessibility
 
-`jw-agent_0.2.0~p2.20_amd64.deb`에서 재검증되었으며 Ubuntu 24.04 VM의 `VM-P2-TOTP-STEP-UP`이 등록, PAM+TOTP 관리 모드 진입, 그 안의 typed Nginx 승인, time-step replay 차단, recovery reset과 encrypted-storage cleanup을 검증했습니다. SHA-256은 `8fbca64eaa2d47ccfa49fabdfaa7c5bcff1b31de382ad3ca91693146277e170a`입니다.
+`jw-agent_0.2.0~p2.21_amd64.deb`에서 재검증되었으며 Ubuntu 24.04 VM의 `VM-P2-TOTP-STEP-UP`이 등록, PAM+TOTP 관리 모드 진입, 그 안의 typed Nginx 승인, time-step replay 차단, recovery reset과 encrypted-storage cleanup을 검증했습니다. SHA-256은 `f649e29e9c9560f508b8a9d57ec8b0776ed070ee35adb69986da9f95f4038865`입니다.

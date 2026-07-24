@@ -7,19 +7,21 @@ use std::path::{Path, PathBuf};
 use jw_contracts::{
     APACHE_CONF_CONFIG_ADAPTER_ID, APACHE_CONF_RESOURCE_PREFIX, APACHE_MAIN_CONFIG_ADAPTER_ID,
     APACHE_MAIN_RESOURCE_PREFIX, APACHE_PORTS_CONFIG_ADAPTER_ID, APACHE_PORTS_RESOURCE_PREFIX,
-    APACHE_SITE_CONFIG_ADAPTER_ID, APACHE_SITE_RESOURCE_PREFIX, AssuranceLevel, AssuranceView,
-    MANAGED_CONFIG_MAX_BYTES, ManagedConfigResourceView, NGINX_CONF_D_CONFIG_ADAPTER_ID,
-    NGINX_CONF_D_RESOURCE_PREFIX, NGINX_CONFIG_ADAPTER_ID, NGINX_LAYOUT_ID,
-    NGINX_MAIN_CONFIG_ADAPTER_ID, NGINX_MAIN_RESOURCE_PREFIX, NGINX_MANAGED_CONFIG_MAX_BYTES,
-    NginxSiteState, OPERATION_SCHEMA_VERSION, PHP_FPM_CONFIG_ADAPTER_ID, PHP_FPM_CONFIG_MAX_BYTES,
-    PHP_FPM_DYNAMIC_POOL_CONFIG_ADAPTER_ID, PHP_FPM_GLOBAL_CONFIG_ADAPTER_ID,
-    PHP_FPM_POOL_CONFIG_ADAPTER_ID, RollbackSupport, ServiceAction, managed_config_bytes_supported,
-    managed_service_config_resource_id, nginx_config_resource_id, nginx_internal_temporary_name,
-    nginx_site_id, php_fpm_config_resource_id, php_fpm_pool_config_resource_id, sha256_digest,
+    APACHE_SITE_CONFIG_ADAPTER_ID, APACHE_SITE_RESOURCE_PREFIX, APACHE_TREE_CONFIG_ADAPTER_ID,
+    APACHE_TREE_RESOURCE_PREFIX, AssuranceLevel, AssuranceView, MANAGED_CONFIG_MAX_BYTES,
+    ManagedConfigResourceView, NGINX_CONF_D_CONFIG_ADAPTER_ID, NGINX_CONF_D_RESOURCE_PREFIX,
+    NGINX_CONFIG_ADAPTER_ID, NGINX_LAYOUT_ID, NGINX_MAIN_CONFIG_ADAPTER_ID,
+    NGINX_MAIN_RESOURCE_PREFIX, NGINX_MANAGED_CONFIG_MAX_BYTES, NGINX_TREE_CONFIG_ADAPTER_ID,
+    NGINX_TREE_RESOURCE_PREFIX, NginxSiteState, OPERATION_SCHEMA_VERSION,
+    PHP_FPM_CONFIG_ADAPTER_ID, PHP_FPM_CONFIG_MAX_BYTES, PHP_FPM_DYNAMIC_POOL_CONFIG_ADAPTER_ID,
+    PHP_FPM_GLOBAL_CONFIG_ADAPTER_ID, PHP_FPM_POOL_CONFIG_ADAPTER_ID, RollbackSupport,
+    ServiceAction, managed_config_bytes_supported, managed_service_config_resource_id,
+    nginx_config_resource_id, nginx_internal_temporary_name, nginx_site_id,
+    php_fpm_config_resource_id, php_fpm_pool_config_resource_id, sha256_digest,
 };
 use serde::{Deserialize, Serialize};
 
-use crate::config::{OpsPaths, OpsPolicy};
+use crate::config::OpsPaths;
 use crate::error::OpsError;
 use crate::nginx::{
     discover_site, read_available_content, safe_basename, validate_available_metadata,
@@ -31,14 +33,17 @@ use crate::php_fpm_diagnostic::{
     validate_php_ini_candidate,
 };
 use crate::runner::{CommandClass, CommandEvidence};
-use crate::snapshot::{
-    prepare_private_root, require_capacity, set_file_mode, set_mode, validate_private_directory,
-};
+use crate::snapshot::set_file_mode;
 
+mod cleanup;
 mod metadata;
+mod proposal;
 mod text;
+mod tree;
+pub use cleanup::cleanup_internal_temporaries;
+pub use proposal::{read_proposal, remove_proposal, write_proposal};
 pub use text::diff_stats;
-use text::validate_relative_path;
+use tree::discover_tree_managed_config;
 use {
     metadata::digest as managed_metadata_digest, metadata::validate as validate_managed_metadata,
 };
@@ -81,8 +86,10 @@ const APACHE_MANAGED_CONFIG_RECOVERY_PATH: [&str; 4] = [
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ManagedConfigAdapter {
     Nginx,
+    NginxTree,
     NginxMain,
     NginxConfD,
+    ApacheTree,
     ApacheMain,
     ApachePorts,
     ApacheConf,
@@ -98,8 +105,10 @@ impl ManagedConfigAdapter {
     pub const fn adapter_id(self) -> &'static str {
         match self {
             Self::Nginx => NGINX_CONFIG_ADAPTER_ID,
+            Self::NginxTree => NGINX_TREE_CONFIG_ADAPTER_ID,
             Self::NginxMain => NGINX_MAIN_CONFIG_ADAPTER_ID,
             Self::NginxConfD => NGINX_CONF_D_CONFIG_ADAPTER_ID,
+            Self::ApacheTree => APACHE_TREE_CONFIG_ADAPTER_ID,
             Self::ApacheMain => APACHE_MAIN_CONFIG_ADAPTER_ID,
             Self::ApachePorts => APACHE_PORTS_CONFIG_ADAPTER_ID,
             Self::ApacheConf => APACHE_CONF_CONFIG_ADAPTER_ID,
@@ -115,8 +124,10 @@ impl ManagedConfigAdapter {
     pub const fn maximum_bytes(self) -> usize {
         match self {
             Self::Nginx => NGINX_MANAGED_CONFIG_MAX_BYTES,
-            Self::NginxMain
+            Self::NginxTree
+            | Self::NginxMain
             | Self::NginxConfD
+            | Self::ApacheTree
             | Self::ApacheMain
             | Self::ApachePorts
             | Self::ApacheConf
@@ -132,10 +143,12 @@ impl ManagedConfigAdapter {
     pub const fn impact(self) -> &'static [&'static str] {
         match self {
             Self::Nginx => &NGINX_MANAGED_CONFIG_IMPACT,
-            Self::NginxMain | Self::NginxConfD => &NGINX_MANAGED_CONFIG_IMPACT,
-            Self::ApacheMain | Self::ApachePorts | Self::ApacheConf | Self::ApacheSite => {
-                &APACHE_MANAGED_CONFIG_IMPACT
-            }
+            Self::NginxTree | Self::NginxMain | Self::NginxConfD => &NGINX_MANAGED_CONFIG_IMPACT,
+            Self::ApacheTree
+            | Self::ApacheMain
+            | Self::ApachePorts
+            | Self::ApacheConf
+            | Self::ApacheSite => &APACHE_MANAGED_CONFIG_IMPACT,
             Self::PhpFpm83Ini
             | Self::PhpFpm83Global
             | Self::PhpFpm83PoolWww
@@ -147,10 +160,14 @@ impl ManagedConfigAdapter {
     pub const fn recovery_path(self) -> &'static [&'static str] {
         match self {
             Self::Nginx => &NGINX_MANAGED_CONFIG_RECOVERY_PATH,
-            Self::NginxMain | Self::NginxConfD => &NGINX_MANAGED_CONFIG_RECOVERY_PATH,
-            Self::ApacheMain | Self::ApachePorts | Self::ApacheConf | Self::ApacheSite => {
-                &APACHE_MANAGED_CONFIG_RECOVERY_PATH
+            Self::NginxTree | Self::NginxMain | Self::NginxConfD => {
+                &NGINX_MANAGED_CONFIG_RECOVERY_PATH
             }
+            Self::ApacheTree
+            | Self::ApacheMain
+            | Self::ApachePorts
+            | Self::ApacheConf
+            | Self::ApacheSite => &APACHE_MANAGED_CONFIG_RECOVERY_PATH,
             Self::PhpFpm83Ini
             | Self::PhpFpm83Global
             | Self::PhpFpm83PoolWww
@@ -161,10 +178,14 @@ impl ManagedConfigAdapter {
     #[must_use]
     pub const fn config_test(self) -> CommandClass {
         match self {
-            Self::Nginx | Self::NginxMain | Self::NginxConfD => CommandClass::NginxConfigTest,
-            Self::ApacheMain | Self::ApachePorts | Self::ApacheConf | Self::ApacheSite => {
-                CommandClass::ApacheConfigTest
+            Self::Nginx | Self::NginxTree | Self::NginxMain | Self::NginxConfD => {
+                CommandClass::NginxConfigTest
             }
+            Self::ApacheTree
+            | Self::ApacheMain
+            | Self::ApachePorts
+            | Self::ApacheConf
+            | Self::ApacheSite => CommandClass::ApacheConfigTest,
             Self::PhpFpm83Ini
             | Self::PhpFpm83Global
             | Self::PhpFpm83PoolWww
@@ -175,10 +196,14 @@ impl ManagedConfigAdapter {
     #[must_use]
     pub const fn reload(self) -> CommandClass {
         match self {
-            Self::Nginx | Self::NginxMain | Self::NginxConfD => CommandClass::NginxReload,
-            Self::ApacheMain | Self::ApachePorts | Self::ApacheConf | Self::ApacheSite => {
-                CommandClass::ApacheReload
+            Self::Nginx | Self::NginxTree | Self::NginxMain | Self::NginxConfD => {
+                CommandClass::NginxReload
             }
+            Self::ApacheTree
+            | Self::ApacheMain
+            | Self::ApachePorts
+            | Self::ApacheConf
+            | Self::ApacheSite => CommandClass::ApacheReload,
             Self::PhpFpm83Ini
             | Self::PhpFpm83Global
             | Self::PhpFpm83PoolWww
@@ -189,10 +214,14 @@ impl ManagedConfigAdapter {
     #[must_use]
     pub const fn active(self) -> CommandClass {
         match self {
-            Self::Nginx | Self::NginxMain | Self::NginxConfD => CommandClass::NginxActive,
-            Self::ApacheMain | Self::ApachePorts | Self::ApacheConf | Self::ApacheSite => {
-                CommandClass::ApacheActive
+            Self::Nginx | Self::NginxTree | Self::NginxMain | Self::NginxConfD => {
+                CommandClass::NginxActive
             }
+            Self::ApacheTree
+            | Self::ApacheMain
+            | Self::ApachePorts
+            | Self::ApacheConf
+            | Self::ApacheSite => CommandClass::ApacheActive,
             Self::PhpFpm83Ini
             | Self::PhpFpm83Global
             | Self::PhpFpm83PoolWww
@@ -203,10 +232,14 @@ impl ManagedConfigAdapter {
     #[must_use]
     pub const fn config_valid_code(self) -> &'static str {
         match self {
-            Self::Nginx | Self::NginxMain | Self::NginxConfD => "nginx_config_valid",
-            Self::ApacheMain | Self::ApachePorts | Self::ApacheConf | Self::ApacheSite => {
-                "apache_config_valid"
+            Self::Nginx | Self::NginxTree | Self::NginxMain | Self::NginxConfD => {
+                "nginx_config_valid"
             }
+            Self::ApacheTree
+            | Self::ApacheMain
+            | Self::ApachePorts
+            | Self::ApacheConf
+            | Self::ApacheSite => "apache_config_valid",
             Self::PhpFpm83Ini
             | Self::PhpFpm83Global
             | Self::PhpFpm83PoolWww
@@ -217,10 +250,12 @@ impl ManagedConfigAdapter {
     #[must_use]
     pub const fn reloaded_code(self) -> &'static str {
         match self {
-            Self::Nginx | Self::NginxMain | Self::NginxConfD => "nginx_reloaded",
-            Self::ApacheMain | Self::ApachePorts | Self::ApacheConf | Self::ApacheSite => {
-                "apache_reloaded"
-            }
+            Self::Nginx | Self::NginxTree | Self::NginxMain | Self::NginxConfD => "nginx_reloaded",
+            Self::ApacheTree
+            | Self::ApacheMain
+            | Self::ApachePorts
+            | Self::ApacheConf
+            | Self::ApacheSite => "apache_reloaded",
             Self::PhpFpm83Ini
             | Self::PhpFpm83Global
             | Self::PhpFpm83PoolWww
@@ -232,10 +267,14 @@ impl ManagedConfigAdapter {
 pub fn managed_config_adapter(resource_id: &str) -> Result<ManagedConfigAdapter, OpsError> {
     if resource_id.starts_with("ngc_") {
         Ok(ManagedConfigAdapter::Nginx)
+    } else if resource_id.starts_with(NGINX_TREE_RESOURCE_PREFIX) {
+        Ok(ManagedConfigAdapter::NginxTree)
     } else if resource_id.starts_with(NGINX_MAIN_RESOURCE_PREFIX) {
         Ok(ManagedConfigAdapter::NginxMain)
     } else if resource_id.starts_with(NGINX_CONF_D_RESOURCE_PREFIX) {
         Ok(ManagedConfigAdapter::NginxConfD)
+    } else if resource_id.starts_with(APACHE_TREE_RESOURCE_PREFIX) {
+        Ok(ManagedConfigAdapter::ApacheTree)
     } else if resource_id.starts_with(APACHE_MAIN_RESOURCE_PREFIX) {
         Ok(ManagedConfigAdapter::ApacheMain)
     } else if resource_id.starts_with(APACHE_PORTS_RESOURCE_PREFIX) {
@@ -264,8 +303,10 @@ pub fn managed_config_test_succeeded(
 ) -> bool {
     match adapter {
         ManagedConfigAdapter::Nginx
+        | ManagedConfigAdapter::NginxTree
         | ManagedConfigAdapter::NginxMain
         | ManagedConfigAdapter::NginxConfD
+        | ManagedConfigAdapter::ApacheTree
         | ManagedConfigAdapter::ApacheMain
         | ManagedConfigAdapter::ApachePorts
         | ManagedConfigAdapter::ApacheConf
@@ -285,9 +326,11 @@ pub fn managed_config_failure_code(
 ) -> String {
     match adapter {
         ManagedConfigAdapter::Nginx
+        | ManagedConfigAdapter::NginxTree
         | ManagedConfigAdapter::NginxMain
         | ManagedConfigAdapter::NginxConfD => nginx_config_failure_code(evidence, basename),
-        ManagedConfigAdapter::ApacheMain
+        ManagedConfigAdapter::ApacheTree
+        | ManagedConfigAdapter::ApacheMain
         | ManagedConfigAdapter::ApachePorts
         | ManagedConfigAdapter::ApacheConf
         | ManagedConfigAdapter::ApacheSite => {
@@ -311,8 +354,10 @@ pub fn validate_managed_config_candidate(
 ) -> Result<(), OpsError> {
     match adapter {
         ManagedConfigAdapter::Nginx
+        | ManagedConfigAdapter::NginxTree
         | ManagedConfigAdapter::NginxMain
         | ManagedConfigAdapter::NginxConfD
+        | ManagedConfigAdapter::ApacheTree
         | ManagedConfigAdapter::ApacheMain
         | ManagedConfigAdapter::ApachePorts
         | ManagedConfigAdapter::ApacheConf
@@ -332,8 +377,10 @@ pub fn validate_managed_config_candidate(
 pub fn managed_config_masked_path(adapter: ManagedConfigAdapter, display_name: &str) -> String {
     match adapter {
         ManagedConfigAdapter::Nginx => format!("…/nginx/sites-available/{display_name}"),
+        ManagedConfigAdapter::NginxTree => format!("/etc/nginx/{display_name}"),
         ManagedConfigAdapter::NginxMain => String::from("…/nginx/nginx.conf"),
         ManagedConfigAdapter::NginxConfD => format!("…/nginx/conf.d/{display_name}"),
+        ManagedConfigAdapter::ApacheTree => format!("/etc/apache2/{display_name}"),
         ManagedConfigAdapter::ApacheMain => String::from("…/apache2/apache2.conf"),
         ManagedConfigAdapter::ApachePorts => String::from("…/apache2/ports.conf"),
         ManagedConfigAdapter::ApacheConf => {
@@ -355,6 +402,7 @@ pub fn managed_config_masked_path(adapter: ManagedConfigAdapter, display_name: &
 pub fn managed_config_assurance(adapter: ManagedConfigAdapter) -> AssuranceView {
     let (scope, excluded_effects, apply_verifier, rollback_verifier) = match adapter {
         ManagedConfigAdapter::Nginx
+        | ManagedConfigAdapter::NginxTree
         | ManagedConfigAdapter::NginxMain
         | ManagedConfigAdapter::NginxConfD => (
             "등록된 Nginx 설정 파일 하나의 bytes·owner·mode와 검증된 reload",
@@ -373,7 +421,8 @@ pub fn managed_config_assurance(adapter: ManagedConfigAdapter) -> AssuranceView 
                 String::from("nginx -t와 reload 후 active 확인"),
             ],
         ),
-        ManagedConfigAdapter::ApacheMain
+        ManagedConfigAdapter::ApacheTree
+        | ManagedConfigAdapter::ApacheMain
         | ManagedConfigAdapter::ApachePorts
         | ManagedConfigAdapter::ApacheConf
         | ManagedConfigAdapter::ApacheSite => (
@@ -451,13 +500,23 @@ impl ManagedConfigResource {
             adapter_id: String::from(self.adapter.adapter_id()),
             resource_id: self.resource_id.clone(),
             display_name: self.display_name.clone(),
-            masked_path: managed_config_masked_path(self.adapter, &self.basename),
+            masked_path: managed_config_masked_path(
+                self.adapter,
+                if matches!(
+                    self.adapter,
+                    ManagedConfigAdapter::NginxTree | ManagedConfigAdapter::ApacheTree
+                ) {
+                    &self.display_name
+                } else {
+                    &self.basename
+                },
+            ),
             content: self.content.clone(),
             content_digest: self.content_digest.clone(),
             metadata_digest: self.metadata_digest.clone(),
             max_bytes: u32::try_from(self.adapter.maximum_bytes())
                 .map_err(|_| OpsError::Storage(String::from("config size overflow")))?,
-            allowed_service_actions: vec![ServiceAction::Reload],
+            allowed_service_actions: vec![ServiceAction::Reload, ServiceAction::ValidateOnly],
             assurance,
         })
     }
@@ -492,71 +551,22 @@ pub struct DiffStats {
     pub summary: Vec<String>,
 }
 
-pub fn cleanup_internal_temporaries(paths: &OpsPaths) -> Result<(), OpsError> {
-    cleanup_temporaries_in_root(&paths.nginx_available, paths.enforce_root_ownership)?;
-    cleanup_temporaries_in_root(&paths.nginx_conf_d, paths.enforce_root_ownership)?;
-    cleanup_parent_temporaries(&paths.nginx_main, paths.enforce_root_ownership)?;
-    cleanup_parent_temporaries(&paths.apache_main, paths.enforce_root_ownership)?;
-    cleanup_parent_temporaries(&paths.apache_ports, paths.enforce_root_ownership)?;
-    cleanup_temporaries_in_root(&paths.apache_conf_available, paths.enforce_root_ownership)?;
-    cleanup_temporaries_in_root(&paths.apache_sites_available, paths.enforce_root_ownership)?;
-    if let Some(root) = paths.php_fpm_ini.parent() {
-        cleanup_temporaries_in_root(root, paths.enforce_root_ownership)?;
-    }
-    cleanup_temporaries_in_root(&paths.php_fpm_pool_dir, paths.enforce_root_ownership)?;
-    Ok(())
-}
-
-fn cleanup_parent_temporaries(path: &Path, enforce_root_ownership: bool) -> Result<(), OpsError> {
-    let root = path
-        .parent()
-        .ok_or(OpsError::Rejected("unsupported_layout"))?;
-    cleanup_temporaries_in_root(root, enforce_root_ownership)
-}
-
-fn cleanup_temporaries_in_root(root: &Path, enforce_root_ownership: bool) -> Result<(), OpsError> {
-    if !root.exists() {
-        return Ok(());
-    }
-    validate_root(root, enforce_root_ownership)?;
-    let entries =
-        std::fs::read_dir(root).map_err(|error| OpsError::Filesystem(error.to_string()))?;
-    let mut removed = false;
-    for entry_result in entries {
-        let entry = entry_result.map_err(|error| OpsError::Filesystem(error.to_string()))?;
-        let Some(basename) = entry.file_name().to_str().map(str::to_owned) else {
-            continue;
-        };
-        if !nginx_internal_temporary_name(&basename) {
-            continue;
-        }
-        let metadata = std::fs::symlink_metadata(entry.path())
-            .map_err(|error| OpsError::Filesystem(error.to_string()))?;
-        if !metadata.is_file() || metadata.file_type().is_symlink() {
-            return Err(OpsError::ForensicLockdown);
-        }
-        #[cfg(unix)]
-        if metadata.nlink() != 1 || (enforce_root_ownership && metadata.uid() != 0) {
-            return Err(OpsError::ForensicLockdown);
-        }
-        std::fs::remove_file(entry.path())
-            .map_err(|error| OpsError::Filesystem(error.to_string()))?;
-        removed = true;
-    }
-    if removed {
-        File::open(root)
-            .and_then(|directory| directory.sync_all())
-            .map_err(|error| OpsError::Filesystem(error.to_string()))?;
-    }
-    Ok(())
-}
-
 pub fn discover_managed_config(
     paths: &OpsPaths,
     requested_resource_id: &str,
 ) -> Result<ManagedConfigResource, OpsError> {
     match managed_config_adapter(requested_resource_id)? {
         ManagedConfigAdapter::Nginx => discover_nginx_managed_config(paths, requested_resource_id),
+        ManagedConfigAdapter::NginxTree => discover_tree_managed_config(
+            paths,
+            ManagedConfigAdapter::NginxTree,
+            paths
+                .nginx_main
+                .parent()
+                .ok_or(OpsError::Rejected("unsupported_layout"))?,
+            requested_resource_id,
+            NGINX_TREE_RESOURCE_PREFIX,
+        ),
         ManagedConfigAdapter::NginxMain => discover_exact_managed_config(
             paths,
             ManagedConfigAdapter::NginxMain,
@@ -574,6 +584,16 @@ pub fn discover_managed_config(
             "Nginx · conf.d",
             requested_resource_id,
             NGINX_CONF_D_RESOURCE_PREFIX,
+        ),
+        ManagedConfigAdapter::ApacheTree => discover_tree_managed_config(
+            paths,
+            ManagedConfigAdapter::ApacheTree,
+            paths
+                .apache_main
+                .parent()
+                .ok_or(OpsError::Rejected("unsupported_layout"))?,
+            requested_resource_id,
+            APACHE_TREE_RESOURCE_PREFIX,
         ),
         ManagedConfigAdapter::ApacheMain => discover_exact_managed_config(
             paths,
@@ -953,101 +973,6 @@ pub fn discover_protected_config(
         uid,
         gid,
     })
-}
-
-pub fn write_proposal(
-    paths: &OpsPaths,
-    policy: &OpsPolicy,
-    plan_id: &str,
-    content: &str,
-) -> Result<ProposalRecord, OpsError> {
-    if content.len() > MANAGED_CONFIG_MAX_BYTES {
-        return Err(OpsError::Rejected("size_limit"));
-    }
-    if !managed_config_bytes_supported(content.as_bytes()) {
-        return Err(OpsError::Rejected("invalid_encoding"));
-    }
-    prepare_private_root(&paths.proposals, paths.enforce_root_ownership)?;
-    require_capacity(&paths.proposals, policy.snapshot_min_free_bytes)?;
-    let plan_directory = paths.proposals.join(plan_id);
-    std::fs::create_dir(&plan_directory)
-        .map_err(|error| OpsError::Filesystem(error.to_string()))?;
-    set_mode(&plan_directory, 0o700)?;
-    validate_private_directory(&plan_directory, paths.enforce_root_ownership)?;
-    let relative_path = format!("{plan_id}/content");
-    let path = paths.proposals.join(&relative_path);
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&path)
-        .map_err(|error| OpsError::Filesystem(error.to_string()))?;
-    set_file_mode(&file, 0o600)?;
-    file.write_all(content.as_bytes())
-        .map_err(|error| OpsError::Filesystem(error.to_string()))?;
-    file.sync_all()
-        .map_err(|error| OpsError::Filesystem(error.to_string()))?;
-    File::open(&plan_directory)
-        .and_then(|directory| directory.sync_all())
-        .map_err(|error| OpsError::Filesystem(error.to_string()))?;
-    File::open(&paths.proposals)
-        .and_then(|directory| directory.sync_all())
-        .map_err(|error| OpsError::Filesystem(error.to_string()))?;
-    Ok(ProposalRecord {
-        relative_path,
-        digest: sha256_digest(content.as_bytes()),
-    })
-}
-
-pub fn read_proposal(paths: &OpsPaths, record: &ProposalRecord) -> Result<String, OpsError> {
-    validate_relative_path(&record.relative_path)?;
-    prepare_private_root(&paths.proposals, paths.enforce_root_ownership)?;
-    let path = paths.proposals.join(&record.relative_path);
-    let parent = path
-        .parent()
-        .ok_or(OpsError::Rejected("proposal_path_rejected"))?;
-    validate_private_directory(parent, paths.enforce_root_ownership)?;
-    let metadata = std::fs::symlink_metadata(&path)
-        .map_err(|error| OpsError::Filesystem(error.to_string()))?;
-    if !metadata.is_file()
-        || metadata.file_type().is_symlink()
-        || metadata.len()
-            > u64::try_from(MANAGED_CONFIG_MAX_BYTES).map_or(u64::MAX, std::convert::identity)
-    {
-        return Err(OpsError::Rejected("proposal_file_rejected"));
-    }
-    #[cfg(unix)]
-    if metadata.nlink() != 1
-        || (paths.enforce_root_ownership && metadata.uid() != 0)
-        || metadata.mode() & 0o077 != 0
-    {
-        return Err(OpsError::ForensicLockdown);
-    }
-    let mut bytes = Vec::with_capacity(
-        usize::try_from(metadata.len()).map_err(|_| OpsError::Rejected("size_limit"))?,
-    );
-    File::open(path)
-        .and_then(|mut source| source.read_to_end(&mut bytes))
-        .map_err(|error| OpsError::Filesystem(error.to_string()))?;
-    if sha256_digest(&bytes) != record.digest || !managed_config_bytes_supported(&bytes) {
-        return Err(OpsError::ForensicLockdown);
-    }
-    String::from_utf8(bytes).map_err(|_| OpsError::ForensicLockdown)
-}
-
-pub fn remove_proposal(paths: &OpsPaths, record: &ProposalRecord) -> Result<(), OpsError> {
-    validate_relative_path(&record.relative_path)?;
-    let path = paths.proposals.join(&record.relative_path);
-    let parent = path
-        .parent()
-        .ok_or(OpsError::Rejected("proposal_path_rejected"))?;
-    std::fs::remove_file(&path).map_err(|error| OpsError::Filesystem(error.to_string()))?;
-    File::open(parent)
-        .and_then(|directory| directory.sync_all())
-        .map_err(|error| OpsError::Filesystem(error.to_string()))?;
-    std::fs::remove_dir(parent).map_err(|error| OpsError::Filesystem(error.to_string()))?;
-    File::open(&paths.proposals)
-        .and_then(|directory| directory.sync_all())
-        .map_err(|error| OpsError::Filesystem(error.to_string()))
 }
 
 pub fn replace_managed_config(

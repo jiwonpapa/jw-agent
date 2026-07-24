@@ -57,4 +57,4 @@ Last reviewed: 2026-07-24
 - stop·large deletion은 추가 위험 확인을 요구
 - 개요 default-expanded session panel과 다른 route account drawer
 
-`jw-agent_0.2.0~p2.20_amd64.deb`에서 재검증되었으며 Ubuntu 24.04 VM의 전체 `p2-vm` 28개 gate가 관리 모드 진입 뒤 Nginx·Apache·PHP-FPM·UFW typed operation, TOTP 결합, PAM limiter 분리와 secret scan을 검증했습니다. SHA-256은 `8fbca64eaa2d47ccfa49fabdfaa7c5bcff1b31de382ad3ca91693146277e170a`입니다.
+`jw-agent_0.2.0~p2.21_amd64.deb`에서 재검증되었으며 Ubuntu 24.04 VM의 전체 `p2-vm` 28개 gate가 관리 모드 진입 뒤 Nginx·Apache·PHP-FPM·UFW typed operation, TOTP 결합, PAM limiter 분리와 secret scan을 검증했습니다. SHA-256은 `f649e29e9c9560f508b8a9d57ec8b0776ed070ee35adb69986da9f95f4038865`입니다.

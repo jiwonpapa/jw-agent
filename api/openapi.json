@@ -4972,13 +4972,12 @@
           "schemaVersion",
           "displayName",
           "maskedPath",
-          "available",
-          "assurance"
+          "relativePath",
+          "loaded",
+          "serviceActive",
+          "available"
         ],
         "properties": {
-          "assurance": {
-            "$ref": "#/components/schemas/AssuranceView"
-          },
           "available": {
             "type": "boolean"
           },
@@ -4991,10 +4990,16 @@
           "displayName": {
             "type": "string"
           },
+          "loaded": {
+            "type": "boolean"
+          },
           "maskedPath": {
             "type": "string"
           },
           "operationType": {
+            "type": "string"
+          },
+          "relativePath": {
             "type": "string"
           },
           "resourceId": {
@@ -5004,6 +5009,9 @@
             "type": "integer",
             "format": "int32",
             "minimum": 0
+          },
+          "serviceActive": {
+            "type": "boolean"
           }
         }
       },
@@ -5801,6 +5809,7 @@
       "ServiceAction": {
         "type": "string",
         "enum": [
+          "validate_only",
           "reload",
           "restart"
         ]

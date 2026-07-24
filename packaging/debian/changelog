@@ -1,3 +1,13 @@
+jw-agent (0.2.0~p2.21) noble; urgency=medium
+
+  * Discover bounded existing Nginx and Apache files below their standard /etc roots.
+  * Replace the site-state drawer with a full-page file tree and editor workspace.
+  * Save through typed validation, active-service reload, read-back, and exact rollback.
+  * Validate inactive-service files without implicitly starting the service.
+  * Block secret, private-key, symlink, hardlink, binary, and root-escaping resources.
+
+ -- JW Agent Maintainers <maintainers@example.invalid>  Fri, 24 Jul 2026 13:15:00 +0900
+
 jw-agent (0.2.0~p2.20) noble; urgency=medium
 
   * Replace the multi-screen config wizard with one compact save-and-verify flow.
