@@ -1,3 +1,12 @@
+jw-agent (0.2.0~p2.24) noble; urgency=medium
+
+  * Persist command class, exit, timeout, truncation, and output digests with operation stages.
+  * Enter forensic lockdown when structured command evidence is missing or tampered.
+  * Show compact command outcomes and expandable integrity digests in configuration receipts.
+  * Prove validator timeout, bounded stderr capture, exact rollback, and service recovery on Ubuntu.
+
+ -- JW Agent Maintainers <maintainers@example.invalid>  Mon, 03 Aug 2026 10:05:00 +0900
+
 jw-agent (0.2.0~p2.23) noble; urgency=medium
 
   * Preserve the official validator error line and mark bounded prior diff candidates separately.

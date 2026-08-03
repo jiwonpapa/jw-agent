@@ -1,8 +1,9 @@
 use jw_contracts::{
-    ManagedConfigDiagnosticView, OperationReceiptView, OperationStage, ServiceAction,
+    ManagedConfigDiagnosticView, OperationCommandEvidenceView, OperationReceiptView,
+    OperationStage, ServiceAction,
 };
 
-use super::{OpsService, command_digest};
+use super::{OpsService, command_digest, command_evidence_view};
 use crate::error::OpsError;
 use crate::ledger::{Ledger, Transition};
 use crate::managed_config::{
@@ -10,14 +11,57 @@ use crate::managed_config::{
 };
 use crate::snapshot::read_managed_config_snapshot;
 
+pub(super) struct ManagedConfigRollbackEvidence<'a> {
+    pub(super) cause: &'a str,
+    pub(super) digest: &'a str,
+    pub(super) diagnostics: &'a [ManagedConfigDiagnosticView],
+    pub(super) command: Option<&'a OperationCommandEvidenceView>,
+}
+
+impl<'a> ManagedConfigRollbackEvidence<'a> {
+    pub(super) fn plain(cause: &'a str, digest: &'a str) -> Self {
+        Self {
+            cause,
+            digest,
+            diagnostics: &[],
+            command: None,
+        }
+    }
+
+    pub(super) fn command(
+        cause: &'a str,
+        digest: &'a str,
+        command: &'a OperationCommandEvidenceView,
+    ) -> Self {
+        Self {
+            cause,
+            digest,
+            diagnostics: &[],
+            command: Some(command),
+        }
+    }
+
+    pub(super) fn diagnostics_and_command(
+        cause: &'a str,
+        digest: &'a str,
+        diagnostics: &'a [ManagedConfigDiagnosticView],
+        command: &'a OperationCommandEvidenceView,
+    ) -> Self {
+        Self {
+            cause,
+            digest,
+            diagnostics,
+            command: Some(command),
+        }
+    }
+}
+
 impl OpsService {
-    pub(super) fn rollback_managed_config_with_diagnostics(
+    pub(super) fn rollback_managed_config_with_evidence(
         &self,
         ledger: &mut Ledger,
         operation_id: &str,
-        cause: &str,
-        cause_evidence_digest: &str,
-        diagnostics: &[ManagedConfigDiagnosticView],
+        evidence: ManagedConfigRollbackEvidence<'_>,
         now_ms: i64,
     ) -> Result<OperationReceiptView, OpsError> {
         let operation = ledger.load_operation(operation_id)?;
@@ -34,16 +78,28 @@ impl OpsService {
             let change = Transition {
                 expected: &expected,
                 next: OperationStage::RollingBack,
-                result_code: cause,
-                evidence_digest: cause_evidence_digest,
+                result_code: evidence.cause,
+                evidence_digest: evidence.digest,
                 after_digest: None,
                 rollback_result: None,
                 now_ms,
             };
-            if diagnostics.is_empty() {
-                ledger.transition(operation_id, change)?
-            } else {
-                ledger.transition_with_diagnostics(operation_id, change, diagnostics)?
+            match (evidence.diagnostics.is_empty(), evidence.command) {
+                (true, None) => ledger.transition(operation_id, change)?,
+                (true, Some(command)) => {
+                    ledger.transition_with_command_evidence(operation_id, change, command)?
+                }
+                (false, None) => ledger.transition_with_diagnostics(
+                    operation_id,
+                    change,
+                    evidence.diagnostics,
+                )?,
+                (false, Some(command)) => ledger.transition_with_diagnostics_and_command(
+                    operation_id,
+                    change,
+                    evidence.diagnostics,
+                    command,
+                )?,
             }
         };
         let Some(record) = &rolling.snapshot else {
@@ -131,11 +187,12 @@ impl OpsService {
         {
             return self.recovery_required(ledger, operation_id, "rollback_verify_failed", now_ms);
         }
-        let rollback_evidence = match runtime_evidence {
-            Some(active) => command_digest(&active)?,
-            None => command_digest(&config)?,
+        let rollback_command = match runtime_evidence.as_ref() {
+            Some(value) => value,
+            None => &config,
         };
-        let terminal = ledger.transition(
+        let rollback_evidence = command_digest(rollback_command)?;
+        let terminal = ledger.transition_with_command_evidence(
             operation_id,
             Transition {
                 expected: &[OperationStage::RollingBack],
@@ -146,6 +203,7 @@ impl OpsService {
                 rollback_result: Some("verified"),
                 now_ms,
             },
+            &command_evidence_view(rollback_command),
         )?;
         let receipt = ledger.receipt(&terminal.operation_id)?;
         if let Some(payload) = terminal.plan.managed_config {

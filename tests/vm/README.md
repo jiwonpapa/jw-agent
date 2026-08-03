@@ -3,7 +3,7 @@
 Status: P2 managed services and UFW VM_PASS; independent edge VM_PASS; P2C lifecycle VM_PASS except public CA success; P2D terminal and SFTP G0/G1 VM_PASS  
 Authority: Delivery  
 Owner: Verification Maintainer  
-Last reviewed: 2026-07-24
+Last reviewed: 2026-08-03
 
 This directory defines real-OS evidence that cannot be claimed from macOS or
 mock browser tests. The `p2-vm` xtask lane owns the repeatable OS, package,
@@ -25,9 +25,9 @@ JW_VM_PUBLIC_ADDRESS=192.168.0.142
 JW_VM_CA_CERT=/path/to/test-ca.crt
 JW_VM_ADMIN_USER=jwvmadmin
 JW_VM_PASSWORD_FILE=/path/to/mode-0600-fixture-password
-JW_VM_REMOTE_PACKAGE=/home/neojins/jw-agent_0.2.0~p2.23_amd64.deb
-JW_VM_EXPECTED_PACKAGE_SHA256=f0a92d342cfd0eec2b37fee8a6e785e8e73f29ce7e24d41571107f20ba3dbc3a
-JW_VM_EXPECTED_VERSION=0.2.0~p2.23
+JW_VM_REMOTE_PACKAGE=/home/neojins/jw-agent_0.2.0~p2.24_amd64.deb
+JW_VM_EXPECTED_PACKAGE_SHA256=9c3779180facc4cd4d4e83a17b773bb77488b401d8d138aa131bfb4cfd3d2ffc
+JW_VM_EXPECTED_VERSION=0.2.0~p2.24
 cargo xtask verify p2-vm
 ```
 
@@ -41,13 +41,13 @@ certificate를 VM management edge에 설치합니다.
 ## Current VM evidence
 
 - domain: `jw-agent-p1`, Ubuntu 24.04.4 LTS, kernel `6.8.0-136-generic`
-- package: `jw-agent 0.2.0~p2.23`, SHA-256 `f0a92d342cfd0eec2b37fee8a6e785e8e73f29ce7e24d41571107f20ba3dbc3a`, package/runtime gate clean
+- package: `jw-agent 0.2.0~p2.24`, SHA-256 `9c3779180facc4cd4d4e83a17b773bb77488b401d8d138aa131bfb4cfd3d2ffc`, package/runtime gate clean
 - lanes: `p2-local` 23 PASS, `p2-browser` 8 PASS with 45 browser scenarios, `p2-vm` 28 PASS
 - independent edge: non-root Rustls 9443, fixed live Unix readiness, edge-missing Nginx stop denial, Nginx inactive 상태의 authenticated UI·API continuity
 - service inventory: real Nginx and JW Agent internal classification plus a disposable failed custom unit surfaced as discovered read-only
 - automated VM scenarios: installed PAM fixture equality, no `pam_faillock`, `jw-authd → libpam.so.0`, `jw-agentd → libsqlite3.so.0`, repeated product-login failures followed by unchanged Linux password state and working OpenSSH key recovery
 - automated P2 faults: success, verified no-op, syntax failure rollback, injected reload failure rollback, 1 MiB snapshot filesystem cancellation before apply, deleted checkpoint lockdown and restoration
-- automated P2B config faults: Nginx·Apache·PHP-FPM valid save와 exact syntax/reload rollback, structured validator·masked path·공식 오류 줄·changed-line 결합, Nginx 지연 보고 851번 줄을 유지하면서 누락된 종결자 후보 845번 줄을 별도 표시, active symlink의 selected source 역매핑, >16 KiB save/no-op, external drift preservation, inactive denial, private proposal cleanup, internal temp discovery exclusion and startup cleanup
+- automated P2B config faults: Nginx·Apache·PHP-FPM valid save와 exact syntax/reload rollback, structured validator·masked path·공식 오류 줄·changed-line 결합, command class·exit·timeout·truncation·output digest receipt, Nginx validator 15초 timeout과 64 KiB stderr cap 뒤 exact rollback, Nginx 지연 보고 851번 줄을 유지하면서 누락된 종결자 후보 845번 줄을 별도 표시, active symlink의 selected source 역매핑, >16 KiB save/no-op, external drift preservation, inactive denial, private proposal cleanup, internal temp discovery exclusion and startup cleanup
 - automated service lifecycle: Nginx reload, Apache reload·restart·stop·start, PHP-FPM restart·stop·start, typed plan·approval·receipt와 public management continuity
 - automated PHP-FPM config: Ubuntu apt PHP 8.3.6 unit·extension·masked path 관찰, `php.ini`·`php-fpm.conf`·pool inventory, 73 KiB `php.ini` valid save, exit 0 syntax warning detection, reload-before-failure 차단, exact rollback과 service continuity
 - automated UFW: inactive observation, temporary active ruleset 안에서 product-owned allow·delete, protected 22/tcp deny rejection, external drift cancellation, SSH·9443 continuity와 exact fixture restore

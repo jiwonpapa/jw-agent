@@ -3,7 +3,7 @@
 Status: Accepted  
 Authority: Operation Specification  
 Owner: Managed Configuration Maintainer  
-Last reviewed: 2026-07-21
+Last reviewed: 2026-08-03
 
 ## 목적
 
@@ -112,7 +112,12 @@ plan에서만 실행 중 service 상태까지 포함합니다. active connection
 
 ## Command and evidence policy
 
-executable, argv, cwd, environment allowlist, timeout, output cap은 adapter registry가 고정합니다. shell은 사용하지 않습니다. receipt는 actor, resource ID, digests, diff 통계, stage, command class·exit·timeout·truncation, health, rollback과 recovery path를 기록하며 content·secret은 기록하지 않습니다.
+executable, argv, cwd, environment allowlist, timeout, output cap은 adapter registry가 고정합니다.
+shell은 사용하지 않습니다. receipt는 actor, resource ID, digests, diff 통계, stage,
+command class·exit·timeout·truncation, health, rollback과 recovery path를 기록하며
+content·secret과 raw stdout·stderr는 기록하지 않습니다. command metadata는 해당
+ledger event와 같은 SQLite transaction으로 저장하고 digest를 다시 검증합니다. row 누락,
+JSON 변조, event evidence와의 불일치는 `FORENSIC_LOCKDOWN`입니다.
 
 ## Typed errors
 
@@ -126,6 +131,7 @@ executable, argv, cwd, environment allowlist, timeout, output cap은 adapter reg
 - unchanged no-op
 - syntax failure with no reload
 - reload and health failure with verified rollback
+- validator timeout과 stdout·stderr output cap 뒤 exact rollback
 - external edit between plan and approval
 - traversal, symlink, hardlink, protected resource, oversized/NUL body rejection
 - disk full before snapshot/temp/state transition
@@ -141,10 +147,10 @@ executable, argv, cwd, environment allowlist, timeout, output cap은 adapter reg
 - 설정 mutation은 desktop workspace에서만 제공하고 mobile·tablet은 read-only 상태와
   이력만 제공
 
-`jw-agent_0.2.0~p2.23_amd64.deb`의 `VM-P2-MANAGED-CONFIG`이 Nginx와 Apache
+`jw-agent_0.2.0~p2.24_amd64.deb`의 `VM-P2-MANAGED-CONFIG`이 Nginx와 Apache
 service-tree, PHP-FPM resource의 valid save, 공식 validator, reload, syntax rollback,
 structured diagnostic, 공식 오류 줄과 별도 원인 후보, selected-source line mapping,
-read-back과 서비스 연속성을
-검증했습니다. package SHA-256은
-`f0a92d342cfd0eec2b37fee8a6e785e8e73f29ce7e24d41571107f20ba3dbc3a`입니다.
+command class·exit·timeout·truncation·output digest, validator 15초 timeout과 64 KiB
+stderr cap, exact rollback, read-back과 서비스 연속성을 검증했습니다. package SHA-256은
+`9c3779180facc4cd4d4e83a17b773bb77488b401d8d138aa131bfb4cfd3d2ffc`입니다.
 registry 밖 root와 차단된 resource는 계속 `UNSUPPORTED`입니다.

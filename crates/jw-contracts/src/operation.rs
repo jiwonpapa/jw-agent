@@ -7,8 +7,10 @@ use utoipa::ToSchema;
 
 use crate::{AssuranceView, Subject, UfwRulePlanRequest, UfwRulePlanView, UfwView};
 
+mod command_evidence;
 mod diagnostic;
 
+pub use command_evidence::{OPERATION_COMMAND_CLASS_MAX_BYTES, OperationCommandEvidenceView};
 pub use diagnostic::{
     MANAGED_CONFIG_DIAGNOSTIC_MAX_ENTRIES, MANAGED_CONFIG_DIAGNOSTIC_MAX_MESSAGE_BYTES,
     MANAGED_CONFIG_DIAGNOSTIC_MAX_RELATED_LINES, ManagedConfigDiagnosticSeverity,
@@ -644,6 +646,8 @@ pub struct OperationStageEvidenceView {
     pub recorded_at: String,
     pub result_code: String,
     pub evidence_digest: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<OperationCommandEvidenceView>,
     pub diagnostics: Vec<ManagedConfigDiagnosticView>,
 }
 
@@ -1055,9 +1059,10 @@ mod tests {
     use super::{
         MANAGED_CONFIG_OPERATION, ManagedConfigApprovalIntent, ManagedConfigPlanRequest,
         NGINX_CONFIG_ADAPTER_ID, NGINX_LAYOUT_ID, NGINX_SITE_STATE_OPERATION, NginxSiteState,
-        NginxSiteStatePlanRequest, OPERATION_SCHEMA_VERSION, OperationStage, ServiceAction,
-        nginx_config_resource_id, nginx_enabled_state_digest, nginx_management_config,
-        nginx_site_id, validate_digest, validate_managed_config_resource_id,
+        NginxSiteStatePlanRequest, OPERATION_SCHEMA_VERSION, OperationCommandEvidenceView,
+        OperationStage, ServiceAction, nginx_config_resource_id, nginx_enabled_state_digest,
+        nginx_management_config, nginx_site_id, validate_digest,
+        validate_managed_config_resource_id,
     };
 
     #[test]
@@ -1065,6 +1070,27 @@ mod tests {
         assert!(OperationStage::Succeeded.is_terminal());
         assert!(OperationStage::RolledBack.is_terminal());
         assert!(!OperationStage::Applying.is_terminal());
+    }
+
+    #[test]
+    fn command_evidence_is_bounded_and_cannot_claim_timeout_success() {
+        let mut evidence = OperationCommandEvidenceView {
+            class: String::from("nginx_config_test"),
+            success: false,
+            exit_code: None,
+            timed_out: true,
+            stdout_digest: valid_digest(),
+            stdout_truncated: false,
+            stderr_digest: valid_digest(),
+            stderr_truncated: true,
+        };
+        assert!(evidence.validate_shape().is_ok());
+        evidence.success = true;
+        evidence.exit_code = Some(0);
+        assert_eq!(evidence.validate_shape(), Err("command_success"));
+        evidence.success = false;
+        evidence.class = String::from("nginx -t");
+        assert_eq!(evidence.validate_shape(), Err("command_class"));
     }
 
     #[test]

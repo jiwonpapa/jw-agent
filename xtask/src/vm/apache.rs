@@ -165,6 +165,7 @@ fn run_managed_config_scenarios(
         &rolled_back,
         "apache",
         "apache_config_test",
+        false,
         APACHE_SITE,
         Some(6),
     )?;

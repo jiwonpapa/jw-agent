@@ -1457,6 +1457,17 @@ export interface components {
             /** Format: int32 */
             schemaVersion: number;
         };
+        OperationCommandEvidenceView: {
+            class: string;
+            /** Format: int32 */
+            exitCode?: number | null;
+            stderrDigest: string;
+            stderrTruncated: boolean;
+            stdoutDigest: string;
+            stdoutTruncated: boolean;
+            success: boolean;
+            timedOut: boolean;
+        };
         OperationListView: {
             operations: components["schemas"]["OperationReceiptView"][];
         };
@@ -1483,6 +1494,7 @@ export interface components {
         /** @enum {string} */
         OperationStage: "PLANNED" | "APPROVED" | "SNAPSHOTTED" | "APPLYING" | "VALIDATING" | "RELOADING" | "VERIFYING" | "ROLLING_BACK" | "SUCCEEDED" | "ROLLED_BACK" | "RECOVERY_REQUIRED" | "REJECTED" | "EXPIRED" | "CANCELLED_BEFORE_APPLY";
         OperationStageEvidenceView: {
+            command?: null | components["schemas"]["OperationCommandEvidenceView"];
             diagnostics: components["schemas"]["ManagedConfigDiagnosticView"][];
             evidenceDigest: string;
             recordedAt: string;

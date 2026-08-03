@@ -7,6 +7,8 @@ use serde::Serialize;
 use crate::digest::canonical_digest;
 use crate::error::OpsError;
 
+use super::{Ledger, StoredOperation, Transition};
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct DiagnosticEvidence<'a> {
@@ -95,4 +97,32 @@ fn diagnostic_evidence_digest(
             diagnostics_digest,
         },
     )
+}
+
+impl Ledger {
+    pub fn transition_with_diagnostics(
+        &mut self,
+        operation_id: &str,
+        change: Transition<'_>,
+        diagnostics: &[ManagedConfigDiagnosticView],
+    ) -> Result<StoredOperation, OpsError> {
+        if diagnostics.is_empty() {
+            return self.transition(operation_id, change);
+        }
+        let (stored, combined) = prepare_diagnostics(change.evidence_digest, diagnostics)?;
+        self.transition_internal(
+            operation_id,
+            Transition {
+                expected: change.expected,
+                next: change.next,
+                result_code: change.result_code,
+                evidence_digest: &combined,
+                after_digest: change.after_digest,
+                rollback_result: change.rollback_result,
+                now_ms: change.now_ms,
+            },
+            Some(&stored),
+            None,
+        )
+    }
 }

@@ -36,17 +36,21 @@ use crate::managed_config::{
     write_proposal,
 };
 use crate::nginx::{NGINX_IMPACT, NGINX_RECOVERY_PATH, NginxSite, discover_site, set_enabled};
-use crate::runner::{CommandClass, CommandEvidence, OperationRunner};
+use crate::runner::{CommandClass, OperationRunner};
 use crate::snapshot::{
     CertificateInventorySnapshot, ManagedConfigSnapshot, NginxLinkSnapshot,
     read_certificate_inventory_snapshot, read_managed_config_snapshot, read_nginx_snapshot,
     write_certificate_inventory_snapshot, write_managed_config_snapshot, write_nginx_snapshot,
 };
 
+mod command_evidence;
 mod managed_config_plan;
 mod managed_config_rollback;
 mod service_operation;
 mod ufw_operation;
+
+use command_evidence::{command_digest, command_evidence_view, failed_evidence};
+use managed_config_rollback::ManagedConfigRollbackEvidence;
 
 const CERTBOT_STAGING_EVIDENCE_TTL_MS: i64 = 24 * 60 * 60 * 1_000;
 
@@ -239,19 +243,6 @@ struct CertbotIssueApprovalInput<'a> {
     idempotency_key: &'a str,
     external_effect_confirmed: bool,
     local_attach_deferred_confirmed: bool,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct CommandDigest<'a> {
-    class: &'a str,
-    success: bool,
-    exit_code: Option<i32>,
-    timed_out: bool,
-    stdout_digest: &'a str,
-    stdout_truncated: bool,
-    stderr_digest: &'a str,
-    stderr_truncated: bool,
 }
 
 impl OpsService {
@@ -2238,16 +2229,19 @@ impl OpsService {
                 &changed_lines,
                 &proposed,
             );
-            return self.rollback_managed_config_with_diagnostics(
+            return self.rollback_managed_config_with_evidence(
                 ledger,
                 &snapshotted.operation_id,
-                &failure_code,
-                &config_digest,
-                &diagnostics,
+                ManagedConfigRollbackEvidence::diagnostics_and_command(
+                    &failure_code,
+                    &config_digest,
+                    &diagnostics,
+                    &command_evidence_view(&config_test),
+                ),
                 now_ms,
             );
         }
-        ledger.transition(
+        ledger.transition_with_command_evidence(
             &operation.operation_id,
             Transition {
                 expected: &[OperationStage::Validating],
@@ -2262,6 +2256,7 @@ impl OpsService {
                 rollback_result: None,
                 now_ms,
             },
+            &command_evidence_view(&config_test),
         )?;
         let verification_digest = if payload.service_action == ServiceAction::Reload {
             let reload = match self.runner.run(preflight.adapter.reload()) {
@@ -2280,15 +2275,18 @@ impl OpsService {
             let reload_digest = command_digest(&reload)?;
             if !reload.success {
                 let code = format!("{}_failed", preflight.adapter.reload().as_str());
-                return self.rollback_managed_config(
+                return self.rollback_managed_config_with_evidence(
                     ledger,
                     &snapshotted.operation_id,
-                    &code,
-                    &reload_digest,
+                    ManagedConfigRollbackEvidence::command(
+                        &code,
+                        &reload_digest,
+                        &command_evidence_view(&reload),
+                    ),
                     now_ms,
                 );
             }
-            ledger.transition(
+            ledger.transition_with_command_evidence(
                 &operation.operation_id,
                 Transition {
                     expected: &[OperationStage::Reloading],
@@ -2299,6 +2297,7 @@ impl OpsService {
                     rollback_result: None,
                     now_ms,
                 },
+                &command_evidence_view(&reload),
             )?;
             reload_digest
         } else {
@@ -2316,24 +2315,39 @@ impl OpsService {
             .is_none_or(|result| result.as_ref().is_ok_and(|evidence| evidence.success));
         let verified = content_verified && service_verified;
         if !verified {
-            let evidence = match active.as_ref() {
-                Some(Ok(value)) => command_digest(value)?,
-                Some(Err(_)) => sha256_digest(preflight.adapter.active().as_str().as_bytes()),
-                None => verification_digest,
+            return match active.as_ref() {
+                Some(Ok(value)) => self.rollback_managed_config_with_evidence(
+                    ledger,
+                    &snapshotted.operation_id,
+                    ManagedConfigRollbackEvidence::command(
+                        "read_back_failed",
+                        &command_digest(value)?,
+                        &command_evidence_view(value),
+                    ),
+                    now_ms,
+                ),
+                Some(Err(_)) => self.rollback_managed_config(
+                    ledger,
+                    &snapshotted.operation_id,
+                    "read_back_failed",
+                    &sha256_digest(preflight.adapter.active().as_str().as_bytes()),
+                    now_ms,
+                ),
+                None => self.rollback_managed_config(
+                    ledger,
+                    &snapshotted.operation_id,
+                    "read_back_failed",
+                    &verification_digest,
+                    now_ms,
+                ),
             };
-            return self.rollback_managed_config(
-                ledger,
-                &snapshotted.operation_id,
-                "read_back_failed",
-                &evidence,
-                now_ms,
-            );
         }
-        let succeeded_digest = match active {
-            Some(result) => command_digest(&result?)?,
-            None => verification_digest,
+        let succeeded_command = match active {
+            Some(result) => result?,
+            None => config_test,
         };
-        let succeeded = ledger.transition(
+        let succeeded_digest = command_digest(&succeeded_command)?;
+        let succeeded = ledger.transition_with_command_evidence(
             &operation.operation_id,
             Transition {
                 expected: &[OperationStage::Verifying],
@@ -2344,6 +2358,7 @@ impl OpsService {
                 rollback_result: None,
                 now_ms,
             },
+            &command_evidence_view(&succeeded_command),
         )?;
         let receipt = ledger.receipt(&succeeded.operation_id)?;
         let _cleanup = remove_proposal(&self.paths, &proposal);
@@ -2455,12 +2470,10 @@ impl OpsService {
         cause_evidence_digest: &str,
         now_ms: i64,
     ) -> Result<OperationReceiptView, OpsError> {
-        self.rollback_managed_config_with_diagnostics(
+        self.rollback_managed_config_with_evidence(
             ledger,
             operation_id,
-            cause,
-            cause_evidence_digest,
-            &[],
+            ManagedConfigRollbackEvidence::plain(cause, cause_evidence_digest),
             now_ms,
         )
     }
@@ -3051,42 +3064,6 @@ fn require_operator(actor: &Subject) -> Result<(), OpsError> {
         Ok(())
     } else {
         Err(OpsError::Rejected("role_denied"))
-    }
-}
-
-fn command_digest(evidence: &CommandEvidence) -> Result<String, OpsError> {
-    canonical_digest(
-        b"jw-agent/command-evidence/v1",
-        &CommandDigest {
-            class: evidence.class.as_str(),
-            success: evidence.success,
-            exit_code: evidence.exit_code,
-            timed_out: evidence.timed_out,
-            stdout_digest: &evidence.stdout.digest,
-            stdout_truncated: evidence.stdout.truncated,
-            stderr_digest: &evidence.stderr.digest,
-            stderr_truncated: evidence.stderr.truncated,
-        },
-    )
-}
-
-fn failed_evidence(class: CommandClass) -> CommandEvidence {
-    let empty = sha256_digest(b"");
-    CommandEvidence {
-        class,
-        success: false,
-        exit_code: None,
-        timed_out: false,
-        stdout: crate::runner::StreamEvidence {
-            digest: empty.clone(),
-            captured: Vec::new(),
-            truncated: false,
-        },
-        stderr: crate::runner::StreamEvidence {
-            digest: empty,
-            captured: Vec::new(),
-            truncated: false,
-        },
     }
 }
 

@@ -3,7 +3,7 @@
 Status: Accepted  
 Authority: Operation Specification  
 Owner: Managed Configuration Maintainer  
-Last reviewed: 2026-07-24
+Last reviewed: 2026-08-03
 
 ## 목적
 
@@ -58,6 +58,8 @@ managed resource, file, line, column과 수정 가능한 원인을 UI와 immutab
 
 - safe diagnostic JSON과 validator evidence digest를 결합해 ledger event
   `evidenceDigest`를 생성합니다.
+- command class·exit·timeout·stdout/stderr digest·truncation은 raw output 없이 같은
+  event sequence에 결합하며 command row와 event digest 불일치는 fail closed입니다.
 - safe diagnostic payload는 ledger event sequence에 결합된 별도 SQLite row에 저장하고
   receipt 조회 시 digest를 다시 검증합니다.
 - row 누락, JSON 변조, digest 불일치는 `FORENSIC_LOCKDOWN`입니다.
@@ -87,11 +89,12 @@ managed resource, file, line, column과 수정 가능한 원인을 UI와 immutab
 
 ## Evidence
 
-- `jw-agent_0.2.0~p2.23_amd64.deb`
-- SHA-256 `f0a92d342cfd0eec2b37fee8a6e785e8e73f29ce7e24d41571107f20ba3dbc3a`
+- `jw-agent_0.2.0~p2.24_amd64.deb`
+- SHA-256 `9c3779180facc4cd4d4e83a17b773bb77488b401d8d138aa131bfb4cfd3d2ffc`
 - Ubuntu 24.04 `VM-P2-MANAGED-CONFIG`: Nginx·Apache·PHP-FPM structured
   diagnostic, exact official error line, separate cause candidate, selected diff relation,
   rejected source 비노출과 exact rollback PASS. Nginx 실검증은 official line 851,
-  cause candidate line 845를 확인했습니다.
+  cause candidate line 845를 확인했고 validator timeout·stderr cap도 구조화된 command
+  evidence로 확인했습니다.
 - `p2-vm` 28/28, `p2-browser` 8/8 및 Playwright 45/45 PASS
 - [실제 p2.23 Monaco workspace와 인라인 복원 표면](../../../output/vm/jw-agent-p2.23-editor-history.png)

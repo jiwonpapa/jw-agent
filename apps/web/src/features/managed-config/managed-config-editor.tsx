@@ -18,6 +18,7 @@ import type {
   OperationAcceptedView,
   OperationReceiptView,
   OperationStage,
+  OperationStageEvidenceView,
 } from "../../shared/api/types";
 import { formatDateTime } from "../../shared/domain/format";
 import {
@@ -538,7 +539,10 @@ function ManagedConfigResult({
           {receipt.stages.map((stage) => (
             <li key={stage.sequence} className="flex gap-2 py-2 text-xs">
               <CircleDot aria-hidden="true" className="mt-0.5 size-3.5 shrink-0" />
-              <span>{STAGE_LABELS[stage.stage]} · {formatDateTime(stage.recordedAt)} · {operationResultLabel(stage.resultCode)}</span>
+              <div className="min-w-0">
+                <p>{STAGE_LABELS[stage.stage]} · {formatDateTime(stage.recordedAt)} · {operationResultLabel(stage.resultCode)}</p>
+                {stage.command ? <CommandEvidence command={stage.command} /> : null}
+              </div>
             </li>
           ))}
         </ol>
@@ -558,4 +562,32 @@ function PlanValue({ label, value }: { label: string; value: string }) {
 
 function isTerminalStage(stage: OperationStage): boolean {
   return ["SUCCEEDED", "ROLLED_BACK", "RECOVERY_REQUIRED", "REJECTED", "EXPIRED", "CANCELLED_BEFORE_APPLY"].includes(stage);
+}
+
+function CommandEvidence({
+  command,
+}: {
+  command: NonNullable<OperationStageEvidenceView["command"]>;
+}) {
+  const result = command.timedOut
+    ? "시간 초과"
+    : command.success
+      ? "정상 종료"
+      : command.exitCode === null || command.exitCode === undefined
+        ? "비정상 종료"
+        : `종료 코드 ${String(command.exitCode)}`;
+  const capped = command.stdoutTruncated || command.stderrTruncated;
+
+  return (
+    <div className="mt-1 text-muted">
+      <p className="font-mono">{command.class} · {result}{capped ? " · 출력 상한 적용" : ""}</p>
+      <details className="mt-1">
+        <summary className="cursor-pointer font-sans">무결성 증거</summary>
+        <dl className="mt-1 grid gap-1 break-all font-mono">
+          <div><dt className="inline font-sans">표준 출력 </dt><dd className="inline">{command.stdoutDigest}</dd></div>
+          <div><dt className="inline font-sans">표준 오류 </dt><dd className="inline">{command.stderrDigest}</dd></div>
+        </dl>
+      </details>
+    </div>
+  );
 }

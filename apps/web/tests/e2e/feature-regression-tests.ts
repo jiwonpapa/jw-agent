@@ -155,6 +155,9 @@ export function registerFeatureRegressionTests(harness: FeatureRegressionHarness
     await expect(page.getByRole("heading", { name: "저장 실패 · 이전 설정 복구 완료" })).toBeVisible();
     await expect(page.getByText("변경을 적용하지 않고 이전 설정을 복구·검증했습니다.")).toBeVisible();
     await expect(page.getByText("원인 후보 2번째 줄")).toBeVisible();
+    await page.getByText("작업 기록과 복구 정보").click();
+    await expect(page.getByText("nginx_config_test · 종료 코드 1 · 출력 상한 적용")).toBeVisible();
+    await expect(page.getByText("무결성 증거")).toBeVisible();
     await page.getByRole("button", { name: "3번째 줄 수정" }).click();
     await expectCodeEditorText(page, "Nginx 설정 내용", "broken on;");
     await expect(page.getByText("3번째 줄을 수정해 주세요.")).toBeVisible();

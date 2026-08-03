@@ -135,6 +135,7 @@ fn run_scenarios(config: &VmConfig, password: &str, timeout: Duration) -> Result
         &rolled_back,
         "php_fpm",
         "php_fpm_83_config_test",
+        true,
         PHP_INI,
         Some(invalid_line),
     )?;

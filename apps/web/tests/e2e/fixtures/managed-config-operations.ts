@@ -99,6 +99,16 @@ export function managedConfigOperationFixtures(input: FixtureInput) {
         recordedAt: "2026-07-21T02:12:03Z",
         resultCode: "nginx_config_test_failed:line=3",
         evidenceDigest: input.contentDigest,
+        command: {
+          class: "nginx_config_test",
+          success: false,
+          exitCode: 1,
+          timedOut: false,
+          stdoutDigest: `sha256:${"a".repeat(64)}`,
+          stdoutTruncated: false,
+          stderrDigest: `sha256:${"b".repeat(64)}`,
+          stderrTruncated: true,
+        },
         diagnostics: [{
           service: "nginx",
           validator: "nginx_config_test",

@@ -5430,6 +5430,49 @@
         },
         "additionalProperties": false
       },
+      "OperationCommandEvidenceView": {
+        "type": "object",
+        "required": [
+          "class",
+          "success",
+          "timedOut",
+          "stdoutDigest",
+          "stdoutTruncated",
+          "stderrDigest",
+          "stderrTruncated"
+        ],
+        "properties": {
+          "class": {
+            "type": "string"
+          },
+          "exitCode": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32"
+          },
+          "stderrDigest": {
+            "type": "string"
+          },
+          "stderrTruncated": {
+            "type": "boolean"
+          },
+          "stdoutDigest": {
+            "type": "string"
+          },
+          "stdoutTruncated": {
+            "type": "boolean"
+          },
+          "success": {
+            "type": "boolean"
+          },
+          "timedOut": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      },
       "OperationListView": {
         "type": "object",
         "required": [
@@ -5561,6 +5604,16 @@
           "diagnostics"
         ],
         "properties": {
+          "command": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/OperationCommandEvidenceView"
+              }
+            ]
+          },
           "diagnostics": {
             "type": "array",
             "items": {

@@ -1,8 +1,8 @@
 use jw_contracts::{
     AssuranceLevel, AssuranceView, MANAGED_CONFIG_OPERATION, ManagedConfigDiagnosticSeverity,
     ManagedConfigDiagnosticView, NGINX_SITE_STATE_OPERATION, NGINX_TREE_CONFIG_ADAPTER_ID,
-    NGINX_TREE_RESOURCE_PREFIX, NginxSiteState, OperationStage, Role, RollbackSupport,
-    ServiceAction, Subject, managed_service_config_resource_id, sha256_digest,
+    NGINX_TREE_RESOURCE_PREFIX, NginxSiteState, OperationCommandEvidenceView, OperationStage, Role,
+    RollbackSupport, ServiceAction, Subject, managed_service_config_resource_id, sha256_digest,
 };
 
 use crate::config::OpsPaths;
@@ -10,6 +10,7 @@ use crate::managed_config::ManagedConfigPlanPayload;
 
 use super::{
     CHECKPOINT_PENDING_KEY, Connection, Ledger, StoredPlan, Transition, clear_completed_checkpoint,
+    command_evidence_digest,
 };
 
 mod activity_tests;
@@ -51,6 +52,84 @@ fn tampered_event_enters_forensic_lockdown() -> Result<(), String> {
     connection
         .execute(
             "UPDATE ledger_events SET result_code = 'forged' WHERE sequence = 1",
+            [],
+        )
+        .map_err(|error| error.to_string())?;
+    drop(connection);
+    assert!(matches!(
+        Ledger::open(&paths),
+        Err(crate::error::OpsError::ForensicLockdown)
+    ));
+    std::fs::remove_dir_all(root).map_err(|error| error.to_string())
+}
+
+#[test]
+fn command_evidence_is_receipted_and_tamper_enters_lockdown() -> Result<(), String> {
+    let root = test_root("command-evidence-tamper")?;
+    let paths = OpsPaths::for_test(&root);
+    let mut ledger = Ledger::open(&paths).map_err(|error| error.to_string())?;
+    let plan = ledger
+        .create_or_reuse_plan(&fixture_plan())
+        .map_err(|error| error.to_string())?;
+    let operation = ledger
+        .begin_operation(
+            "op-command-evidence",
+            &plan.plan_id,
+            &plan.plan_hash,
+            &plan.idempotency_key,
+            &plan.actor,
+            1_500,
+        )
+        .map_err(|error| error.to_string())?;
+    let command = OperationCommandEvidenceView {
+        class: String::from("nginx_config_test"),
+        success: false,
+        exit_code: None,
+        timed_out: true,
+        stdout_digest: sha256_digest(b""),
+        stdout_truncated: false,
+        stderr_digest: sha256_digest(b"bounded error"),
+        stderr_truncated: true,
+    };
+    let digest = command_evidence_digest(&command).map_err(|error| error.to_string())?;
+    let terminal = ledger
+        .transition_with_command_evidence(
+            &operation.operation_id,
+            Transition {
+                expected: &[OperationStage::Approved],
+                next: OperationStage::CancelledBeforeApply,
+                result_code: "command_timed_out",
+                evidence_digest: &digest,
+                after_digest: None,
+                rollback_result: None,
+                now_ms: 1_501,
+            },
+            &command,
+        )
+        .map_err(|error| error.to_string())?;
+    let receipt = ledger
+        .receipt(&terminal.operation_id)
+        .map_err(|error| error.to_string())?;
+    assert_eq!(
+        receipt
+            .stages
+            .last()
+            .and_then(|stage| stage.command.as_ref())
+            .map(|value| (
+                value.class.as_str(),
+                value.timed_out,
+                value.stderr_truncated
+            )),
+        Some(("nginx_config_test", true, true))
+    );
+    drop(ledger);
+
+    let connection =
+        rusqlite::Connection::open(&paths.database).map_err(|error| error.to_string())?;
+    connection
+        .execute(
+            "UPDATE operation_command_evidence
+             SET command_json = replace(command_json, 'nginx_config_test', 'nginx_reload')",
             [],
         )
         .map_err(|error| error.to_string())?;
@@ -112,19 +191,31 @@ fn diagnostic_payload_is_chained_and_tamper_enters_lockdown() -> Result<(), Stri
         related_changed_lines: vec![13],
         cause_candidate_lines: Vec::new(),
     };
+    let command = OperationCommandEvidenceView {
+        class: String::from("nginx_config_test"),
+        success: false,
+        exit_code: Some(1),
+        timed_out: false,
+        stdout_digest: sha256_digest(b""),
+        stdout_truncated: false,
+        stderr_digest: sha256_digest(b"validator-output"),
+        stderr_truncated: false,
+    };
+    let command_digest = command_evidence_digest(&command).map_err(|error| error.to_string())?;
     let terminal = ledger
-        .transition_with_diagnostics(
+        .transition_with_diagnostics_and_command(
             &operation.operation_id,
             Transition {
                 expected: &[OperationStage::Approved],
                 next: OperationStage::CancelledBeforeApply,
                 result_code: "nginx_config_test_failed",
-                evidence_digest: &sha256_digest(b"validator-output"),
+                evidence_digest: &command_digest,
                 after_digest: None,
                 rollback_result: None,
                 now_ms: 1_501,
             },
             &[diagnostic],
+            &command,
         )
         .map_err(|error| error.to_string())?;
     let receipt = ledger
@@ -133,6 +224,14 @@ fn diagnostic_payload_is_chained_and_tamper_enters_lockdown() -> Result<(), Stri
     assert_eq!(
         receipt.stages.last().map(|stage| stage.diagnostics.len()),
         Some(1)
+    );
+    assert_eq!(
+        receipt
+            .stages
+            .last()
+            .and_then(|stage| stage.command.as_ref())
+            .map(|value| value.class.as_str()),
+        Some("nginx_config_test")
     );
     drop(ledger);
 

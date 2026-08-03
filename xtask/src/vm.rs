@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 pub(crate) mod apache;
+mod command_fault;
 pub(crate) mod independent_edge;
 pub(crate) mod php_fpm;
 pub(crate) mod public_recovery;
@@ -22,12 +23,11 @@ use std::time::{Duration, Instant};
 use crate::process::{Captured, run_capture, safe_output};
 use receipt::{
     contains_nginx_config_failure_result, require_managed_config_cause_candidate,
-    require_managed_config_diagnostic,
+    require_managed_config_diagnostic, require_managed_config_success_commands,
 };
 
 const RECOVERY_HOST: &str = "127.0.0.1:8787";
 const RECOVERY_ORIGIN: &str = "http://127.0.0.1:8787";
-const RESTART_AGENTD_READY: &str = "sudo systemctl restart jw-agentd && sleep 1";
 const TERMINAL_WS_PROBE: &str = r#"
 import base64
 import hashlib
@@ -449,8 +449,7 @@ test "$(find /proc -maxdepth 2 -name comm -readable -exec grep -l '^jw-certd$' {
 pub fn gate_pam_matrix(_root: &Path, timeout: Duration) -> Result<(), String> {
     let config = VmConfig::load()?;
     let password = read_secret(&config.password_file)?;
-    let reset = config.ssh(RESTART_AGENTD_READY, None, timeout)?;
-    require_success(&reset, "authentication limiter reset", false)?;
+    restart_edge_and_agentd_and_wait(&config, timeout)?;
     let account_before = config.ssh(
         &format!("sudo passwd -S -- {}", config.admin_user),
         None,
@@ -486,8 +485,7 @@ pub fn gate_pam_matrix(_root: &Path, timeout: Duration) -> Result<(), String> {
     }
     let ssh_after_limit = config.ssh("true", None, timeout)?;
     require_success(&ssh_after_limit, "OpenSSH after PAM limiter", false)?;
-    let reset = config.ssh(RESTART_AGENTD_READY, None, timeout)?;
-    require_success(&reset, "authentication limiter cleanup", false)?;
+    restart_edge_and_agentd_and_wait(&config, timeout)?;
 
     let admin = recovery_login(&config, &config.admin_user, &password, timeout)?;
     expect_http(&admin, 200, "admin PAM login")?;
@@ -1862,6 +1860,7 @@ pub fn gate_p2_managed_config(_root: &Path, timeout: Duration) -> Result<(), Str
                 "managed config receipt omitted config_verified evidence",
             ));
         }
+        require_managed_config_success_commands(&saved)?;
         require_file_equals(&config, P2_MANAGED_SITE, managed_saved.as_bytes(), timeout)?;
 
         let noop =
@@ -1893,6 +1892,7 @@ pub fn gate_p2_managed_config(_root: &Path, timeout: Duration) -> Result<(), Str
             &syntax_rollback,
             "nginx",
             "nginx_config_test",
+            false,
             "/etc/nginx/sites-available/jw-agent-vm-managed.conf",
             Some(1),
         )?;
@@ -1921,6 +1921,8 @@ pub fn gate_p2_managed_config(_root: &Path, timeout: Duration) -> Result<(), Str
             845,
         )?;
         require_file_equals(&config, P2_MANAGED_SITE, managed_saved.as_bytes(), timeout)?;
+
+        command_fault::verify_timeout(&config, &mut session, managed_saved.as_bytes(), timeout)?;
 
         install_reload_fail_once(&config, timeout)?;
         let reload_rollback = session.operate_managed_config(
@@ -3152,7 +3154,7 @@ impl P2ApiSession {
 
 fn restart_edge_and_agentd_and_wait(config: &VmConfig, timeout: Duration) -> Result<(), String> {
     let restarted = config.ssh(
-        "sudo systemctl restart nginx.service jw-agentd.service",
+        "sudo systemctl restart jw-authd.socket nginx.service jw-agentd.service",
         None,
         timeout,
     )?;
@@ -3685,7 +3687,7 @@ fn cleanup_p2_fixtures(config: &VmConfig, timeout: Duration) -> Result<(), Strin
 
 fn cleanup_managed_config_fixture(config: &VmConfig, timeout: Duration) -> Result<(), String> {
     let result = config.ssh(
-        "sudo rm -f /etc/nginx/sites-enabled/jw-agent-vm-managed.conf\nsudo rm -f /etc/nginx/sites-available/jw-agent-vm-managed.conf /etc/nginx/sites-available/.jw-agent-0123456789abcdef.tmp\nsudo rm -f /etc/systemd/system/nginx.service.d/90-jw-agent-vm.conf /run/jw-agent-vm-reload-fail-once\nsudo systemctl daemon-reload\nsudo nginx -t\nsudo systemctl reload nginx.service",
+        "sudo rm -f /etc/nginx/sites-enabled/jw-agent-vm-managed.conf\nsudo rm -f /etc/nginx/sites-available/jw-agent-vm-managed.conf /etc/nginx/sites-available/.jw-agent-0123456789abcdef.tmp\nsudo rm -f /etc/systemd/system/nginx.service.d/90-jw-agent-vm.conf /run/jw-agent-vm-reload-fail-once\nsudo rm -f /etc/systemd/system/jw-opsd.service.d/90-jw-agent-vm-command-timeout.conf /run/jw-agent/jw-agent-vm-nginx /run/jw-agent/jw-agent-vm-nginx-real /run/jw-agent/jw-agent-vm-nginx-timeout\nsudo systemctl daemon-reload\nsudo systemctl restart jw-opsd.service\nsudo nginx -t\nsudo systemctl reload nginx.service",
         None,
         timeout,
     )?;

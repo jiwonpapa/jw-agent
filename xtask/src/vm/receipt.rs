@@ -30,6 +30,7 @@ pub(super) fn require_managed_config_diagnostic(
     body: &str,
     service: &str,
     validator: &str,
+    command_success: bool,
     masked_path: &str,
     expected_line: Option<u32>,
 ) -> Result<u32, String> {
@@ -78,6 +79,7 @@ pub(super) fn require_managed_config_diagnostic(
             "{service} diagnostic did not relate line {line} to the submitted diff"
         ));
     }
+    require_command_evidence(body, validator, command_success, false, false, false)?;
     Ok(line)
 }
 
@@ -112,9 +114,53 @@ pub(super) fn require_managed_config_cause_candidate(
     Ok(())
 }
 
+pub(super) fn require_command_evidence(
+    body: &str,
+    class: &str,
+    success: bool,
+    timed_out: bool,
+    stdout_truncated: bool,
+    stderr_truncated: bool,
+) -> Result<(), String> {
+    let marker = format!("\"class\":\"{class}\"");
+    let command = body
+        .find(&marker)
+        .and_then(|marker_start| body[..marker_start].rfind('{').map(|start| &body[start..]))
+        .ok_or_else(|| format!("receipt omitted command evidence for {class}"))?;
+    let command = command
+        .split_once('}')
+        .map(|(object, _)| object)
+        .ok_or_else(|| format!("{class} command evidence object was incomplete"))?;
+    for expected in [
+        format!("\"success\":{success}"),
+        format!("\"timedOut\":{timed_out}"),
+        format!("\"stdoutTruncated\":{stdout_truncated}"),
+        format!("\"stderrTruncated\":{stderr_truncated}"),
+        String::from("\"stdoutDigest\":\"sha256:"),
+        String::from("\"stderrDigest\":\"sha256:"),
+    ] {
+        if !command.contains(&expected) {
+            return Err(format!(
+                "{class} command evidence omitted or mismatched {expected}"
+            ));
+        }
+    }
+    Ok(())
+}
+
+pub(super) fn require_managed_config_success_commands(body: &str) -> Result<(), String> {
+    for class in ["nginx_config_test", "nginx_reload", "nginx_active"] {
+        require_command_evidence(body, class, true, false, false, false)?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{contains_nginx_config_failure_result, require_managed_config_diagnostic};
+    use super::{
+        contains_nginx_config_failure_result, require_command_evidence,
+        require_managed_config_diagnostic,
+    };
 
     #[test]
     fn accepts_only_base_or_positive_bounded_line_result() {
@@ -136,12 +182,13 @@ mod tests {
 
     #[test]
     fn accepts_only_the_expected_structured_diagnostic_location() {
-        let receipt = r#"{"service":"nginx","validator":"nginx_config_test","resourceId":"ngf_0123456789abcdef01234567","maskedPath":"/etc/nginx/nginx.conf","line":13,"column":null,"severity":"error","code":"unknown_directive","message":"Nginx rejected a directive.","relatedChangedLines":[13],"causeCandidateLines":[]}"#;
+        let receipt = r#"{"command":{"class":"nginx_config_test","success":false,"exitCode":1,"timedOut":false,"stdoutDigest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","stdoutTruncated":false,"stderrDigest":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","stderrTruncated":false},"diagnostics":[{"service":"nginx","validator":"nginx_config_test","resourceId":"ngf_0123456789abcdef01234567","maskedPath":"/etc/nginx/nginx.conf","line":13,"column":null,"severity":"error","code":"unknown_directive","message":"Nginx rejected a directive.","relatedChangedLines":[13],"causeCandidateLines":[]}]}"#;
         assert_eq!(
             require_managed_config_diagnostic(
                 receipt,
                 "nginx",
                 "nginx_config_test",
+                false,
                 "/etc/nginx/nginx.conf",
                 Some(13),
             ),
@@ -152,6 +199,7 @@ mod tests {
                 receipt,
                 "nginx",
                 "nginx_config_test",
+                false,
                 "/etc/nginx/sites-enabled/default",
                 Some(13),
             )
@@ -165,6 +213,19 @@ mod tests {
         assert_eq!(
             super::require_managed_config_cause_candidate(receipt, "/etc/nginx/nginx.conf", 18, 13,),
             Ok(())
+        );
+    }
+
+    #[test]
+    fn command_evidence_requires_bounded_outcome_metadata_and_digests() {
+        let receipt = r#"{"command":{"class":"nginx_config_test","success":false,"exitCode":null,"timedOut":true,"stdoutDigest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","stdoutTruncated":false,"stderrDigest":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","stderrTruncated":true}}"#;
+        assert_eq!(
+            require_command_evidence(receipt, "nginx_config_test", false, true, false, true,),
+            Ok(())
+        );
+        assert!(
+            require_command_evidence(receipt, "nginx_config_test", false, false, false, true,)
+                .is_err()
         );
     }
 }

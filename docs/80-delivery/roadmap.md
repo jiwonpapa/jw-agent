@@ -3,7 +3,7 @@
 Status: Accepted  
 Authority: Delivery  
 Owner: Delivery Maintainer  
-Last reviewed: 2026-07-24
+Last reviewed: 2026-08-03
 
 ## P0 — Foundation
 
@@ -74,13 +74,15 @@ P1 public profile 범위는 existing certificate와 administrator-owned opt-in t
 
 - `p2-local` 23개, `p2-browser` 8개 gate와 Playwright 45개 scenario가 PASS했습니다.
 - `p2-vm` 28개 gate에서 독립 Rust management edge, Nginx·Apache·PHP-FPM 서비스 lifecycle과 설정 fault matrix, UFW 제품 소유 규칙, forensic lockdown, Certbot lifecycle, non-root OpenSSH terminal, home-scoped SFTP G0/G1과 TOTP step-up을 검증했습니다.
-- Ubuntu 24.04 VM에 `jw-agent_0.2.0~p2.23_amd64.deb`를 설치했고 SHA-256은 `f0a92d342cfd0eec2b37fee8a6e785e8e73f29ce7e24d41571107f20ba3dbc3a`입니다.
+- Ubuntu 24.04 VM에 `jw-agent_0.2.0~p2.24_amd64.deb`를 설치했고 SHA-256은 `9c3779180facc4cd4d4e83a17b773bb77488b401d8d138aa131bfb4cfd3d2ffc`입니다.
 - `jw-edge`가 비권한 9443 기본 관리 ingress를 소유하며, edge 부재 시 Nginx stop은 차단되고 Nginx 중단 뒤에도 `:9443` UI·API가 유지됩니다.
 - 공개 HTTPS 실브라우저에서 grouped navigation, account drawer, 자원 meter, 서비스 family card, SFTP 3-pane, terminal-first surface와 desktop Monaco 설정 workspace를 확인했습니다.
 - 제품 관리 vhost는 파일명과 무관하게 content marker/include로 보호되며 plan 단계에서 변경을 거부합니다.
 - 승인 API는 `202 Accepted` 뒤 durable operation을 실행하고 SSE sequence replay와 canonical receipt 조회를 제공합니다.
 
-P2 전체 milestone은 아직 완료가 아닙니다. 모든 durable stage의 강제 종료 matrix와 command timeout·output cap 확대는 후속 adapter 전에 계속 보강합니다.
+P2 전체 milestone은 아직 완료가 아닙니다. 모든 durable stage의 package-daemon 강제 종료
+matrix는 후속 adapter 전에 계속 보강합니다. command timeout·output cap은
+managed-config validator의 실제 package/VM fault로 검증했습니다.
 
 2026-07-22 safety-kernel hardening에서 `APPROVED`, `SNAPSHOTTED`, `APPLYING`, `VALIDATING`, `RELOADING`, `VERIFYING`, `ROLLING_BACK` 재시작 판정을 한 table test로 고정했습니다. fixed command registry, environment clear, stdout·stderr cap과 full-stream digest, timeout 회수도 기존 `RUST-TEST`가 직접 검증합니다. Ubuntu 24.04 source checkout에서는 자손이 pipe를 잡은 process group timeout까지 PASS했지만, 이는 package daemon을 stage마다 실제 kill한 `p2-vm` 증거를 대신하지 않습니다.
 
