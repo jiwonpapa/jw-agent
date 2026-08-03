@@ -135,9 +135,16 @@ executable, argv, cwd, environment allowlist, timeout, output cap은 adapter reg
 - desktop/tablet/mobile UI는 저장을 primary action으로 제공하고 plan·G2·digest는 기술
   세부정보에만 표시
 - selected-resource syntax diagnostic가 안전하게 추출되면 오류 줄을 editor gutter에 표시하고, 위치가 없으면 추측하지 않음
+- 공식 validator 진단은
+  [OPS-MANAGED-CONFIG-DIAGNOSTIC-V1](managed-config-diagnostic-v1.md)의 구조화 계약으로
+  저장하며 다른 include resource의 오류도 managed root 안에서 정확히 연결
+- 설정 mutation은 desktop workspace에서만 제공하고 mobile·tablet은 read-only 상태와
+  이력만 제공
 
-`jw-agent_0.2.0~p2.21_amd64.deb`의 `VM-P2-MANAGED-CONFIG`이 Nginx와 Apache
+`jw-agent_0.2.0~p2.23_amd64.deb`의 `VM-P2-MANAGED-CONFIG`이 Nginx와 Apache
 service-tree, PHP-FPM resource의 valid save, 공식 validator, reload, syntax rollback,
-read-back과 서비스 연속성을 검증했습니다. package SHA-256은
-`f649e29e9c9560f508b8a9d57ec8b0776ed070ee35adb69986da9f95f4038865`입니다.
+structured diagnostic, 공식 오류 줄과 별도 원인 후보, selected-source line mapping,
+read-back과 서비스 연속성을
+검증했습니다. package SHA-256은
+`f0a92d342cfd0eec2b37fee8a6e785e8e73f29ce7e24d41571107f20ba3dbc3a`입니다.
 registry 밖 root와 차단된 resource는 계속 `UNSUPPORTED`입니다.

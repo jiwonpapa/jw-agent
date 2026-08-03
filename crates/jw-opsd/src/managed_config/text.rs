@@ -40,6 +40,32 @@ pub fn diff_stats(current: &str, proposed: &str) -> DiffStats {
     }
 }
 
+#[must_use]
+pub fn changed_candidate_lines(current: &str, proposed: &str) -> Vec<u32> {
+    let before: Vec<&str> = current.lines().collect();
+    let after: Vec<&str> = proposed.lines().collect();
+    let prefix = before
+        .iter()
+        .zip(after.iter())
+        .take_while(|(left, right)| left == right)
+        .count();
+    let max_suffix = before
+        .len()
+        .saturating_sub(prefix)
+        .min(after.len().saturating_sub(prefix));
+    let suffix = (0..max_suffix)
+        .take_while(|offset| {
+            before[before.len().saturating_sub(1 + offset)]
+                == after[after.len().saturating_sub(1 + offset)]
+        })
+        .count();
+    let changed_end = after.len().saturating_sub(suffix);
+    (prefix..changed_end)
+        .filter_map(|index| u32::try_from(index.saturating_add(1)).ok())
+        .take(128)
+        .collect()
+}
+
 pub(super) fn validate_relative_path(value: &str) -> Result<(), OpsError> {
     if value.starts_with('/')
         || value

@@ -12,7 +12,7 @@ Last reviewed: 2026-07-22
 ## Routes and protocol
 
 - `/terminal`: same-origin `WSS` terminal session
-- `/files`: REST metadata/list/download와 bounded atomic upload, shared CodeMirror text edit
+- `/files`: REST metadata/list/download와 bounded atomic upload, desktop-only shared Monaco text edit
 - agentd는 loopback OpenSSH에 client로 연결하고 strict known-host fingerprint를 package/runtime authority에서 확인
 - browser는 SSH protocol, host key, private key를 처리하지 않음
 
@@ -67,7 +67,10 @@ OpenSSH unavailable, host-key mismatch, auth failure, network loss, session time
 
 ## Dependency and build gate
 
-Rust SSH/SFTP client, xterm, CodeMirror dependency는 exact pin과 최소 feature, license, advisory, clean/incremental build cost, binary size를 기록한 compatibility spike를 통과해야 합니다. 기존 Tauri 프로젝트의 source·ticket·protocol·storage를 복사하지 않습니다.
+Rust SSH/SFTP client, xterm, Monaco dependency는 exact pin과 최소 feature, license,
+advisory, clean/incremental build cost, binary size를 기록한 compatibility spike를
+통과해야 합니다. 기존 Tauri 프로젝트의 source·ticket·protocol·storage를 복사하지
+않습니다.
 
 ## Acceptance scenarios
 

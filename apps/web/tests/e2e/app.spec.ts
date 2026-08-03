@@ -1,8 +1,18 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page } from "@playwright/test";
 
-import type { OperationReceiptView, SessionView } from "../../src/shared/api/types";
+import type {
+  ManagedConfigPlanView,
+  OperationAcceptedView,
+  OperationReceiptView,
+  SessionView,
+} from "../../src/shared/api/types";
+import { fillCodeEditor } from "./code-editor";
 import { registerFeatureRegressionTests } from "./feature-regression-tests";
+import {
+  managedConfigInventoryFixture,
+  managedConfigOperationFixtures,
+} from "./fixtures/managed-config-operations";
 import { services } from "./fixtures/service-inventory";
 
 const session: SessionView = {
@@ -158,19 +168,19 @@ const operationReceipt: OperationReceiptView = {
   beforeDigest: enabledStateDigest,
   afterDigest: `sha256:${"4".repeat(64)}`,
   stages: [
-    { sequence: 1, stage: "APPROVED", recordedAt: "2026-07-21T02:12:00Z", resultCode: "approved", evidenceDigest: planHash },
-    { sequence: 2, stage: "SNAPSHOTTED", recordedAt: "2026-07-21T02:12:01Z", resultCode: "snapshot_durable", evidenceDigest: availableDigest },
-    { sequence: 3, stage: "APPLYING", recordedAt: "2026-07-21T02:12:02Z", resultCode: "apply_started", evidenceDigest: enabledStateDigest },
-    { sequence: 4, stage: "VALIDATING", recordedAt: "2026-07-21T02:12:03Z", resultCode: "nginx_config_valid", evidenceDigest: availableDigest },
-    { sequence: 5, stage: "RELOADING", recordedAt: "2026-07-21T02:12:04Z", resultCode: "nginx_reloaded", evidenceDigest: availableDigest },
-    { sequence: 6, stage: "SUCCEEDED", recordedAt: "2026-07-21T02:12:05Z", resultCode: "verified", evidenceDigest: availableDigest },
+    { sequence: 1, stage: "APPROVED", recordedAt: "2026-07-21T02:12:00Z", resultCode: "approved", evidenceDigest: planHash, diagnostics: [] },
+    { sequence: 2, stage: "SNAPSHOTTED", recordedAt: "2026-07-21T02:12:01Z", resultCode: "snapshot_durable", evidenceDigest: availableDigest, diagnostics: [] },
+    { sequence: 3, stage: "APPLYING", recordedAt: "2026-07-21T02:12:02Z", resultCode: "apply_started", evidenceDigest: enabledStateDigest, diagnostics: [] },
+    { sequence: 4, stage: "VALIDATING", recordedAt: "2026-07-21T02:12:03Z", resultCode: "nginx_config_valid", evidenceDigest: availableDigest, diagnostics: [] },
+    { sequence: 5, stage: "RELOADING", recordedAt: "2026-07-21T02:12:04Z", resultCode: "nginx_reloaded", evidenceDigest: availableDigest, diagnostics: [] },
+    { sequence: 6, stage: "SUCCEEDED", recordedAt: "2026-07-21T02:12:05Z", resultCode: "verified", evidenceDigest: availableDigest, diagnostics: [] },
   ],
   assurance: reversibleAssurance,
   rollbackResult: null,
   recoveryPath: [], restoreAvailable: false,
 };
 
-const operationAccepted = {
+const operationAccepted: OperationAcceptedView = {
   schemaVersion: 1,
   operationType: "nginx.site_state.set/v1",
   operationId: "op_fixture",
@@ -199,42 +209,9 @@ const managedConfigResource = {
   },
 };
 
-const managedConfigInventory = {
-  observedAt: "2026-07-21T02:10:00Z",
-  status: "observed",
-  serviceKey: "nginx",
-  unitName: "nginx.service",
-  displayName: "Nginx",
-  configs: [
-    {
-      resourceId: configResourceId,
-      operationType: "service.config_file.set/v1",
-      schemaVersion: 1,
-      displayName: "example.com",
-      maskedPath: "/etc/nginx/sites-available/example.com",
-      relativePath: "sites-available/example.com",
-      loaded: true,
-      serviceActive: true,
-      available: true,
-      blockedReason: null,
-    },
-    {
-      resourceId: "ngf_protectedFixture1234567",
-      operationType: "service.config_file.set/v1",
-      schemaVersion: 1,
-      displayName: "private-token.conf",
-      maskedPath: "/etc/nginx/private-token.conf",
-      relativePath: "private-token.conf",
-      loaded: false,
-      serviceActive: true,
-      available: false,
-      blockedReason: "protected_resource",
-    },
-  ],
-  truncated: false,
-};
+const managedConfigInventory = managedConfigInventoryFixture(configResourceId);
 
-const managedConfigPlan = {
+const managedConfigPlan: ManagedConfigPlanView = {
   schemaVersion: 1,
   operationType: "service.config_file.set/v1",
   planId: "plan_config_fixture",
@@ -268,23 +245,25 @@ const managedConfigReceipt: OperationReceiptView = {
   operationType: "service.config_file.set/v1",
   planId: "plan_config_fixture",
   planHash: configPlanHash,
+  resourceId: configResourceId,
   beforeDigest: availableDigest,
   afterDigest: managedConfigPlan.proposedContentDigest,
 };
 
-const managedConfigSyntaxFailureReceipt: OperationReceiptView = {
-  ...managedConfigReceipt,
-  terminalState: "ROLLED_BACK",
-  afterDigest: availableDigest,
-  rollbackResult: "verified",
-  stages: [
-    { sequence: 1, stage: "APPROVED", recordedAt: "2026-07-21T02:12:00Z", resultCode: "approved", evidenceDigest: configPlanHash },
-    { sequence: 2, stage: "SNAPSHOTTED", recordedAt: "2026-07-21T02:12:01Z", resultCode: "snapshot_durable", evidenceDigest: availableDigest },
-    { sequence: 3, stage: "APPLYING", recordedAt: "2026-07-21T02:12:02Z", resultCode: "config_replaced", evidenceDigest: availableDigest },
-    { sequence: 4, stage: "ROLLING_BACK", recordedAt: "2026-07-21T02:12:03Z", resultCode: "nginx_config_test_failed:line=3", evidenceDigest: availableDigest },
-    { sequence: 5, stage: "ROLLED_BACK", recordedAt: "2026-07-21T02:12:04Z", resultCode: "rollback_verified", evidenceDigest: availableDigest },
-  ],
-};
+const {
+  restorableReceipt: managedConfigRestorableReceipt,
+  restorePlan: managedConfigRestorePlan,
+  restoreReceipt: managedConfigRestoreReceipt,
+  restoreAccepted: managedConfigRestoreAccepted,
+  syntaxFailureReceipt: managedConfigSyntaxFailureReceipt,
+} = managedConfigOperationFixtures({
+  baseReceipt: managedConfigReceipt,
+  basePlan: managedConfigPlan,
+  baseAccepted: operationAccepted,
+  resourceId: configResourceId,
+  contentDigest: availableDigest,
+  planHash: configPlanHash,
+});
 
 const managedConfigAccepted = {
   ...operationAccepted,
@@ -506,11 +485,11 @@ const certbotIssueReceipt: OperationReceiptView = {
   rollbackResult: null,
   recoveryPath: [], restoreAvailable: false,
   stages: [
-    { sequence: 1, stage: "APPROVED", recordedAt: "2026-07-21T02:12:00Z", resultCode: "approved", evidenceDigest: certbotIssuePlan.planHash },
-    { sequence: 2, stage: "SNAPSHOTTED", recordedAt: "2026-07-21T02:12:01Z", resultCode: "snapshot_durable", evidenceDigest: certificates.inventoryDigest },
-    { sequence: 3, stage: "APPLYING", recordedAt: "2026-07-21T02:12:02Z", resultCode: "certbot_staging_dry_run_started", evidenceDigest: certificates.inventoryDigest },
-    { sequence: 4, stage: "VALIDATING", recordedAt: "2026-07-21T02:12:03Z", resultCode: "certbot_issue_command_completed", evidenceDigest: certificates.inventoryDigest },
-    { sequence: 5, stage: "SUCCEEDED", recordedAt: "2026-07-21T02:12:04Z", resultCode: "staging_challenge_verified", evidenceDigest: certificates.inventoryDigest },
+    { sequence: 1, stage: "APPROVED", recordedAt: "2026-07-21T02:12:00Z", resultCode: "approved", evidenceDigest: certbotIssuePlan.planHash, diagnostics: [] },
+    { sequence: 2, stage: "SNAPSHOTTED", recordedAt: "2026-07-21T02:12:01Z", resultCode: "snapshot_durable", evidenceDigest: certificates.inventoryDigest, diagnostics: [] },
+    { sequence: 3, stage: "APPLYING", recordedAt: "2026-07-21T02:12:02Z", resultCode: "certbot_staging_dry_run_started", evidenceDigest: certificates.inventoryDigest, diagnostics: [] },
+    { sequence: 4, stage: "VALIDATING", recordedAt: "2026-07-21T02:12:03Z", resultCode: "certbot_issue_command_completed", evidenceDigest: certificates.inventoryDigest, diagnostics: [] },
+    { sequence: 5, stage: "SUCCEEDED", recordedAt: "2026-07-21T02:12:04Z", resultCode: "staging_challenge_verified", evidenceDigest: certificates.inventoryDigest, diagnostics: [] },
   ],
 };
 
@@ -563,13 +542,13 @@ const certbotAttachReceipt: OperationReceiptView = {
   afterDigest: `sha256:${"e".repeat(64)}`,
   assurance: certbotAttachPlan.assurance,
   stages: [
-    { sequence: 1, stage: "APPROVED", recordedAt: "2026-07-21T02:12:00Z", resultCode: "approved", evidenceDigest: certbotAttachPlan.planHash },
-    { sequence: 2, stage: "SNAPSHOTTED", recordedAt: "2026-07-21T02:12:01Z", resultCode: "snapshot_durable", evidenceDigest: certbotAttachPlan.siteDigest },
-    { sequence: 3, stage: "APPLYING", recordedAt: "2026-07-21T02:12:02Z", resultCode: "tls_directives_replaced", evidenceDigest: certbotAttachPlan.siteDigest },
-    { sequence: 4, stage: "VALIDATING", recordedAt: "2026-07-21T02:12:03Z", resultCode: "nginx_syntax_valid", evidenceDigest: certbotAttachPlan.siteDigest },
-    { sequence: 5, stage: "RELOADING", recordedAt: "2026-07-21T02:12:04Z", resultCode: "nginx_reloaded", evidenceDigest: certbotAttachPlan.siteDigest },
-    { sequence: 6, stage: "VERIFYING", recordedAt: "2026-07-21T02:12:05Z", resultCode: "nginx_reloaded", evidenceDigest: certbotAttachPlan.siteDigest },
-    { sequence: 7, stage: "SUCCEEDED", recordedAt: "2026-07-21T02:12:06Z", resultCode: "tls_attachment_verified", evidenceDigest: `sha256:${"e".repeat(64)}` },
+    { sequence: 1, stage: "APPROVED", recordedAt: "2026-07-21T02:12:00Z", resultCode: "approved", evidenceDigest: certbotAttachPlan.planHash, diagnostics: [] },
+    { sequence: 2, stage: "SNAPSHOTTED", recordedAt: "2026-07-21T02:12:01Z", resultCode: "snapshot_durable", evidenceDigest: certbotAttachPlan.siteDigest, diagnostics: [] },
+    { sequence: 3, stage: "APPLYING", recordedAt: "2026-07-21T02:12:02Z", resultCode: "tls_directives_replaced", evidenceDigest: certbotAttachPlan.siteDigest, diagnostics: [] },
+    { sequence: 4, stage: "VALIDATING", recordedAt: "2026-07-21T02:12:03Z", resultCode: "nginx_syntax_valid", evidenceDigest: certbotAttachPlan.siteDigest, diagnostics: [] },
+    { sequence: 5, stage: "RELOADING", recordedAt: "2026-07-21T02:12:04Z", resultCode: "nginx_reloaded", evidenceDigest: certbotAttachPlan.siteDigest, diagnostics: [] },
+    { sequence: 6, stage: "VERIFYING", recordedAt: "2026-07-21T02:12:05Z", resultCode: "nginx_reloaded", evidenceDigest: certbotAttachPlan.siteDigest, diagnostics: [] },
+    { sequence: 7, stage: "SUCCEEDED", recordedAt: "2026-07-21T02:12:06Z", resultCode: "tls_attachment_verified", evidenceDigest: `sha256:${"e".repeat(64)}`, diagnostics: [] },
   ],
 };
 
@@ -613,11 +592,11 @@ const certbotRenewReceipt: OperationReceiptView = {
   beforeDigest: certificates.inventoryDigest,
   afterDigest: certificates.inventoryDigest,
   stages: [
-    { sequence: 1, stage: "APPROVED", recordedAt: "2026-07-21T02:12:00Z", resultCode: "approved", evidenceDigest: certbotRenewPlan.planHash },
-    { sequence: 2, stage: "SNAPSHOTTED", recordedAt: "2026-07-21T02:12:01Z", resultCode: "snapshot_durable", evidenceDigest: certificates.inventoryDigest },
-    { sequence: 3, stage: "APPLYING", recordedAt: "2026-07-21T02:12:02Z", resultCode: "certbot_renew_dry_run_started", evidenceDigest: certificates.inventoryDigest },
-    { sequence: 4, stage: "VALIDATING", recordedAt: "2026-07-21T02:12:03Z", resultCode: "certbot_renew_dry_run_completed", evidenceDigest: certificates.inventoryDigest },
-    { sequence: 5, stage: "SUCCEEDED", recordedAt: "2026-07-21T02:12:04Z", resultCode: "renewal_test_verified", evidenceDigest: certificates.inventoryDigest },
+    { sequence: 1, stage: "APPROVED", recordedAt: "2026-07-21T02:12:00Z", resultCode: "approved", evidenceDigest: certbotRenewPlan.planHash, diagnostics: [] },
+    { sequence: 2, stage: "SNAPSHOTTED", recordedAt: "2026-07-21T02:12:01Z", resultCode: "snapshot_durable", evidenceDigest: certificates.inventoryDigest, diagnostics: [] },
+    { sequence: 3, stage: "APPLYING", recordedAt: "2026-07-21T02:12:02Z", resultCode: "certbot_renew_dry_run_started", evidenceDigest: certificates.inventoryDigest, diagnostics: [] },
+    { sequence: 4, stage: "VALIDATING", recordedAt: "2026-07-21T02:12:03Z", resultCode: "certbot_renew_dry_run_completed", evidenceDigest: certificates.inventoryDigest, diagnostics: [] },
+    { sequence: 5, stage: "SUCCEEDED", recordedAt: "2026-07-21T02:12:04Z", resultCode: "renewal_test_verified", evidenceDigest: certificates.inventoryDigest, diagnostics: [] },
   ],
   assurance: verifiedActionAssurance,
   rollbackResult: null,
@@ -705,6 +684,9 @@ async function mockApi(
     onApproval?: (body: unknown) => void;
     onConfigPlan?: (body: unknown) => void;
     onConfigApproval?: (body: unknown) => void;
+    onConfigRestorePlan?: (body: unknown) => void;
+    onConfigRestoreApproval?: (body: unknown) => void;
+    activityFixture?: OperationReceiptView[];
     onEvents?: () => void;
     certificateFixture?: Record<string, unknown>;
     nginxFixture?: Record<string, unknown>;
@@ -774,7 +756,11 @@ async function mockApi(
     }
     if (path === "/api/v1/host") return route.fulfill({ json: host });
     if (path === "/api/v1/services") return route.fulfill({ json: services });
-    if (path === "/api/v1/activity") return route.fulfill({ json: { operations: [activeReceipt] } });
+    if (path === "/api/v1/activity") {
+      return route.fulfill({
+        json: { operations: operationOptions.activityFixture ?? [activeReceipt] },
+      });
+    }
     if (path === "/api/v1/terminal" && request.method() === "GET") {
       return route.fulfill({ json: operationOptions.terminalFixture ?? terminalCapability });
     }
@@ -894,8 +880,18 @@ async function mockApi(
       operationOptions.onConfigPlan?.(request.postDataJSON());
       return route.fulfill({ json: managedConfigPlan });
     }
+    if (path === "/api/v1/operations/service/config-file/restore/plans" && request.method() === "POST") {
+      operationOptions.onConfigRestorePlan?.(request.postDataJSON());
+      return route.fulfill({ json: managedConfigRestorePlan });
+    }
     if (path === "/api/v1/operations/service/config-file/approvals" && request.method() === "POST") {
-      operationOptions.onConfigApproval?.(request.postDataJSON());
+      const body = request.postDataJSON() as { planId?: string };
+      if (body.planId === managedConfigRestorePlan.planId) {
+        operationOptions.onConfigRestoreApproval?.(body);
+        activeReceipt = managedConfigRestoreReceipt;
+        return route.fulfill({ status: 202, json: managedConfigRestoreAccepted });
+      }
+      operationOptions.onConfigApproval?.(body);
       activeReceipt = operationOptions.configReceipt ?? managedConfigReceipt;
       return route.fulfill({ status: 202, json: managedConfigAccepted });
     }
@@ -971,6 +967,11 @@ registerFeatureRegressionTests({
   }),
   setupManagedConfigSyntaxFailure: (page) => mockApi(page, true, health, {
     configReceipt: managedConfigSyntaxFailureReceipt,
+  }),
+  setupManagedConfigRestore: (page, callbacks) => mockApi(page, true, health, {
+    activityFixture: [managedConfigRestorableReceipt],
+    onConfigRestorePlan: callbacks.onPlan,
+    onConfigRestoreApproval: callbacks.onApproval,
   }),
   configPlanHash,
 });
@@ -1150,7 +1151,7 @@ test("G1 text save requires an exact plan and keeps secrets out of navigation an
   let uploadRequests = 0;
   let uploadedBody: Uint8Array = Uint8Array.from([]);
   let uploadHeaders: Record<string, string> = {};
-  await page.setViewportSize({ width: 320, height: 800 });
+  await page.setViewportSize({ width: 1440, height: 900 });
   await mockApi(page, true, health, {
     onFileUploadPlan: (body) => { planBody = body as Record<string, unknown>; },
     onFileUpload: (body, headers) => {
@@ -1167,7 +1168,7 @@ test("G1 text save requires an exact plan and keeps secrets out of navigation an
   await page.getByRole("button", { name: "notes.txt 텍스트 보기", exact: true }).click();
   await page.getByRole("button", { name: "편집" }).click();
   await expect(page.getByText("G1 · 자동 원복 없음")).toBeVisible();
-  await page.getByLabel("UTF-8 내용").fill("changed evidence\n");
+  await fillCodeEditor(page, "SFTP UTF-8 내용", "changed evidence\n");
 
   const planButton = page.getByRole("button", { name: "재인증 후 계획 만들기" });
   await page.getByLabel("Linux 비밀번호 재확인").fill("fixture-upload-password");
@@ -1251,14 +1252,14 @@ test("rollback failure is never shown as a successful recovery", async ({ page }
     recoveryPath: managedConfigPlan.recoveryPath,
     stages: [
       ...managedConfigReceipt.stages.slice(0, 4),
-      { sequence: 5, stage: "ROLLING_BACK", recordedAt: "2026-07-21T02:12:04Z", resultCode: "rollback_started", evidenceDigest: availableDigest },
-      { sequence: 6, stage: "RECOVERY_REQUIRED", recordedAt: "2026-07-21T02:12:05Z", resultCode: "rollback_verification_failed", evidenceDigest: availableDigest },
+      { sequence: 5, stage: "ROLLING_BACK", recordedAt: "2026-07-21T02:12:04Z", resultCode: "rollback_started", evidenceDigest: availableDigest, diagnostics: [] },
+      { sequence: 6, stage: "RECOVERY_REQUIRED", recordedAt: "2026-07-21T02:12:05Z", resultCode: "rollback_verification_failed", evidenceDigest: availableDigest, diagnostics: [] },
     ],
   };
   await mockApi(page, true, health, { configReceipt: recoveryReceipt });
   await page.goto("/services/nginx/configurations");
   await page.getByRole("button", { name: /example\.com/ }).click();
-  await page.getByLabel("Nginx 설정 내용").fill("server {\n  listen 8080;\n}\n");
+  await fillCodeEditor(page, "Nginx 설정 내용", "server {\n  listen 8080;\n}\n");
   await page.getByRole("button", { name: "저장", exact: true }).click();
   await expect(page.getByRole("heading", { name: "저장 실패 · 수동 복구 필요" })).toBeVisible();
   await expect(page.getByText("자동 복구를 완료하지 못했습니다.")).toBeVisible();

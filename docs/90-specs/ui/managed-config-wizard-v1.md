@@ -13,7 +13,8 @@ Last reviewed: 2026-07-24
 사용자에게 마법사 단계로 전가하지 않습니다.
 
 - desktop: 좌측 bounded file tree, 우측 전체 폭 editor
-- mobile/tablet: file list에서 editor로 전환하고 명시적인 뒤로가기를 제공
+- mobile/tablet: 상태·이력·파일 목록·read-only preview만 제공하고 설정 mutation은
+  desktop 사용을 안내
 - sticky header: 뒤로가기, resource title·masked path, `저장`과 `취소`
 - 편집기 위 기본 설명은 `문법 검사`, `service reload`, `실패 시 이전 설정 자동 복구` 세 가지만 표시
 - `저장`은 immutable plan 생성과 승인을 한 흐름으로 수행
@@ -25,12 +26,15 @@ Last reviewed: 2026-07-24
 - primary UI에 `계획 만들기`, `G2 제한 작업`, `제한된 설정` 문구를 표시하지 않음
 - Nginx site 활성화·비활성화는 file tree와 분리된 보조 action으로만 제공
 - right sheet/drawer 안에 editor·plan·approval을 배치하지 않음
-- desktop sticky top action, mobile sticky bottom action을 제공
+- 파일별 최근 성공 작업과 복원 diff는 editor 아래 `변경 이력과 복원`에 인라인 표시
+- 복원은 `변경 전 상태 확인`으로 diff를 먼저 보여준 뒤 `이 상태로 복원`을 별도로
+  눌러야 실행하며 개요 화면과 right sheet에 복원 action을 중복 배치하지 않음
+- desktop sticky top action을 제공
 - dirty close는 한 번만 확인하며 draft는 브라우저 영구 저장소에 보존하지 않음
 
 ## Acceptance
 
-- 1440px와 390px에서 primary action이 scroll 없이 보임
+- 1440px에서 primary action이 scroll 없이 보이고 390px에서는 mutation CTA가 없음
 - service root의 nested directory와 active·inactive existing file을 한 tree에서 탐색
 - 차단 파일은 열기/저장 버튼 대신 차단 사유를 짧게 표시
 - 별도 wizard route나 다음 단계 이동 없이 편집·저장·결과를 한 화면에서 처리
@@ -38,4 +42,7 @@ Last reviewed: 2026-07-24
 - 관리자 모드 중 비밀번호 재입력 없음; 만료 시 재인증 후 계획 유지
 - 빈 파일·무시 행·알 수 없는 directive는 적용 전에 차단
 - 저장 double click은 하나의 plan과 operation만 생성
-- receipt에서 `이 버전으로 복원`이 새 계획을 생성
+- editor의 file-scoped receipt에서 `변경 전 상태 확인`이 복원 diff를 생성
+- 저장하지 않은 draft가 있으면 복원 선택을 차단
+- Monaco Problems panel에서 구조화 진단을 선택하면 해당 file·line·column으로 이동
+- 공식 validator 위치는 error, bounded 원인 후보 변경 줄은 warning으로 동시에 표시

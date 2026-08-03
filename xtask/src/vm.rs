@@ -20,7 +20,10 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::process::{Captured, run_capture, safe_output};
-use receipt::contains_nginx_config_failure_result;
+use receipt::{
+    contains_nginx_config_failure_result, require_managed_config_cause_candidate,
+    require_managed_config_diagnostic,
+};
 
 const RECOVERY_HOST: &str = "127.0.0.1:8787";
 const RECOVERY_ORIGIN: &str = "http://127.0.0.1:8787";
@@ -578,6 +581,14 @@ fn managed_config_large_saved() -> String {
     format!(
         "{}server {{ listen 127.0.0.1:18082; server_name jw-agent-vm-managed.invalid; add_header X-JW-Agent-VM config-v1 always; return 204; }}\n",
         "# jw-agent-vm-padding\n".repeat(850)
+    )
+}
+
+fn managed_config_delayed_error() -> String {
+    format!(
+        "{}this_is_not_valid_nginx_syntax\n{}server {{ listen 127.0.0.1:18082; server_name jw-agent-vm-managed.invalid; add_header X-JW-Agent-VM config-v1 always; return 204; }}\n",
+        "# jw-agent-vm-padding\n".repeat(844),
+        "# jw-agent-vm-padding\n".repeat(5),
     )
 }
 
@@ -1878,6 +1889,37 @@ pub fn gate_p2_managed_config(_root: &Path, timeout: Duration) -> Result<(), Str
                 "managed config syntax receipt omitted failure evidence",
             ));
         }
+        require_managed_config_diagnostic(
+            &syntax_rollback,
+            "nginx",
+            "nginx_config_test",
+            "/etc/nginx/sites-available/jw-agent-vm-managed.conf",
+            Some(1),
+        )?;
+        if syntax_rollback.contains("this_is_not_valid_nginx_syntax") {
+            return Err(String::from(
+                "managed config diagnostic exposed rejected Nginx source",
+            ));
+        }
+        require_file_equals(&config, P2_MANAGED_SITE, managed_saved.as_bytes(), timeout)?;
+
+        let delayed_error = session.operate_managed_config(
+            &config,
+            P2_MANAGED_SITE,
+            &managed_config_delayed_error(),
+            timeout,
+        )?;
+        require_terminal(
+            &delayed_error,
+            "ROLLED_BACK",
+            "managed config delayed parser error rollback",
+        )?;
+        require_managed_config_cause_candidate(
+            &delayed_error,
+            "/etc/nginx/sites-available/jw-agent-vm-managed.conf",
+            851,
+            845,
+        )?;
         require_file_equals(&config, P2_MANAGED_SITE, managed_saved.as_bytes(), timeout)?;
 
         install_reload_fail_once(&config, timeout)?;

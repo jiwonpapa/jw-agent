@@ -4664,6 +4664,85 @@
         },
         "additionalProperties": false
       },
+      "ManagedConfigDiagnosticSeverity": {
+        "type": "string",
+        "enum": [
+          "error",
+          "warning"
+        ]
+      },
+      "ManagedConfigDiagnosticView": {
+        "type": "object",
+        "required": [
+          "service",
+          "validator",
+          "severity",
+          "code",
+          "message",
+          "relatedChangedLines"
+        ],
+        "properties": {
+          "causeCandidateLines": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          },
+          "code": {
+            "type": "string"
+          },
+          "column": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "line": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "maskedPath": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "message": {
+            "type": "string"
+          },
+          "relatedChangedLines": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          },
+          "resourceId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "service": {
+            "type": "string"
+          },
+          "severity": {
+            "$ref": "#/components/schemas/ManagedConfigDiagnosticSeverity"
+          },
+          "validator": {
+            "type": "string"
+          }
+        }
+      },
       "ManagedConfigPlanRequest": {
         "type": "object",
         "required": [
@@ -5478,9 +5557,16 @@
           "stage",
           "recordedAt",
           "resultCode",
-          "evidenceDigest"
+          "evidenceDigest",
+          "diagnostics"
         ],
         "properties": {
+          "diagnostics": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ManagedConfigDiagnosticView"
+            }
+          },
           "evidenceDigest": {
             "type": "string"
           },

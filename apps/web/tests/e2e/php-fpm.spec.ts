@@ -1,6 +1,7 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page } from "@playwright/test";
 
+import { expectCodeEditorText, fillCodeEditor } from "./code-editor";
 import { services } from "./fixtures/service-inventory";
 
 const resourceId = "php_EHiO24phPSLjnfU_2gJ5LpNw";
@@ -165,7 +166,7 @@ async function mockApi(page: Page, onPlan: (body: unknown) => void, onApproval: 
 test("PHP-FPM workspace exposes runtime facts and a typed G2 php.ini flow", async ({ page }) => {
   const planBodies: unknown[] = [];
   const approvalBodies: unknown[] = [];
-  await page.setViewportSize({ width: 390, height: 844 });
+  await page.setViewportSize({ width: 1440, height: 900 });
   await mockApi(page, (body) => planBodies.push(body), (body) => approvalBodies.push(body));
   await page.goto("/services/php-fpm");
 
@@ -174,9 +175,8 @@ test("PHP-FPM workspace exposes runtime facts and a typed G2 php.ini flow", asyn
   await expect(page.getByText("curl", { exact: true })).toBeVisible();
   await expect(page.getByText("원문 phpinfo는 제공하지 않습니다")).toBeVisible();
   await page.getByRole("button", { name: "PHP 8.3 FPM php.ini 편집" }).click();
-  const editor = page.getByLabel("PHP 8.3 FPM php.ini 설정");
-  await expect(editor).toContainText("memory_limit = 128M");
-  await editor.fill("memory_limit = 256M\n");
+  await expectCodeEditorText(page, "PHP 8.3 FPM php.ini 설정", "memory_limit = 128M");
+  await fillCodeEditor(page, "PHP 8.3 FPM php.ini 설정", "memory_limit = 256M\n");
   await page.getByRole("button", { name: "저장", exact: true }).click();
 
   await expect(page.getByRole("heading", { name: "저장 완료" })).toBeVisible();

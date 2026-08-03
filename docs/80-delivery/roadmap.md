@@ -72,11 +72,11 @@ P1 public profile 범위는 existing certificate와 administrator-owned opt-in t
 
 현재 기준선:
 
-- `p2-local` 23개, `p2-browser` 8개 gate와 Playwright 43개 scenario가 PASS했습니다.
+- `p2-local` 23개, `p2-browser` 8개 gate와 Playwright 45개 scenario가 PASS했습니다.
 - `p2-vm` 28개 gate에서 독립 Rust management edge, Nginx·Apache·PHP-FPM 서비스 lifecycle과 설정 fault matrix, UFW 제품 소유 규칙, forensic lockdown, Certbot lifecycle, non-root OpenSSH terminal, home-scoped SFTP G0/G1과 TOTP step-up을 검증했습니다.
-- Ubuntu 24.04 VM에 `jw-agent_0.2.0~p2.21_amd64.deb`를 설치했고 SHA-256은 `f649e29e9c9560f508b8a9d57ec8b0776ed070ee35adb69986da9f95f4038865`입니다.
+- Ubuntu 24.04 VM에 `jw-agent_0.2.0~p2.23_amd64.deb`를 설치했고 SHA-256은 `f0a92d342cfd0eec2b37fee8a6e785e8e73f29ce7e24d41571107f20ba3dbc3a`입니다.
 - `jw-edge`가 비권한 9443 기본 관리 ingress를 소유하며, edge 부재 시 Nginx stop은 차단되고 Nginx 중단 뒤에도 `:9443` UI·API가 유지됩니다.
-- 공개 HTTPS 실브라우저에서 grouped navigation, account drawer, 자원 meter, 서비스 family card, SFTP 3-pane과 terminal-first surface를 확인했습니다.
+- 공개 HTTPS 실브라우저에서 grouped navigation, account drawer, 자원 meter, 서비스 family card, SFTP 3-pane, terminal-first surface와 desktop Monaco 설정 workspace를 확인했습니다.
 - 제품 관리 vhost는 파일명과 무관하게 content marker/include로 보호되며 plan 단계에서 변경을 거부합니다.
 - 승인 API는 `202 Accepted` 뒤 durable operation을 실행하고 SSE sequence replay와 canonical receipt 조회를 제공합니다.
 
@@ -139,7 +139,8 @@ P2 전체 milestone은 아직 완료가 아닙니다. 모든 durable stage의 �
 계속 제외:
 
 - delete, move, chmod/chown, mkdir, recursive transfer, resume, root/system path SFTP
-- CodeMirror 6 공유 text editor는 [ADR-0014](../90-specs/adr/0014-codemirror-config-editor.md)의 build budget 안에서 도입
+- desktop text mutation은 [ADR-0020](../90-specs/adr/0020-monaco-desktop-config-workspace.md)의
+  lazy same-origin Monaco workspace만 사용하며 mobile·tablet mutation CTA는 제외
 
 완료 증거:
 

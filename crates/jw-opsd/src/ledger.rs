@@ -7,10 +7,10 @@ use std::path::Path;
 use jw_contracts::{
     AssuranceView, CERTBOT_ATTACH_OPERATION, CERTBOT_ISSUE_OPERATION, CERTBOT_RENEW_TEST_OPERATION,
     CertbotAttachPlanView, CertbotIssuePlanView, CertbotRenewTestPlanView, CertificateEnvironment,
-    MANAGED_CONFIG_OPERATION, MANAGED_CONFIG_RESTORE_OPERATION, ManagedConfigPlanView,
-    NGINX_SITE_STATE_OPERATION, NginxSiteState, NginxSiteStatePlanView, OPERATION_SCHEMA_VERSION,
-    OperationListView, OperationReceiptView, OperationStage, OperationStageEvidenceView, Role,
-    SERVICE_CONTROL_OPERATION, ServiceControlPlanView, Subject,
+    MANAGED_CONFIG_OPERATION, MANAGED_CONFIG_RESTORE_OPERATION, ManagedConfigDiagnosticView,
+    ManagedConfigPlanView, NGINX_SITE_STATE_OPERATION, NginxSiteState, NginxSiteStatePlanView,
+    OPERATION_SCHEMA_VERSION, OperationListView, OperationReceiptView, OperationStage,
+    OperationStageEvidenceView, Role, SERVICE_CONTROL_OPERATION, ServiceControlPlanView, Subject,
 };
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use serde::{Deserialize, Serialize};
@@ -36,7 +36,9 @@ use crate::snapshot::SnapshotRecord;
 use crate::ufw::UfwPlanPayload;
 
 mod activity;
+mod diagnostics;
 mod operation_views;
+use diagnostics::{StoredDiagnostics, load_diagnostics, prepare_diagnostics};
 use operation_views::recovery_path_for;
 
 const GENESIS_DIGEST: &str =
@@ -382,10 +384,50 @@ impl Ledger {
         operation_id: &str,
         change: Transition<'_>,
     ) -> Result<StoredOperation, OpsError> {
+        self.transition_internal(operation_id, change, None)
+    }
+
+    pub fn transition_with_diagnostics(
+        &mut self,
+        operation_id: &str,
+        change: Transition<'_>,
+        diagnostics: &[ManagedConfigDiagnosticView],
+    ) -> Result<StoredOperation, OpsError> {
+        if diagnostics.is_empty() {
+            return self.transition(operation_id, change);
+        }
+        let (stored, combined) = prepare_diagnostics(change.evidence_digest, diagnostics)?;
+        self.transition_internal(
+            operation_id,
+            Transition {
+                expected: change.expected,
+                next: change.next,
+                result_code: change.result_code,
+                evidence_digest: &combined,
+                after_digest: change.after_digest,
+                rollback_result: change.rollback_result,
+                now_ms: change.now_ms,
+            },
+            Some(&stored),
+        )
+    }
+
+    fn transition_internal(
+        &mut self,
+        operation_id: &str,
+        change: Transition<'_>,
+        diagnostics: Option<&StoredDiagnostics>,
+    ) -> Result<StoredOperation, OpsError> {
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         let current = load_operation_from(&transaction, operation_id)?;
+        if diagnostics.is_some()
+            && current.plan.operation_type != MANAGED_CONFIG_OPERATION
+            && current.plan.operation_type != MANAGED_CONFIG_RESTORE_OPERATION
+        {
+            return Err(OpsError::Rejected("diagnostic_operation"));
+        }
         if !change.expected.contains(&current.stage) {
             return Err(OpsError::Rejected("stage_conflict"));
         }
@@ -418,6 +460,19 @@ impl Ledger {
                 evidence_digest: change.evidence_digest,
             },
         )?;
+        if let Some(value) = diagnostics {
+            transaction.execute(
+                "INSERT INTO managed_config_diagnostics (
+                    sequence, diagnostics_json, diagnostics_digest, validator_evidence_digest
+                 ) VALUES (?1, ?2, ?3, ?4)",
+                params![
+                    sequence,
+                    value.json,
+                    value.digest,
+                    value.validator_evidence_digest
+                ],
+            )?;
+        }
         if change.next.is_terminal() {
             transaction.execute(
                 "DELETE FROM resource_locks WHERE operation_id = ?1",
@@ -483,8 +538,14 @@ impl Ledger {
     pub fn receipt(&self, operation_id: &str) -> Result<OperationReceiptView, OpsError> {
         let operation = self.load_operation(operation_id)?;
         let mut statement = self.connection.prepare(
-            "SELECT sequence, stage, recorded_at_ms, result_code, evidence_digest
-             FROM ledger_events WHERE operation_id = ?1 ORDER BY sequence",
+            "SELECT events.sequence, events.stage, events.recorded_at_ms, events.result_code,
+                    events.evidence_digest, diagnostics.diagnostics_json,
+                    diagnostics.diagnostics_digest, diagnostics.validator_evidence_digest
+             FROM ledger_events AS events
+             LEFT JOIN managed_config_diagnostics AS diagnostics
+               ON diagnostics.sequence = events.sequence
+             WHERE events.operation_id = ?1
+             ORDER BY events.sequence",
         )?;
         let rows = statement.query_map([operation_id], |row| {
             Ok((
@@ -493,17 +554,36 @@ impl Ledger {
                 row.get::<_, i64>(2)?,
                 row.get::<_, String>(3)?,
                 row.get::<_, String>(4)?,
+                row.get::<_, Option<String>>(5)?,
+                row.get::<_, Option<String>>(6)?,
+                row.get::<_, Option<String>>(7)?,
             ))
         })?;
         let mut stages = Vec::new();
         for row in rows {
-            let (sequence, stage, recorded_at_ms, result_code, evidence_digest) = row?;
+            let (
+                sequence,
+                stage,
+                recorded_at_ms,
+                result_code,
+                evidence_digest,
+                diagnostics_json,
+                diagnostics_digest,
+                validator_evidence_digest,
+            ) = row?;
+            let diagnostics = load_diagnostics(
+                diagnostics_json,
+                diagnostics_digest,
+                validator_evidence_digest,
+                &evidence_digest,
+            )?;
             stages.push(OperationStageEvidenceView {
                 sequence: u64::try_from(sequence).map_err(|_| OpsError::ForensicLockdown)?,
                 stage: parse_stage(&stage)?,
                 recorded_at: format_time(recorded_at_ms)?,
                 result_code,
                 evidence_digest,
+                diagnostics,
             });
         }
         let recorded_at = stages
@@ -798,9 +878,14 @@ impl Ledger {
             return Err(OpsError::ForensicLockdown);
         }
         let mut statement = self.connection.prepare(
-            "SELECT sequence, operation_id, plan_id, stage, result_code, recorded_at_ms,
-                    evidence_digest, previous_digest, event_digest
-             FROM ledger_events ORDER BY sequence",
+            "SELECT events.sequence, events.operation_id, events.plan_id, events.stage,
+                    events.result_code, events.recorded_at_ms, events.evidence_digest,
+                    events.previous_digest, events.event_digest, diagnostics.diagnostics_json,
+                    diagnostics.diagnostics_digest, diagnostics.validator_evidence_digest
+             FROM ledger_events AS events
+             LEFT JOIN managed_config_diagnostics AS diagnostics
+               ON diagnostics.sequence = events.sequence
+             ORDER BY events.sequence",
         )?;
         let mut rows = statement.query([])?;
         let mut expected_sequence = 1_i64;
@@ -815,6 +900,9 @@ impl Ledger {
             let evidence_digest: String = row.get(6)?;
             let stored_previous: String = row.get(7)?;
             let stored_digest: String = row.get(8)?;
+            let diagnostics_json: Option<String> = row.get(9)?;
+            let diagnostics_digest: Option<String> = row.get(10)?;
+            let validator_evidence_digest: Option<String> = row.get(11)?;
             if sequence != expected_sequence || stored_previous != previous {
                 return Err(OpsError::ForensicLockdown);
             }
@@ -834,6 +922,12 @@ impl Ledger {
             if stored_digest != expected_digest {
                 return Err(OpsError::ForensicLockdown);
             }
+            load_diagnostics(
+                diagnostics_json,
+                diagnostics_digest,
+                validator_evidence_digest,
+                &evidence_digest,
+            )?;
             previous = stored_digest;
             expected_sequence = expected_sequence.saturating_add(1);
         }
@@ -1164,8 +1258,17 @@ fn migrate(connection: &Connection) -> Result<(), OpsError> {
             connection.execute_batch(include_str!("../migrations/0006_ufw_rule.sql"))?;
             connection.pragma_update(None, "user_version", 6)?;
         }
-        6 => {}
+        6 | 7 => {}
         _ => return Err(OpsError::ForensicLockdown),
+    }
+    let current: i64 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+    if current == 6 {
+        connection.execute_batch(include_str!(
+            "../migrations/0007_managed_config_diagnostics.sql"
+        ))?;
+        connection.pragma_update(None, "user_version", 7)?;
+    } else if current != 7 {
+        return Err(OpsError::ForensicLockdown);
     }
     Ok(())
 }

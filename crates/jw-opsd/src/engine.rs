@@ -23,15 +23,16 @@ use crate::certificate::{
     renew_test_assurance, validate_issue_preconditions, validate_issue_site,
 };
 use crate::config::{OpsPaths, OpsPolicy};
+use crate::config_diagnostic::managed_config_diagnostics;
 use crate::digest::canonical_digest;
 use crate::error::OpsError;
 use crate::ledger::{Ledger, StoredOperation, StoredPlan, Transition};
 use crate::managed_config::{
-    ManagedConfigAdapter, ManagedConfigPlanPayload, ProposalRecord, cleanup_internal_temporaries,
-    diff_stats, discover_managed_config, discover_protected_config, managed_config_adapter,
-    managed_config_assurance, managed_config_failure_code, managed_config_test_succeeded,
-    read_proposal, remove_proposal, replace_managed_config, replace_protected_config,
-    restore_managed_config, restore_protected_config, validate_managed_config_candidate,
+    ManagedConfigAdapter, ManagedConfigPlanPayload, ProposalRecord, changed_candidate_lines,
+    cleanup_internal_temporaries, diff_stats, discover_managed_config, discover_protected_config,
+    managed_config_adapter, managed_config_assurance, managed_config_failure_code,
+    managed_config_test_succeeded, read_proposal, remove_proposal, replace_managed_config,
+    replace_protected_config, restore_protected_config, validate_managed_config_candidate,
     write_proposal,
 };
 use crate::nginx::{NGINX_IMPACT, NGINX_RECOVERY_PATH, NginxSite, discover_site, set_enabled};
@@ -43,6 +44,7 @@ use crate::snapshot::{
 };
 
 mod managed_config_plan;
+mod managed_config_rollback;
 mod service_operation;
 mod ufw_operation;
 
@@ -2228,11 +2230,20 @@ impl OpsService {
         if !managed_config_test_succeeded(preflight.adapter, &config_test) {
             let failure_code =
                 managed_config_failure_code(preflight.adapter, &config_test, &preflight.basename);
-            return self.rollback_managed_config(
+            let changed_lines = changed_candidate_lines(&preflight.content, &proposed);
+            let diagnostics = managed_config_diagnostics(
+                &self.paths,
+                &preflight,
+                &config_test,
+                &changed_lines,
+                &proposed,
+            );
+            return self.rollback_managed_config_with_diagnostics(
                 ledger,
                 &snapshotted.operation_id,
                 &failure_code,
                 &config_digest,
+                &diagnostics,
                 now_ms,
             );
         }
@@ -2444,142 +2455,14 @@ impl OpsService {
         cause_evidence_digest: &str,
         now_ms: i64,
     ) -> Result<OperationReceiptView, OpsError> {
-        let operation = ledger.load_operation(operation_id)?;
-        let expected = [
-            OperationStage::Applying,
-            OperationStage::Validating,
-            OperationStage::Reloading,
-            OperationStage::Verifying,
-            OperationStage::RollingBack,
-        ];
-        let rolling = if operation.stage == OperationStage::RollingBack {
-            operation
-        } else {
-            ledger.transition(
-                operation_id,
-                Transition {
-                    expected: &expected,
-                    next: OperationStage::RollingBack,
-                    result_code: cause,
-                    evidence_digest: cause_evidence_digest,
-                    after_digest: None,
-                    rollback_result: None,
-                    now_ms,
-                },
-            )?
-        };
-        let Some(record) = &rolling.snapshot else {
-            return self.recovery_required(ledger, operation_id, "snapshot_missing", now_ms);
-        };
-        let snapshot = match read_managed_config_snapshot(&self.paths, record) {
-            Ok(snapshot) => snapshot,
-            Err(error) => {
-                return self.recovery_required(ledger, operation_id, error.code(), now_ms);
-            }
-        };
-        let restored = match restore_managed_config(
-            &self.paths,
-            &snapshot.resource_id,
-            &snapshot.basename,
-            &snapshot.content,
-            snapshot.mode,
-            snapshot.uid,
-            snapshot.gid,
-        ) {
-            Ok(resource) => resource,
-            Err(_) => {
-                return self.recovery_required(
-                    ledger,
-                    operation_id,
-                    "rollback_replace_failed",
-                    now_ms,
-                );
-            }
-        };
-        let config = match self.runner.run(restored.adapter.config_test()) {
-            Ok(evidence) if managed_config_test_succeeded(restored.adapter, &evidence) => evidence,
-            _ => {
-                return self.recovery_required(
-                    ledger,
-                    operation_id,
-                    "rollback_syntax_failed",
-                    now_ms,
-                );
-            }
-        };
-        let validate_only = rolling
-            .plan
-            .managed_config
-            .as_ref()
-            .is_some_and(|payload| payload.service_action == ServiceAction::ValidateOnly);
-        let runtime_evidence = if validate_only {
-            None
-        } else {
-            let reload = match self.runner.run(restored.adapter.reload()) {
-                Ok(evidence) if evidence.success => evidence,
-                _ => {
-                    return self.recovery_required(
-                        ledger,
-                        operation_id,
-                        "rollback_reload_failed",
-                        now_ms,
-                    );
-                }
-            };
-            let active = match self.runner.run(restored.adapter.active()) {
-                Ok(evidence) if evidence.success => evidence,
-                _ => {
-                    return self.recovery_required(
-                        ledger,
-                        operation_id,
-                        "rollback_active_failed",
-                        now_ms,
-                    );
-                }
-            };
-            if !reload.success {
-                return self.recovery_required(
-                    ledger,
-                    operation_id,
-                    "rollback_reload_failed",
-                    now_ms,
-                );
-            }
-            Some(active)
-        };
-        if restored.content_digest != snapshot.content_digest
-            || restored.metadata_digest != snapshot.metadata_digest
-            || !config.success
-        {
-            return self.recovery_required(ledger, operation_id, "rollback_verify_failed", now_ms);
-        }
-        let rollback_evidence = match runtime_evidence {
-            Some(active) => command_digest(&active)?,
-            None => command_digest(&config)?,
-        };
-        let terminal = ledger.transition(
+        self.rollback_managed_config_with_diagnostics(
+            ledger,
             operation_id,
-            Transition {
-                expected: &[OperationStage::RollingBack],
-                next: OperationStage::RolledBack,
-                result_code: "rollback_verified",
-                evidence_digest: &rollback_evidence,
-                after_digest: Some(&snapshot.content_digest),
-                rollback_result: Some("verified"),
-                now_ms,
-            },
-        )?;
-        let receipt = ledger.receipt(&terminal.operation_id)?;
-        if let Some(payload) = terminal.plan.managed_config {
-            let _cleanup = remove_proposal(
-                &self.paths,
-                &ProposalRecord {
-                    relative_path: payload.proposal_relative_path,
-                    digest: payload.proposal_digest,
-                },
-            );
-        }
-        Ok(receipt)
+            cause,
+            cause_evidence_digest,
+            &[],
+            now_ms,
+        )
     }
 
     fn finish_noop(
@@ -3651,6 +3534,13 @@ mod tests {
             jw_contracts::OperationStage::RolledBack
         );
         assert_eq!(receipt.after_digest, sha256_digest(b"server {}\n"));
+        assert!(receipt.stages.iter().any(|stage| {
+            stage.stage == jw_contracts::OperationStage::RollingBack
+                && stage
+                    .diagnostics
+                    .iter()
+                    .any(|diagnostic| diagnostic.code == "validator_rejected")
+        }));
         let content = fs::read_to_string(
             OpsPaths::for_test(&root)
                 .nginx_available

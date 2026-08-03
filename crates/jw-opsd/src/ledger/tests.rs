@@ -1,7 +1,8 @@
 use jw_contracts::{
-    AssuranceLevel, AssuranceView, MANAGED_CONFIG_OPERATION, NGINX_SITE_STATE_OPERATION,
-    NGINX_TREE_CONFIG_ADAPTER_ID, NGINX_TREE_RESOURCE_PREFIX, NginxSiteState, OperationStage, Role,
-    RollbackSupport, ServiceAction, Subject, managed_service_config_resource_id, sha256_digest,
+    AssuranceLevel, AssuranceView, MANAGED_CONFIG_OPERATION, ManagedConfigDiagnosticSeverity,
+    ManagedConfigDiagnosticView, NGINX_SITE_STATE_OPERATION, NGINX_TREE_CONFIG_ADAPTER_ID,
+    NGINX_TREE_RESOURCE_PREFIX, NginxSiteState, OperationStage, Role, RollbackSupport,
+    ServiceAction, Subject, managed_service_config_resource_id, sha256_digest,
 };
 
 use crate::config::OpsPaths;
@@ -50,6 +51,96 @@ fn tampered_event_enters_forensic_lockdown() -> Result<(), String> {
     connection
         .execute(
             "UPDATE ledger_events SET result_code = 'forged' WHERE sequence = 1",
+            [],
+        )
+        .map_err(|error| error.to_string())?;
+    drop(connection);
+    assert!(matches!(
+        Ledger::open(&paths),
+        Err(crate::error::OpsError::ForensicLockdown)
+    ));
+    std::fs::remove_dir_all(root).map_err(|error| error.to_string())
+}
+
+#[test]
+fn diagnostic_payload_is_chained_and_tamper_enters_lockdown() -> Result<(), String> {
+    let root = test_root("diagnostic-tamper")?;
+    let paths = OpsPaths::for_test(&root);
+    let mut ledger = Ledger::open(&paths).map_err(|error| error.to_string())?;
+    let mut input = fixture_plan();
+    input.operation_type = String::from(MANAGED_CONFIG_OPERATION);
+    input.site_id = managed_service_config_resource_id(
+        NGINX_TREE_RESOURCE_PREFIX,
+        NGINX_TREE_CONFIG_ADAPTER_ID,
+        "nginx.conf",
+    );
+    input.managed_config = Some(ManagedConfigPlanPayload {
+        proposal_relative_path: String::from("proposal"),
+        proposal_digest: sha256_digest(b"proposal"),
+        basename: Some(String::from("nginx.conf")),
+        proposed_content_digest: sha256_digest(b"events {}\n"),
+        current_bytes: 10,
+        proposed_bytes: 10,
+        added_lines: 1,
+        removed_lines: 1,
+        diff_summary: vec![String::from("changed")],
+        service_action: ServiceAction::Reload,
+    });
+    let plan = ledger
+        .create_or_reuse_plan(&input)
+        .map_err(|error| error.to_string())?;
+    let operation = ledger
+        .begin_operation(
+            "op-diagnostic",
+            &plan.plan_id,
+            &plan.plan_hash,
+            &plan.idempotency_key,
+            &plan.actor,
+            1_500,
+        )
+        .map_err(|error| error.to_string())?;
+    let diagnostic = ManagedConfigDiagnosticView {
+        service: String::from("nginx"),
+        validator: String::from("nginx_config_test"),
+        resource_id: Some(input.site_id),
+        masked_path: Some(String::from("/etc/nginx/nginx.conf")),
+        line: Some(13),
+        column: None,
+        severity: ManagedConfigDiagnosticSeverity::Error,
+        code: String::from("unknown_directive"),
+        message: String::from("Nginx가 알 수 없는 지시어를 발견했습니다."),
+        related_changed_lines: vec![13],
+        cause_candidate_lines: Vec::new(),
+    };
+    let terminal = ledger
+        .transition_with_diagnostics(
+            &operation.operation_id,
+            Transition {
+                expected: &[OperationStage::Approved],
+                next: OperationStage::CancelledBeforeApply,
+                result_code: "nginx_config_test_failed",
+                evidence_digest: &sha256_digest(b"validator-output"),
+                after_digest: None,
+                rollback_result: None,
+                now_ms: 1_501,
+            },
+            &[diagnostic],
+        )
+        .map_err(|error| error.to_string())?;
+    let receipt = ledger
+        .receipt(&terminal.operation_id)
+        .map_err(|error| error.to_string())?;
+    assert_eq!(
+        receipt.stages.last().map(|stage| stage.diagnostics.len()),
+        Some(1)
+    );
+    drop(ledger);
+
+    let connection =
+        rusqlite::Connection::open(&paths.database).map_err(|error| error.to_string())?;
+    connection
+        .execute(
+            "UPDATE managed_config_diagnostics SET diagnostics_json = '[]'",
             [],
         )
         .map_err(|error| error.to_string())?;

@@ -6,7 +6,8 @@ use std::time::Duration;
 use super::{
     ManagedConfigPlanFields, P2ApiSession, VmConfig, expect_http, json_string, json_string_field,
     json_unsigned_field, operation_idempotency_key, public_api_request, read_secret,
-    require_success, require_terminal, restart_edge_and_agentd_and_wait, text,
+    require_managed_config_diagnostic, require_success, require_terminal,
+    restart_edge_and_agentd_and_wait, text,
 };
 
 const APACHE_CONFIG_API: &str = "/api/v1/services/apache/configurations";
@@ -158,6 +159,18 @@ fn run_managed_config_scenarios(
     {
         return Err(String::from(
             "Apache syntax receipt omitted invalid-config or verified rollback evidence",
+        ));
+    }
+    require_managed_config_diagnostic(
+        &rolled_back,
+        "apache",
+        "apache_config_test",
+        APACHE_SITE,
+        Some(6),
+    )?;
+    if rolled_back.contains("JWAgentInvalidDirective") {
+        return Err(String::from(
+            "Apache diagnostic exposed rejected configuration source",
         ));
     }
     require_site_equals(config, &valid_content, timeout)?;

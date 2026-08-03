@@ -16,7 +16,8 @@ Last reviewed: 2026-07-21
 - TanStack Query server-state cache
 - generated OpenAPI TypeScript client
 - Playwright browser evidence
-- CodeMirror 6 shared managed-text editor and unified diff
+- desktop-only `monaco-editor-core 0.56.0` managed-text workspace; same-origin static
+  vendor bundle로 격리하고 mobile·tablet mutation은 제공하지 않음
 
 도입 시점에 호환되는 최신 stable 조합을 확인한 뒤 exact pin합니다. manifest와 release 명령에 `latest`를 남기지 않습니다.
 

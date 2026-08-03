@@ -1,5 +1,18 @@
 interface StageResult {
   resultCode: string;
+  diagnostics?: readonly StructuredDiagnostic[];
+}
+
+interface StructuredDiagnostic {
+  resourceId?: string | null;
+  maskedPath?: string | null;
+  line?: number | null;
+  column?: number | null;
+  severity: "error" | "warning";
+  code: string;
+  message: string;
+  relatedChangedLines?: readonly number[];
+  causeCandidateLines?: readonly number[];
 }
 
 const NGINX_LINE_PREFIX = "nginx_config_test_failed:line=";
@@ -16,7 +29,27 @@ export function nginxSyntaxDiagnosticLine(stages: readonly StageResult[]): numbe
   return null;
 }
 
-export function managedConfigSyntaxDiagnosticLine(stages: readonly StageResult[]): number | null {
+export function managedConfigDiagnostics(
+  stages: readonly StageResult[],
+): readonly StructuredDiagnostic[] {
+  return stages.flatMap((stage) => stage.diagnostics ?? []);
+}
+
+export function managedConfigSyntaxDiagnosticLine(
+  stages: readonly StageResult[],
+  resourceId?: string | null,
+): number | null {
+  for (const diagnostic of managedConfigDiagnostics(stages)) {
+    if (
+      diagnostic.line !== null &&
+      diagnostic.line !== undefined &&
+      (resourceId === undefined ||
+        resourceId === null ||
+        diagnostic.resourceId === resourceId)
+    ) {
+      return diagnostic.line;
+    }
+  }
   for (const stage of stages) {
     if (!stage.resultCode.startsWith(PHP_FPM_LINE_PREFIX)) continue;
     const encoded = stage.resultCode.slice(PHP_FPM_LINE_PREFIX.length);

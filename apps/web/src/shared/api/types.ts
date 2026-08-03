@@ -42,6 +42,8 @@ export type NginxSiteStatePlanView = components["schemas"]["NginxSiteStatePlanVi
 export type ManagedConfigResourceView = components["schemas"]["ManagedConfigResourceView"];
 export type ManagedConfigPlanRequest = components["schemas"]["ManagedConfigPlanRequest"];
 export type ManagedConfigPlanView = components["schemas"]["ManagedConfigPlanView"];
+export type ManagedConfigDiagnosticView =
+  components["schemas"]["ManagedConfigDiagnosticView"];
 export type ManagedConfigApprovalRequest =
   components["schemas"]["ManagedConfigApprovalRequest"];
 export type ManagedConfigRestorePlanRequest = components["schemas"]["ManagedConfigRestorePlanRequest"];

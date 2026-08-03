@@ -57,12 +57,13 @@ Last reviewed: 2026-07-22
 - [ADR-0011 One-shot Certbot network runner](adr/0011-certbot-network-runner.md) — Accepted
 - [ADR-0012 One-shot loopback TLS verifier](adr/0012-loopback-tls-verifier.md) — Accepted
 - [ADR-0013 System OpenSSH client](adr/0013-system-openssh-client.md) — Accepted
-- [ADR-0014 CodeMirror managed config editor](adr/0014-codemirror-config-editor.md) — Accepted
+- [ADR-0014 CodeMirror managed config editor](adr/0014-codemirror-config-editor.md) — Superseded
 - [ADR-0015 PHP-FPM managed config envelope](adr/0015-php-fpm-managed-config-envelope.md) — Accepted
 - [ADR-0016 TOTP crypto and enrollment boundary](adr/0016-totp-crypto-and-enrollment-boundary.md) — Accepted
 - [ADR-0017 Risk-tiered operation approval](adr/0017-risk-tiered-operation-approval.md) — Accepted
 - [ADR-0018 Independent Rust management edge](adr/0018-independent-rust-management-edge.md) — Accepted
 - [ADR-0019 Managed service config and firewall boundary](adr/0019-managed-service-config-and-firewall-boundary.md) — Accepted
+- [ADR-0020 Monaco desktop configuration workspace](adr/0020-monaco-desktop-config-workspace.md) — Accepted
 
 ## Spec template requirements
 

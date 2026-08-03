@@ -1,3 +1,24 @@
+jw-agent (0.2.0~p2.23) noble; urgency=medium
+
+  * Preserve the official validator error line and mark bounded prior diff candidates separately.
+  * Keep cause candidates scoped to the selected Nginx resource and incomplete changed lines.
+  * Move file-scoped restore history, diff review, and explicit restore into the editor.
+  * Remove the duplicate overview restore action and right-side restore sheet.
+  * Reuse active administrative access without another password prompt for restore.
+
+ -- JW Agent Maintainers <maintainers@example.invalid>  Fri, 24 Jul 2026 16:40:00 +0900
+
+jw-agent (0.2.0~p2.22) noble; urgency=medium
+
+  * Persist bounded structured diagnostics from native service validators.
+  * Map Nginx, Apache, and PHP-FPM failures to managed resources and changed lines.
+  * Keep diagnostic evidence inside the tamper-evident operation ledger.
+  * Replace the configuration editor with a desktop Monaco workspace.
+  * Keep mobile and tablet configuration editing read-only.
+  * Isolate the static Monaco vendor build from the normal application build graph.
+
+ -- JW Agent Maintainers <maintainers@example.invalid>  Fri, 24 Jul 2026 15:32:41 +0900
+
 jw-agent (0.2.0~p2.21) noble; urgency=medium
 
   * Discover bounded existing Nginx and Apache files below their standard /etc roots.

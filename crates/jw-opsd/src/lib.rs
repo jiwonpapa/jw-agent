@@ -1,8 +1,10 @@
 #![forbid(unsafe_code)]
 
+mod apache_diagnostic;
 mod certbot_runner;
 mod certificate;
 mod config;
+mod config_diagnostic;
 mod digest;
 mod engine;
 mod error;

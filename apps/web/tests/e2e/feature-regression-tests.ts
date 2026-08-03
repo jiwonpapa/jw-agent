@@ -1,6 +1,12 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page } from "@playwright/test";
 
+import {
+  codeEditorHost,
+  expectCodeEditorText,
+  fillCodeEditor,
+} from "./code-editor";
+
 type FeatureRegressionHarness = {
   setupOverview: (
     page: Page,
@@ -15,6 +21,10 @@ type FeatureRegressionHarness = {
     callbacks: { onPlan: (body: unknown) => void; onApproval: (body: unknown) => void },
   ) => Promise<void>;
   setupManagedConfigSyntaxFailure: (page: Page) => Promise<void>;
+  setupManagedConfigRestore: (
+    page: Page,
+    callbacks: { onPlan: (body: unknown) => void; onApproval: (body: unknown) => void },
+  ) => Promise<void>;
   configPlanHash: string;
 };
 
@@ -89,7 +99,7 @@ export function registerFeatureRegressionTests(harness: FeatureRegressionHarness
   test("managed Nginx editor validates, saves, reloads, and records one operation", async ({ page }) => {
     const planBodies: unknown[] = [];
     const approvalBodies: unknown[] = [];
-    await page.setViewportSize({ width: 390, height: 844 });
+    await page.setViewportSize({ width: 1440, height: 900 });
     await harness.setupManagedConfig(page, {
       onPlan: (body) => planBodies.push(body),
       onApproval: (body) => approvalBodies.push(body),
@@ -97,10 +107,13 @@ export function registerFeatureRegressionTests(harness: FeatureRegressionHarness
     await page.goto("/services/nginx/configurations");
     await page.getByRole("button", { name: /example\.com/ }).click();
 
-    const editor = page.getByLabel("Nginx 설정 내용");
-    await expect(editor).toContainText("listen 80;");
+    await expectCodeEditorText(page, "Nginx 설정 내용", "listen 80;");
     await expect(page.getByText("변경 없음", { exact: true })).toBeVisible();
-    await editor.fill("server {\n  listen 80;\n  client_max_body_size 20m;\n}\n");
+    await fillCodeEditor(
+      page,
+      "Nginx 설정 내용",
+      "server {\n  listen 80;\n  client_max_body_size 20m;\n}\n",
+    );
     await page.getByRole("button", { name: "저장", exact: true }).dblclick();
 
     await expect(page.getByRole("heading", { name: "저장 완료" })).toBeVisible();
@@ -128,17 +141,70 @@ export function registerFeatureRegressionTests(harness: FeatureRegressionHarness
   });
 
   test("managed Nginx syntax failure returns to the exact diagnostic line after verified rollback", async ({ page }) => {
-    await page.setViewportSize({ width: 390, height: 844 });
+    await page.setViewportSize({ width: 1440, height: 900 });
     await harness.setupManagedConfigSyntaxFailure(page);
     await page.goto("/services/nginx/configurations");
     await page.getByRole("button", { name: /example\.com/ }).click();
-    await page.getByLabel("Nginx 설정 내용").fill("server {\n  listen 80\n  broken on;\n}\n");
+    await fillCodeEditor(
+      page,
+      "Nginx 설정 내용",
+      "server {\n  listen 80\n  broken on;\n}\n",
+    );
     await page.getByRole("button", { name: "저장", exact: true }).click();
 
     await expect(page.getByRole("heading", { name: "저장 실패 · 이전 설정 복구 완료" })).toBeVisible();
     await expect(page.getByText("변경을 적용하지 않고 이전 설정을 복구·검증했습니다.")).toBeVisible();
+    await expect(page.getByText("원인 후보 2번째 줄")).toBeVisible();
     await page.getByRole("button", { name: "3번째 줄 수정" }).click();
-    await expect(page.getByLabel("Nginx 설정 내용")).toContainText("broken on;");
+    await expectCodeEditorText(page, "Nginx 설정 내용", "broken on;");
     await expect(page.getByText("3번째 줄을 수정해 주세요.")).toBeVisible();
+  });
+
+  test("managed config history reviews diff and restores inside the editor", async ({ page }) => {
+    const planBodies: unknown[] = [];
+    const approvalBodies: unknown[] = [];
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await harness.setupManagedConfigRestore(page, {
+      onPlan: (body) => planBodies.push(body),
+      onApproval: (body) => approvalBodies.push(body),
+    });
+    await page.goto("/services/nginx/configurations");
+    await page.getByRole("button", { name: /example\.com/ }).click();
+
+    await expect(page.getByRole("heading", { name: "변경 이력과 복원" })).toBeVisible();
+    await page.getByRole("button", { name: "변경 전 상태 확인" }).click();
+    await expect(page.getByLabel("복원 diff")).toContainText("client_max_body_size");
+    await expect(page.getByRole("button", { name: "이 상태로 복원" })).toBeVisible();
+    await expect(page.getByRole("dialog", { name: /설정 복원/ })).toHaveCount(0);
+    await page.getByRole("button", { name: "이 상태로 복원" }).click();
+    await expect(page.getByText("복원과 서비스 검증을 완료했습니다.")).toBeVisible();
+
+    expect(planBodies).toHaveLength(1);
+    expect(approvalBodies).toHaveLength(1);
+    expect(planBodies[0]).toMatchObject({
+      operationType: "service.config_file.restore/v1",
+      sourceOperationId: "op_config_history",
+    });
+    expect(approvalBodies[0]).toMatchObject({
+      approvalIntent: {
+        validationConfirmed: true,
+        serviceActionConfirmed: true,
+      },
+    });
+    expect(JSON.stringify(approvalBodies)).not.toContain("password");
+  });
+
+  test("managed config editing is desktop-only while mobile stays read-only", async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await harness.setupManagedConfig(page, { onPlan: () => {}, onApproval: () => {} });
+    await page.goto("/services/nginx/configurations");
+    await page.getByRole("button", { name: /example\.com/ }).click();
+
+    const host = codeEditorHost(page, "Nginx 설정 내용");
+    await expect(host).toHaveAttribute("data-readonly", "true");
+    await expect(
+      page.getByText("모바일·태블릿에서는 설정을 조회할 수 있지만 편집·저장은 차단됩니다."),
+    ).toBeVisible();
+    await expect(page.getByRole("button", { name: "저장", exact: true })).toBeHidden();
   });
 }

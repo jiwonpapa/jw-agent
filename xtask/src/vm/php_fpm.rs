@@ -6,7 +6,8 @@ use std::time::Duration;
 use super::{
     ManagedConfigPlanFields, P2ApiSession, VmConfig, expect_http, json_string, json_string_field,
     json_unsigned_field, operation_idempotency_key, public_api_request, read_secret,
-    require_success, require_terminal, restart_edge_and_agentd_and_wait, text,
+    require_managed_config_diagnostic, require_success, require_terminal,
+    restart_edge_and_agentd_and_wait, text,
 };
 
 const PHP_FPM_API: &str = "/api/v1/services/php-fpm";
@@ -108,6 +109,8 @@ fn run_scenarios(config: &VmConfig, password: &str, timeout: Duration) -> Result
     require_php_ini_equals(config, baseline.as_bytes(), timeout)?;
 
     let invalid_content = format!("{valid_content}\nmemory_limit == broken\n");
+    let invalid_line = u32::try_from(invalid_content.lines().count())
+        .map_err(|_| String::from("PHP-FPM invalid fixture line overflow"))?;
     let invalid_plan = plan(
         &session,
         config,
@@ -126,6 +129,18 @@ fn run_scenarios(config: &VmConfig, password: &str, timeout: Duration) -> Result
     {
         return Err(String::from(
             "PHP-FPM syntax receipt omitted bounded line or verified rollback evidence",
+        ));
+    }
+    require_managed_config_diagnostic(
+        &rolled_back,
+        "php_fpm",
+        "php_fpm_83_config_test",
+        PHP_INI,
+        Some(invalid_line),
+    )?;
+    if rolled_back.contains("memory_limit == broken") {
+        return Err(String::from(
+            "PHP-FPM diagnostic exposed rejected configuration source",
         ));
     }
     require_php_ini_equals(config, baseline.as_bytes(), timeout)

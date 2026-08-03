@@ -49,3 +49,9 @@ zeroize = { version = "=1.9.0", default-features = false }
 
 [profile.release]
 panic = "abort"
+
+[profile.dev]
+debug = 0
+
+[profile.test]
+debug = 0

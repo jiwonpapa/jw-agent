@@ -27,6 +27,8 @@ Last reviewed: 2026-07-24
 - additional auth policy values `disabled | risky_operations | all_mutations`
 - P1 default `disabled`, UI recommendation `risky_operations`; provider status is explicit
 - local-only verification, no GitHub Actions
+- desktop managed config와 SFTP text mutation은 lazy-loaded Monaco 하나를 사용하고
+  mobile·tablet은 read-only 상태만 제공
 - first write operation Nginx site enable/disable
 - P2 IPC v1 exact match; mixed-version rolling upgrade 없음
 - opsd SQLite `synchronous=FULL`, file·directory fsync 뒤 snapshot 확정
@@ -59,8 +61,8 @@ P2 구현 진입은 2026-07-21 사용자 목표추진 지시와 [ADR-0010](../90
 - opsd는 host UFW netlink 제어 때문에 host network namespace와 `CAP_NET_ADMIN`을 가지며 validator용 `CAP_NET_BIND_SERVICE`만 추가로 유지합니다. `IPAddressDeny=any`, 고정 argv와 listening socket 부재로 일반 IP 통신은 계속 차단합니다.
 - 제품 관리 vhost는 legacy basename뿐 아니라 versioned content marker와 제품 include로 판정합니다. 보호 resource는 operation type/schema를 노출하지 않고 opsd plan도 재검증합니다.
 - mutation 승인은 `202 Accepted`이며 durable ledger가 실행 상태를 소유합니다. 브라우저 SSE는 durable sequence를 event ID로 사용하고 canonical receipt를 다시 조회합니다.
-- `p2-local` 23개, `p2-browser` 8개, Playwright 43개, `p2-vm` 28개 gate가 PASS했습니다.
-- VM package는 `jw-agent_0.2.0~p2.21_amd64.deb`, SHA-256 `f649e29e9c9560f508b8a9d57ec8b0776ed070ee35adb69986da9f95f4038865`입니다.
+- `p2-local` 23개, `p2-browser` 8개, Playwright 45개, `p2-vm` 28개 gate가 PASS했습니다.
+- VM package는 `jw-agent_0.2.0~p2.23_amd64.deb`, SHA-256 `f0a92d342cfd0eec2b37fee8a6e785e8e73f29ce7e24d41571107f20ba3dbc3a`입니다.
 - `jw-edge`는 non-root Rustls 9443 listener와 agentd proxy UDS만 소유합니다. `opsd`는 fixed Unix readiness 응답을 plan·apply 직전에 확인하며, 없으면 Nginx stop을 거부합니다. 전체 VM lane은 Nginx inactive 상태의 authenticated UI·API 지속성을 검증했습니다.
 - Ubuntu systemd 서비스 목록은 템플릿 주요 서비스, 로컬 발견 unit과 시스템 내부 unit을 G0로 분리하며 failed unit을 숨기지 않습니다.
 - 로컬 콘솔은 Linux UID·non-root 경계를 명시하고 자원 사용률, 서비스 family, 현재 UID의 typed-operation 영수증만 요약합니다. opsd 임의 명령·전체 사용자 감사 조회 권한은 추가하지 않습니다.
@@ -70,8 +72,19 @@ P2 구현 진입은 2026-07-21 사용자 목표추진 지시와 [ADR-0010](../90
 - `jw-certd`의 추가 명령은 `127.0.0.1:443` 고정 SNI fingerprint probe뿐이며 `opsd` network 차단은 유지합니다. attach 정상 경로와 probe 강제 실패의 exact rollback은 `VM_PASS + G2`입니다.
 - P2D terminal은 system OpenSSH client, one-shot memory/FIFO password broker, same-origin WSS, non-root PTY와 metadata-only audit로 `VM_PASS + G1`입니다. SFTP list/stat/text-read/download는 fixed OpenSSH subsystem과 canonical home confinement으로 `VM_PASS + G0`입니다. 일반 파일 create/replace는 PAM plan, fsync·atomic rename, mode·size·digest read-back과 metadata-only audit로 `VM_PASS + G1`입니다. package는 sshd 정책을 자동 변경하지 않으며 VM fixture만 loopback password 인증을 허용합니다. delete·move·chmod·root/system path 쓰기는 제외합니다.
 - opsd는 SQLite ledger event와 외부 checkpoint 파일 사이의 일관된 판정을 위해 typed request 전체를 직렬화합니다. 실행 중 receipt 조회는 완료까지 대기하며 중간 checkpoint를 훼손으로 오판하지 않습니다.
-- [ADR-0014](../90-specs/adr/0014-codemirror-config-editor.md)는 Monaco 대신 mobile-compatible CodeMirror 최소 graph를 승인합니다. Mac mini production build는 2.38초, editor core gzip 100.97 kB, plan-only diff gzip 7.72 kB이며 범용 lint·autocomplete·search·React wrapper는 제외했습니다.
-- Nginx `nginx -t` stderr는 원문을 저장·노출하지 않고 selected-resource basename에 일치하는 양의 줄 번호만 `result_code`에 남깁니다. verified rollback 후 UI가 그 줄로 복귀하며 위치가 없으면 추측하지 않습니다.
+- [ADR-0014](../90-specs/adr/0014-codemirror-config-editor.md)는
+  [ADR-0020](../90-specs/adr/0020-monaco-desktop-config-workspace.md)으로 대체했습니다.
+  `monaco-editor-core 0.56.0`을 same-origin static vendor로 격리한 결과 app shell은
+  `71.62 kB gzip`으로 유지되고 production build 중앙값은 `200ms → 180ms`입니다.
+  lazy runtime은 `841.96 kB gzip`, CSS는 `16.77 kB gzip`, worker는 `301.05 kB raw`입니다.
+- 공식 validator 출력은
+  [OPS-MANAGED-CONFIG-DIAGNOSTIC-V1](../90-specs/operations/managed-config-diagnostic-v1.md)의
+  bounded structured diagnostic으로 변환합니다. 원문 출력·canonical path는 저장하지 않고
+  managed root 안 resource와 validator가 보고한 위치만 표시합니다. Nginx·Apache의
+  active symlink 진단은 selected source로 역매핑하며 다른 include file의 같은 줄 번호는
+  방금 변경한 줄로 연결하지 않습니다. Nginx validator가 누락된 종결자 다음 줄에서
+  중단을 보고하면 공식 오류 줄은 그대로 유지하고, 같은 selected resource의 가까운
+  이전 diff 한 줄만 별도 원인 후보로 표시합니다.
 - terminal·SFTP memory-only session은 authenticated app shell이 소유합니다. route 이동은 close 효과가 아니며 browser regression gate는 같은 ticket/token 재사용과 close 요청 부재를 확인합니다. p2.18 package/runtime VM gate는 실제 OpenSSH terminal·SFTP endpoint를 다시 검증했습니다. terminal과 SFTP의 자체 max lifetime은 `0`으로 명시적 종료까지 유지하되 로그인 session 만료·logout·연결 상실·서버 재시작은 계속 종료 경계입니다.
 - admin 역할의 non-root Linux 계정은 PAM과 정책상 TOTP를 거쳐 15분 관리 모드로 진입합니다. root typed plan·approval은 이 상태가 아니면 서버에서 거부하며 root 로그인·shell·범용 root 파일 API는 추가하지 않았습니다.
 - `totp/v1`은 recovery ingress의 admin PAM 뒤에만 등록·초기화할 수 있습니다. 160-bit secret은 별도 mode `0600` wrapping key로 AEAD 암호화하고 복구 코드는 digest만 저장합니다. VM gate는 연속 code 두 개, `risky_operations`, PAM+TOTP 관리 모드 진입, 동일 time-step replay 차단, 복구 초기화와 저장소 정리를 검증했습니다.

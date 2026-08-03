@@ -1,32 +1,16 @@
-import {
-  bracketMatching,
-  defaultHighlightStyle,
-  StreamLanguage,
-  syntaxHighlighting,
-  type LanguageSupport,
-} from "@codemirror/language";
-import { nginx } from "@codemirror/legacy-modes/mode/nginx";
-import { properties } from "@codemirror/legacy-modes/mode/properties";
-import { Compartment, type Extension } from "@codemirror/state";
-import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
-import {
-  Decoration,
-  drawSelection,
-  dropCursor,
-  EditorView,
-  gutter,
-  GutterMarker,
-  highlightActiveLine,
-  highlightActiveLineGutter,
-  highlightSpecialChars,
-  keymap,
-  lineNumbers,
-} from "@codemirror/view";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
+import type * as Monaco from "monaco-editor-core/esm/vs/editor/editor.api.js";
 
 import { cn } from "./cn";
 
 export type EditorLanguage = "ini" | "nginx" | "plain";
+
+export interface EditorDiagnostic {
+  line: number;
+  column: number | null;
+  severity: "error" | "warning";
+  message: string;
+}
 
 interface CodeEditorProps {
   value: string;
@@ -36,99 +20,59 @@ interface CodeEditorProps {
   readOnly?: boolean;
   diagnosticLine?: number | null;
   diagnosticMessage?: string;
+  diagnostics?: readonly EditorDiagnostic[];
   className?: string;
 }
 
-const nginxLanguage = StreamLanguage.define(nginx);
-const iniLanguage = StreamLanguage.define(properties);
+let runtimePromise: ReturnType<typeof importRuntime> | null = null;
 
-export const editorTheme = EditorView.theme({
-  "&": {
-    color: "var(--color-text)",
-    backgroundColor: "var(--color-surface)",
-    fontSize: "13px",
-  },
-  "&.cm-focused": {
-    outline: "none",
-    boxShadow: "0 0 0 3px color-mix(in oklch, var(--color-focus) 28%, transparent)",
-  },
-  ".cm-scroller": {
-    fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
-    lineHeight: "1.55",
-  },
-  ".cm-content": {
-    minHeight: "20rem",
-    padding: "0.75rem 0",
-    caretColor: "var(--color-action)",
-  },
-  ".cm-gutters": {
-    color: "var(--color-muted)",
-    backgroundColor: "var(--color-subtle)",
-    borderRight: "1px solid var(--color-border)",
-  },
-  ".cm-activeLine, .cm-activeLineGutter": {
-    backgroundColor: "color-mix(in oklch, var(--color-action) 9%, transparent)",
-  },
-  ".cm-selectionBackground, &.cm-focused .cm-selectionBackground": {
-    backgroundColor: "color-mix(in oklch, var(--color-action) 22%, transparent)",
-  },
-  ".cm-cursor": {
-    borderLeftColor: "var(--color-action)",
-  },
-  ".cm-diagnostic-line": {
-    backgroundColor: "color-mix(in oklch, var(--color-danger) 10%, transparent)",
-  },
-  ".cm-diagnostic-gutter": {
-    color: "var(--color-danger)",
-    backgroundColor: "var(--color-subtle)",
-    borderRight: "1px solid var(--color-border)",
-  },
-  ".cm-diagnostic-marker": {
-    display: "grid",
-    width: "1rem",
-    height: "1rem",
-    placeItems: "center",
-    borderRadius: "999px",
-    color: "var(--color-action-foreground)",
-    backgroundColor: "var(--color-danger)",
-    fontSize: "10px",
-    fontWeight: "700",
-  },
-});
+function importRuntime() {
+  loadMonacoStyle();
+  return new Promise<{ monaco: typeof Monaco }>((resolve, reject) => {
+    const scope = globalThis as typeof globalThis & {
+      __JW_AGENT_MONACO__?: typeof Monaco;
+    };
+    if (scope.__JW_AGENT_MONACO__ !== undefined) {
+      resolve({ monaco: scope.__JW_AGENT_MONACO__ });
+      return;
+    }
 
-class DiagnosticGutterMarker extends GutterMarker {
-  readonly elementClass = "cm-diagnostic-marker";
-
-  constructor(private readonly message: string) {
-    super();
-  }
-
-  override toDOM(): HTMLElement {
-    const element = document.createElement("span");
-    element.textContent = "!";
-    element.title = this.message;
-    element.setAttribute("aria-label", this.message);
-    return element;
-  }
+    const scriptId = "jw-agent-monaco-runtime";
+    const existing = document.getElementById(scriptId);
+    const script = existing instanceof HTMLScriptElement
+      ? existing
+      : document.createElement("script");
+    const onLoad = (): void => {
+      if (scope.__JW_AGENT_MONACO__ === undefined) {
+        reject(new Error("Monaco runtime loaded without an editor API"));
+        return;
+      }
+      resolve({ monaco: scope.__JW_AGENT_MONACO__ });
+    };
+    script.addEventListener("load", onLoad, { once: true });
+    script.addEventListener(
+      "error",
+      () => reject(new Error("Monaco runtime failed to load")),
+      { once: true },
+    );
+    if (existing === null) {
+      script.id = scriptId;
+      script.type = "module";
+      script.src = "/vendor/monaco/monaco-runtime.js";
+      document.head.append(script);
+    }
+  });
 }
 
-function diagnosticExtension(view: EditorView, lineNumber: number | null, message: string): Extension {
-  if (lineNumber === null || lineNumber <= 0 || lineNumber > view.state.doc.lines) return [];
-  const line = view.state.doc.line(lineNumber);
-  const marker = new DiagnosticGutterMarker(message);
-  return [
-    EditorView.decorations.of(Decoration.set([Decoration.line({ class: "cm-diagnostic-line" }).range(line.from)])),
-    gutter({
-      class: "cm-diagnostic-gutter",
-      lineMarker: (_view, block) => block.from === line.from ? marker : null,
-    }),
-  ];
+function loadRuntime(): ReturnType<typeof importRuntime> {
+  runtimePromise ??= importRuntime();
+  return runtimePromise;
 }
 
-export function languageExtension(language: EditorLanguage): LanguageSupport | ReturnType<typeof StreamLanguage.define> | null {
-  if (language === "nginx") return nginxLanguage;
-  if (language === "ini") return iniLanguage;
-  return null;
+function languageId(language: EditorLanguage): string {
+  if (language === "nginx") return "jw-nginx";
+  if (language === "ini") return "jw-ini";
+  return "plaintext";
 }
 
 export function CodeEditor({
@@ -139,97 +83,210 @@ export function CodeEditor({
   readOnly = false,
   diagnosticLine = null,
   diagnosticMessage = "서버 문법검사가 이 줄에서 실패했습니다.",
+  diagnostics = [],
   className,
 }: CodeEditorProps) {
   const hostRef = useRef<HTMLDivElement | null>(null);
-  const viewRef = useRef<EditorView | null>(null);
-  const diagnosticCompartmentRef = useRef<Compartment | null>(null);
+  const editorRef = useRef<Monaco.editor.IStandaloneCodeEditor | null>(null);
+  const monacoRef = useRef<typeof Monaco | null>(null);
   const onChangeRef = useRef(onChange);
+  const valueRef = useRef(value);
+  const diagnosticLineRef = useRef(diagnosticLine);
+  const diagnosticMessageRef = useRef(diagnosticMessage);
+  const diagnosticsRef = useRef(diagnostics);
   const synchronizing = useRef(false);
-  const initialValueRef = useRef(value);
+  const desktopInput = useDesktopEditorInput();
+  const effectiveReadOnly = readOnly || !desktopInput;
+  const effectiveReadOnlyRef = useRef(effectiveReadOnly);
 
   useEffect(() => {
     onChangeRef.current = onChange;
   }, [onChange]);
 
   useEffect(() => {
-    initialValueRef.current = value;
+    valueRef.current = value;
   }, [value]);
+
+  useEffect(() => {
+    diagnosticLineRef.current = diagnosticLine;
+    diagnosticMessageRef.current = diagnosticMessage;
+    diagnosticsRef.current = diagnostics;
+  }, [diagnosticLine, diagnosticMessage, diagnostics]);
+
+  useEffect(() => {
+    effectiveReadOnlyRef.current = effectiveReadOnly;
+  }, [effectiveReadOnly]);
 
   useEffect(() => {
     const parent = hostRef.current;
     if (parent === null) return;
-    const syntax = languageExtension(language);
-    const diagnosticCompartment = new Compartment();
-    diagnosticCompartmentRef.current = diagnosticCompartment;
-    const extensions = [
-      highlightSpecialChars(),
-      history(),
-      drawSelection(),
-      dropCursor(),
-      keymap.of([...defaultKeymap, ...historyKeymap, indentWithTab]),
-      lineNumbers(),
-      highlightActiveLine(),
-      highlightActiveLineGutter(),
-      bracketMatching(),
-      syntaxHighlighting(defaultHighlightStyle),
-      diagnosticCompartment.of([]),
-      editorTheme,
-      EditorView.lineWrapping,
-      EditorView.editable.of(!readOnly),
-      EditorView.contentAttributes.of({
-        "aria-label": ariaLabel,
-        "aria-readonly": readOnly ? "true" : "false",
-        autocapitalize: "off",
-        autocomplete: "off",
-        spellcheck: "false",
-      }),
-      EditorView.updateListener.of((update) => {
-        if (update.docChanged && !synchronizing.current) {
-          onChangeRef.current(update.state.doc.toString());
+    let disposed = false;
+    let editor: Monaco.editor.IStandaloneCodeEditor | null = null;
+    let model: Monaco.editor.ITextModel | null = null;
+    let subscription: Monaco.IDisposable | null = null;
+
+    void loadRuntime().then(({ monaco }) => {
+      if (disposed) return;
+      monacoRef.current = monaco;
+      model = monaco.editor.createModel(valueRef.current, languageId(language));
+      editor = monaco.editor.create(parent, {
+        model,
+        ariaLabel,
+        automaticLayout: true,
+        bracketPairColorization: { enabled: true },
+        cursorBlinking: "smooth",
+        cursorSmoothCaretAnimation: "on",
+        fixedOverflowWidgets: true,
+        fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
+        fontLigatures: false,
+        fontSize: 13,
+        glyphMargin: true,
+        lineHeight: 21,
+        minimap: { enabled: true, maxColumn: 80, renderCharacters: false },
+        padding: { top: 12, bottom: 16 },
+        readOnly: effectiveReadOnlyRef.current,
+        renderValidationDecorations: "on",
+        roundedSelection: false,
+        scrollBeyondLastLine: false,
+        smoothScrolling: true,
+        stickyScroll: { enabled: true, maxLineCount: 4 },
+        tabSize: 2,
+        theme: "jw-agent-light",
+        wordWrap: "off",
+      });
+      editorRef.current = editor;
+      subscription = editor.onDidChangeModelContent(() => {
+        if (!synchronizing.current && model !== null) {
+          onChangeRef.current(model.getValue());
         }
-      }),
-    ];
-    if (syntax !== null) extensions.push(syntax);
-    const view = new EditorView({ doc: initialValueRef.current, extensions, parent });
-    viewRef.current = view;
+      });
+      applyDiagnostics(
+        monaco,
+        editor,
+        diagnosticsRef.current,
+        diagnosticLineRef.current,
+        diagnosticMessageRef.current,
+      );
+    });
+
     return () => {
-      viewRef.current = null;
-      diagnosticCompartmentRef.current = null;
-      view.destroy();
+      disposed = true;
+      subscription?.dispose();
+      editor?.dispose();
+      model?.dispose();
+      if (editorRef.current === editor) editorRef.current = null;
+      monacoRef.current = null;
     };
-  }, [ariaLabel, language, readOnly]);
+  }, [ariaLabel, language]);
 
   useEffect(() => {
-    const view = viewRef.current;
-    if (view === null || view.state.doc.toString() === value) return;
+    const editor = editorRef.current;
+    if (editor === null) return;
+    const model = editor.getModel();
+    if (model === null || model.getValue() === value) return;
     synchronizing.current = true;
-    view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: value } });
+    editor.executeEdits("jw-agent-state", [{
+      range: model.getFullModelRange(),
+      text: value,
+      forceMoveMarkers: true,
+    }]);
     synchronizing.current = false;
   }, [value]);
 
   useEffect(() => {
-    const view = viewRef.current;
-    const compartment = diagnosticCompartmentRef.current;
-    if (view === null || compartment === null) return;
-    view.dispatch({
-      effects: compartment.reconfigure(
-        diagnosticExtension(view, diagnosticLine, diagnosticMessage),
-      ),
-    });
-    if (diagnosticLine !== null && diagnosticLine > 0 && diagnosticLine <= view.state.doc.lines) {
-      const line = view.state.doc.line(diagnosticLine);
-      view.dispatch({
-        selection: { anchor: line.from },
-        effects: EditorView.scrollIntoView(line.from, { y: "center" }),
-      });
-    }
-  }, [diagnosticLine, diagnosticMessage, value]);
+    const editor = editorRef.current;
+    const monaco = monacoRef.current;
+    if (editor === null || monaco === null) return;
+    editor.updateOptions({ readOnly: effectiveReadOnly });
+  }, [effectiveReadOnly]);
+
+  useEffect(() => {
+    const editor = editorRef.current;
+    const monaco = monacoRef.current;
+    if (editor === null || monaco === null) return;
+    applyDiagnostics(monaco, editor, diagnostics, diagnosticLine, diagnosticMessage);
+  }, [diagnosticLine, diagnosticMessage, diagnostics]);
 
   return (
     <div
-      className={cn("overflow-hidden rounded-control border border-border bg-surface", className)}
+      aria-label={ariaLabel}
+      data-code-editor
+      data-readonly={String(effectiveReadOnly)}
+      className={cn(
+        "h-[32rem] overflow-hidden rounded-control border border-border bg-surface focus-within:ring-2 focus-within:ring-focus/30",
+        className,
+      )}
       ref={hostRef}
     />
   );
+}
+
+function applyDiagnostics(
+  monaco: typeof Monaco,
+  editor: Monaco.editor.IStandaloneCodeEditor,
+  diagnostics: readonly EditorDiagnostic[],
+  fallbackLine: number | null,
+  fallbackMessage: string,
+): void {
+  const model = editor.getModel();
+  if (model === null) return;
+  const validDiagnostics = diagnostics.filter(
+    ({ line }) => line > 0 && line <= model.getLineCount(),
+  );
+  const markers = validDiagnostics.map(({ line, column, message, severity }) => ({
+    severity:
+      severity === "warning" ? monaco.MarkerSeverity.Warning : monaco.MarkerSeverity.Error,
+    message,
+    startLineNumber: line,
+    startColumn: Math.min(column ?? 1, model.getLineMaxColumn(line)),
+    endLineNumber: line,
+    endColumn: model.getLineMaxColumn(line),
+    source: "server-validator",
+  }));
+  if (
+    markers.length === 0
+    && fallbackLine !== null
+    && fallbackLine > 0
+    && fallbackLine <= model.getLineCount()
+  ) {
+    markers.push({
+      severity: monaco.MarkerSeverity.Error,
+      message: fallbackMessage,
+      startLineNumber: fallbackLine,
+      startColumn: 1,
+      endLineNumber: fallbackLine,
+      endColumn: model.getLineMaxColumn(fallbackLine),
+      source: "server-validator",
+    });
+  }
+  monaco.editor.setModelMarkers(model, "jw-agent", markers);
+  const firstLine = validDiagnostics[0]?.line ?? fallbackLine;
+  if (firstLine === null || firstLine <= 0 || firstLine > model.getLineCount()) return;
+  editor.setPosition({ lineNumber: firstLine, column: 1 });
+  editor.revealLineInCenter(firstLine, monaco.editor.ScrollType.Smooth);
+  editor.focus();
+}
+
+function useDesktopEditorInput(): boolean {
+  const [enabled, setEnabled] = useState(false);
+
+  useEffect(() => {
+    if (typeof window.matchMedia !== "function") return;
+    const query = window.matchMedia("(min-width: 1024px) and (pointer: fine)");
+    const update = (): void => setEnabled(query.matches);
+    update();
+    query.addEventListener("change", update);
+    return () => query.removeEventListener("change", update);
+  }, []);
+
+  return enabled;
+}
+
+function loadMonacoStyle(): void {
+  const href = "/vendor/monaco/monaco-runtime.css";
+  if (document.head.querySelector(`link[href="${href}"]`) !== null) return;
+  const link = document.createElement("link");
+  link.rel = "stylesheet";
+  link.href = href;
+  document.head.append(link);
 }

@@ -1,5 +1,8 @@
 use std::collections::BTreeSet;
 
+use crate::config_diagnostic::{
+    ParsedConfigDiagnostic, ParsedSeverity, generic_validator_diagnostic, validator_output,
+};
 use crate::runner::CommandEvidence;
 
 pub fn validate_php_ini_candidate(current: &str, proposed: &str) -> Result<(), String> {
@@ -97,6 +100,104 @@ pub fn php_fpm_config_failure_code(evidence: &CommandEvidence) -> String {
     )
 }
 
+pub(crate) fn parse_php_fpm_config_diagnostics(
+    evidence: &CommandEvidence,
+) -> Vec<ParsedConfigDiagnostic> {
+    let output = validator_output(evidence);
+    let mut diagnostics = Vec::new();
+    for line in output.lines() {
+        let Some((path, line_number)) = php_location(line) else {
+            continue;
+        };
+        diagnostics.push(ParsedConfigDiagnostic {
+            path: Some(path),
+            line: Some(line_number),
+            column: None,
+            severity: if line.to_ascii_lowercase().contains("warning") {
+                ParsedSeverity::Warning
+            } else {
+                ParsedSeverity::Error
+            },
+            code: php_code(line),
+            message: php_message(line),
+        });
+    }
+    if diagnostics.is_empty() && (!evidence.success || contains_syntax_error(evidence)) {
+        diagnostics.push(generic_validator_diagnostic(
+            if evidence.timed_out {
+                "validator_timeout"
+            } else if contains_syntax_error(evidence) {
+                "syntax_error"
+            } else {
+                "validator_rejected"
+            },
+            if evidence.timed_out {
+                "PHP-FPM 문법 검사가 제한 시간을 초과했습니다."
+            } else if contains_syntax_error(evidence) {
+                "PHP-FPM 설정에 문법 오류가 있습니다."
+            } else {
+                "PHP-FPM이 현재 설정을 거부했습니다."
+            },
+        ));
+    }
+    diagnostics
+}
+
+fn php_location(line: &str) -> Option<(String, u32)> {
+    php_ini_location(line).or_else(|| php_fpm_bracket_location(line))
+}
+
+fn php_ini_location(line: &str) -> Option<(String, u32)> {
+    let (prefix, line_number) = line.rsplit_once(" on line ")?;
+    let line_number = line_number
+        .trim()
+        .parse::<u32>()
+        .ok()
+        .filter(|value| *value > 0)?;
+    let (_, path) = prefix.rsplit_once(" in ")?;
+    let path = path.trim();
+    (!path.is_empty()).then(|| (String::from(path), line_number))
+}
+
+fn php_fpm_bracket_location(line: &str) -> Option<(String, u32)> {
+    let start = line.rfind('[')?.saturating_add(1);
+    let end = line.get(start..)?.find(']')?.saturating_add(start);
+    let location = line.get(start..end)?;
+    let (path, line_number) = location.rsplit_once(':')?;
+    let line_number = line_number
+        .trim()
+        .parse::<u32>()
+        .ok()
+        .filter(|value| *value > 0)?;
+    let path = path.trim();
+    (!path.is_empty()).then(|| (String::from(path), line_number))
+}
+
+fn php_code(line: &str) -> &'static str {
+    let lowered = line.to_ascii_lowercase();
+    if lowered.contains("syntax error") {
+        "syntax_error"
+    } else if lowered.contains("unknown entry") || lowered.contains("unknown directive") {
+        "unknown_directive"
+    } else if lowered.contains("unable to include") || lowered.contains("failed to open") {
+        "include_error"
+    } else if lowered.contains("must be") || lowered.contains("invalid value") {
+        "invalid_value"
+    } else {
+        "validator_rejected"
+    }
+}
+
+fn php_message(line: &str) -> &'static str {
+    match php_code(line) {
+        "syntax_error" => "PHP-FPM 설정에 문법 오류가 있습니다.",
+        "unknown_directive" => "PHP-FPM이 알 수 없는 설정 항목을 발견했습니다.",
+        "include_error" => "PHP-FPM이 포함된 설정 파일을 읽지 못했습니다.",
+        "invalid_value" => "PHP-FPM 설정 값이 올바르지 않습니다.",
+        _ => "PHP-FPM이 현재 설정을 거부했습니다.",
+    }
+}
+
 fn syntax_line(evidence: &CommandEvidence) -> Option<u32> {
     let text = diagnostic_text(evidence);
     let marker = " on line ";
@@ -129,8 +230,8 @@ mod tests {
     use crate::runner::{CommandClass, CommandEvidence, StreamEvidence};
 
     use super::{
-        php_fpm_config_failure_code, php_fpm_config_test_succeeded, validate_php_fpm_candidate,
-        validate_php_ini_candidate,
+        parse_php_fpm_config_diagnostics, php_fpm_config_failure_code,
+        php_fpm_config_test_succeeded, validate_php_fpm_candidate, validate_php_ini_candidate,
     };
 
     const BASELINE: &str = "[PHP]\n; memory_limit = 128M\npost_max_size = 8M\n";
@@ -197,6 +298,31 @@ mod tests {
             true,
             b"NOTICE: configuration file test is successful\n",
         )));
+    }
+
+    #[test]
+    fn parses_php_ini_and_pool_native_locations() {
+        let ini = evidence(
+            true,
+            b"PHP: syntax error, unexpected '=' in /etc/php/8.3/fpm/php.ini on line 42\n",
+        );
+        let ini_diagnostics = parse_php_fpm_config_diagnostics(&ini);
+        assert_eq!(ini_diagnostics[0].line, Some(42));
+        assert_eq!(
+            ini_diagnostics[0].path.as_deref(),
+            Some("/etc/php/8.3/fpm/php.ini")
+        );
+
+        let pool = evidence(
+            false,
+            b"[24-Jul-2026] ERROR: [/etc/php/8.3/fpm/pool.d/www.conf:17] invalid value\n",
+        );
+        let pool_diagnostics = parse_php_fpm_config_diagnostics(&pool);
+        assert_eq!(pool_diagnostics[0].line, Some(17));
+        assert_eq!(
+            pool_diagnostics[0].path.as_deref(),
+            Some("/etc/php/8.3/fpm/pool.d/www.conf")
+        );
     }
 
     fn evidence(success: bool, stderr: &[u8]) -> CommandEvidence {

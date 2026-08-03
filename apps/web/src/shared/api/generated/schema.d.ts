@@ -1267,6 +1267,23 @@ export interface components {
             /** Format: int32 */
             schemaVersion: number;
         };
+        /** @enum {string} */
+        ManagedConfigDiagnosticSeverity: "error" | "warning";
+        ManagedConfigDiagnosticView: {
+            causeCandidateLines?: number[];
+            code: string;
+            /** Format: int32 */
+            column?: number | null;
+            /** Format: int32 */
+            line?: number | null;
+            maskedPath?: string | null;
+            message: string;
+            relatedChangedLines: number[];
+            resourceId?: string | null;
+            service: string;
+            severity: components["schemas"]["ManagedConfigDiagnosticSeverity"];
+            validator: string;
+        };
         ManagedConfigPlanRequest: {
             expectedContentDigest: string;
             expectedMetadataDigest: string;
@@ -1466,6 +1483,7 @@ export interface components {
         /** @enum {string} */
         OperationStage: "PLANNED" | "APPROVED" | "SNAPSHOTTED" | "APPLYING" | "VALIDATING" | "RELOADING" | "VERIFYING" | "ROLLING_BACK" | "SUCCEEDED" | "ROLLED_BACK" | "RECOVERY_REQUIRED" | "REJECTED" | "EXPIRED" | "CANCELLED_BEFORE_APPLY";
         OperationStageEvidenceView: {
+            diagnostics: components["schemas"]["ManagedConfigDiagnosticView"][];
             evidenceDigest: string;
             recordedAt: string;
             resultCode: string;

@@ -1,9 +1,13 @@
 # ADR-0014 — CodeMirror 6 for Managed Text Configuration
 
-Status: Accepted  
+Status: Superseded by [ADR-0020](0020-monaco-desktop-config-workspace.md)  
 Authority: Architecture Decision  
 Owner: Web Maintainer  
 Last reviewed: 2026-07-22
+
+2026-07-24 제품 결정으로 설정·SFTP 텍스트 편집은 desktop-only Monaco
+workspace로 이동합니다. 이 문서는 이전 CodeMirror 기준선과 migration 근거를 보존하기
+위해서만 남기며 신규 구현 권위가 아닙니다.
 
 ## Context
 

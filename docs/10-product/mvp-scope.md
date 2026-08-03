@@ -51,7 +51,7 @@ P1 package는 existing valid certificate와 opt-in Nginx template까지만 제�
 ### 안전 설정 편집
 
 - adapter allowlist에 등록된 서비스·논리 resource ID만 편집
-- CodeMirror 6 기반 syntax highlighting·unified diff·도움말·주의사항·validation 진단 UI
+- desktop Monaco 기반 syntax highlighting·도움말·주의사항·공식 validator 진단 이동 UI
 - `save plan → snapshot → atomic replace → syntax test → reload/restart 승인 → health read-back`
 - syntax failure면 service action 없이 종료; reload·health failure면 이전 설정 자동 원복·재검증
 - Nginx active profile과 PHP 8.3 FPM 표준 `php.ini` profile만 VM gate 뒤 승격했으며 Redis와 다른 layout은 별도 fixture 전까지 제외
@@ -66,7 +66,7 @@ P1 package는 existing valid certificate와 opt-in Nginx template까지만 제�
 ### 수동 OpenSSH 접근
 
 - same-origin WSS 비-root terminal, xterm 기반 resize·UTF-8·bounded session
-- 기존 OpenSSH 기반 SFTP list/read/download/upload와 공유 CodeMirror text editor
+- 기존 OpenSSH 기반 SFTP list/read/download/upload와 desktop-only 공유 Monaco text editor
 - Linux 사용자 권한, sshd policy, 짧은 single-use ticket, PAM 재인증 적용
 - terminal과 일반 SFTP 쓰기는 G1이며 자동 원복을 약속하지 않음
 - root login, root credential, browser key 저장, system-owned 설정의 SFTP write 금지

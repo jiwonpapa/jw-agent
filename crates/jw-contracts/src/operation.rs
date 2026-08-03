@@ -7,6 +7,14 @@ use utoipa::ToSchema;
 
 use crate::{AssuranceView, Subject, UfwRulePlanRequest, UfwRulePlanView, UfwView};
 
+mod diagnostic;
+
+pub use diagnostic::{
+    MANAGED_CONFIG_DIAGNOSTIC_MAX_ENTRIES, MANAGED_CONFIG_DIAGNOSTIC_MAX_MESSAGE_BYTES,
+    MANAGED_CONFIG_DIAGNOSTIC_MAX_RELATED_LINES, ManagedConfigDiagnosticSeverity,
+    ManagedConfigDiagnosticView,
+};
+
 pub const NGINX_SITE_STATE_OPERATION: &str = "nginx.site_state.set/v1";
 pub const NGINX_LAYOUT_ID: &str = "ubuntu-nginx-sites-v1";
 pub const MANAGED_CONFIG_OPERATION: &str = "service.config_file.set/v1";
@@ -636,6 +644,7 @@ pub struct OperationStageEvidenceView {
     pub recorded_at: String,
     pub result_code: String,
     pub evidence_digest: String,
+    pub diagnostics: Vec<ManagedConfigDiagnosticView>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, ToSchema)]

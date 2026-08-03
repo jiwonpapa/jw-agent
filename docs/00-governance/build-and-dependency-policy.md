@@ -43,6 +43,15 @@ Rust 2024 virtual workspace는 resolver를 자동 추론할 루트 package가 �
 - Storybook·monorepo orchestrator를 MVP 필수 도구로 추가
 - `latest` 범위를 manifest나 release 명령에 남김
 
+## 로컬 산출물 예산과 백업 경계
+
+- root Cargo profile은 dev·test debug symbol을 생성하지 않습니다. 실제 debugger 작업만 명시적으로 debug level을 다시 켭니다.
+- 반복 빌드 속도를 위해 incremental·dependency cache, `node_modules`, release와 cross-target artifact는 유지합니다.
+- 작업 종료 시 `.playwright-mcp`, `apps/web/dist`, Playwright report와 test result 같은 재생성 가능 임시 산출물을 정리합니다.
+- `cargo clean`, 전체 `target`, incremental·dependency cache 자동 삭제는 금지합니다. `target/release`, cross-target release, `output/`, VM·release evidence도 자동 정리 대상이 아닙니다.
+- 내부 디스크 여유가 100 GiB 미만이거나 한 프로젝트의 `target`이 20 GiB를 넘으면 먼저 용량과 재생성 비용을 보고하고, 사용자 승인 후 가장 오래된 프로젝트 소유 cache만 정리합니다.
+- 프로젝트 백업은 `target`, `target-*`, `node_modules`, `build`, `dist`, coverage와 test report를 제외해야 합니다. 소스·lockfile·명세·migration·서명 release evidence는 보존합니다.
+
 ## 의존성 승인 질문
 
 1. 표준 라이브러리나 기존 의존성으로 해결할 수 없는가?

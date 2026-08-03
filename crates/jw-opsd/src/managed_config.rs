@@ -42,8 +42,9 @@ mod text;
 mod tree;
 pub use cleanup::cleanup_internal_temporaries;
 pub use proposal::{read_proposal, remove_proposal, write_proposal};
-pub use text::diff_stats;
+pub use text::{changed_candidate_lines, diff_stats};
 use tree::discover_tree_managed_config;
+pub(crate) use tree::{safe_tree_relative_path, secret_tree_resource};
 use {
     metadata::digest as managed_metadata_digest, metadata::validate as validate_managed_metadata,
 };

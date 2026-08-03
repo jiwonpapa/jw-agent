@@ -84,7 +84,7 @@ pub(super) fn discover_tree_managed_config(
     Err(OpsError::Rejected("resource_missing"))
 }
 
-fn safe_tree_relative_path(path: &Path) -> Result<String, OpsError> {
+pub(crate) fn safe_tree_relative_path(path: &Path) -> Result<String, OpsError> {
     if path.components().count() > MANAGED_SERVICE_CONFIG_MAX_DEPTH.saturating_add(1)
         || path
             .components()
@@ -108,7 +108,7 @@ fn safe_tree_relative_path(path: &Path) -> Result<String, OpsError> {
     Ok(String::from(value))
 }
 
-fn secret_tree_resource(relative_path: &str) -> bool {
+pub(crate) fn secret_tree_resource(relative_path: &str) -> bool {
     let lowered = relative_path.to_ascii_lowercase();
     [
         "private",

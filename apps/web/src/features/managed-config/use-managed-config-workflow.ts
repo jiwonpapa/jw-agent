@@ -7,6 +7,7 @@ import {
   getManagedConfigResource,
   getOperationReceipt,
   planManagedConfig,
+  planManagedConfigRestore,
   watchOperationEvents,
 } from "../../shared/api/client";
 import type {
@@ -17,7 +18,7 @@ import type {
   OperationStage,
 } from "../../shared/api/types";
 import { managedConfigSyntaxDiagnosticLine } from "../../shared/domain/managed-config-diagnostic";
-import { sessionQueryOptions } from "../../shared/api/queries";
+import { activityQueryOptions, sessionQueryOptions } from "../../shared/api/queries";
 import { useAdministrativeAccess } from "../auth/administrative-access";
 
 export interface ManagedConfigCapability {
@@ -32,6 +33,10 @@ export function useManagedConfigWorkflow(refreshQueryKey: readonly unknown[]) {
   const session = useQuery(sessionQueryOptions).data;
   const { requestAccess } = useAdministrativeAccess();
   const [resource, setResource] = useState<ManagedConfigResourceView | null>(null);
+  const activity = useQuery({
+    ...activityQueryOptions,
+    enabled: resource !== null,
+  });
   const [draft, setDraft] = useState("");
   const [plan, setPlan] = useState<ManagedConfigPlanView | null>(null);
   const [accepted, setAccepted] = useState<OperationAcceptedView | null>(null);
@@ -41,7 +46,15 @@ export function useManagedConfigWorkflow(refreshQueryKey: readonly unknown[]) {
   const [planning, setPlanning] = useState(false);
   const [executing, setExecuting] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [restoreSource, setRestoreSource] = useState<OperationReceiptView | null>(null);
+  const [restorePlan, setRestorePlan] = useState<ManagedConfigPlanView | null>(null);
+  const [restoreAccepted, setRestoreAccepted] = useState<OperationAcceptedView | null>(null);
+  const [restoreReceipt, setRestoreReceipt] = useState<OperationReceiptView | null>(null);
+  const [restoreBusy, setRestoreBusy] = useState(false);
+  const [restoreError, setRestoreError] = useState<string | null>(null);
   const requestInFlight = useRef(false);
+  const restoreKey = useRef<string | null>(null);
+  const activeResourceId = resource?.resourceId ?? null;
 
   useEffect(() => {
     if (accepted === null) return;
@@ -55,10 +68,15 @@ export function useManagedConfigWorkflow(refreshQueryKey: readonly unknown[]) {
           const current = await getOperationReceipt(operation.operationId, controller.signal);
           setReceipt(current);
           if (isTerminalStage(current.terminalState)) {
-            setDiagnosticLine(managedConfigSyntaxDiagnosticLine(current.stages));
+            setDiagnosticLine(
+              managedConfigSyntaxDiagnosticLine(current.stages, resource?.resourceId),
+            );
             closeStream();
             setAccepted(null);
-            await queryClient.invalidateQueries({ queryKey: refreshQueryKey });
+            await Promise.all([
+              queryClient.invalidateQueries({ queryKey: refreshQueryKey }),
+              queryClient.invalidateQueries({ queryKey: activityQueryOptions.queryKey }),
+            ]);
           }
         } catch (error) {
           if (!(error instanceof DOMException && error.name === "AbortError")) {
@@ -73,7 +91,53 @@ export function useManagedConfigWorkflow(refreshQueryKey: readonly unknown[]) {
       controller.abort();
       closeStream();
     };
-  }, [accepted, queryClient, refreshQueryKey]);
+  }, [accepted, queryClient, refreshQueryKey, resource?.resourceId]);
+
+  useEffect(() => {
+    if (restoreAccepted === null) return;
+    const operation = restoreAccepted;
+    const controller = new AbortController();
+    let closeStream: () => void = () => undefined;
+    let refreshQueue = Promise.resolve();
+    function refreshRestoreReceipt(): void {
+      refreshQueue = refreshQueue.then(async () => {
+        try {
+          const current = await getOperationReceipt(operation.operationId, controller.signal);
+          setRestoreReceipt(current);
+          if (isTerminalStage(current.terminalState)) {
+            closeStream();
+            setRestoreAccepted(null);
+            await Promise.all([
+              queryClient.invalidateQueries({ queryKey: refreshQueryKey }),
+              queryClient.invalidateQueries({ queryKey: activityQueryOptions.queryKey }),
+            ]);
+            if (current.terminalState === "SUCCEEDED" && activeResourceId !== null) {
+              const refreshed = await getManagedConfigResource(
+                activeResourceId,
+                controller.signal,
+              );
+              setResource(refreshed);
+              setDraft(refreshed.content);
+            }
+          }
+        } catch (error) {
+          if (!(error instanceof DOMException && error.name === "AbortError")) {
+            setRestoreError(operationErrorCopy(error, "복원 작업 영수증을 불러오지 못했습니다."));
+          }
+        }
+      });
+    }
+    closeStream = watchOperationEvents(
+      operation.eventStream,
+      refreshRestoreReceipt,
+      refreshRestoreReceipt,
+    );
+    refreshRestoreReceipt();
+    return () => {
+      controller.abort();
+      closeStream();
+    };
+  }, [activeResourceId, queryClient, refreshQueryKey, restoreAccepted]);
 
   async function open(
     capability: ManagedConfigCapability,
@@ -83,10 +147,11 @@ export function useManagedConfigWorkflow(refreshQueryKey: readonly unknown[]) {
       requestAccess(() => void open(capability, true));
       return;
     }
-    if (requestInFlight.current) return;
+    if (requestInFlight.current || accepted !== null || restoreAccepted !== null) return;
     requestInFlight.current = true;
     setLoading(true);
     resetResult();
+    resetRestore();
     try {
       const current = await getManagedConfigResource(capability.resourceId);
       setResource(current);
@@ -159,6 +224,7 @@ export function useManagedConfigWorkflow(refreshQueryKey: readonly unknown[]) {
     setAccepted(null);
     setReceipt(null);
     setErrorMessage(null);
+    resetRestore();
     setDraft(value);
   }
 
@@ -170,10 +236,101 @@ export function useManagedConfigWorkflow(refreshQueryKey: readonly unknown[]) {
     setErrorMessage(null);
   }
 
+  async function selectRestore(
+    source: OperationReceiptView,
+    administrativeConfirmed = false,
+  ): Promise<void> {
+    if (!administrativeConfirmed && session?.administrativeAccess !== "administrative") {
+      requestAccess(() => void selectRestore(source, true));
+      return;
+    }
+    if (
+      restoreBusy ||
+      restoreAccepted !== null ||
+      resource === null ||
+      draft !== resource.content ||
+      !source.restoreAvailable ||
+      source.resourceId !== resource.resourceId
+    ) {
+      return;
+    }
+    setRestoreSource(source);
+    setRestorePlan(null);
+    setRestoreReceipt(null);
+    setRestoreError(null);
+    setRestoreBusy(true);
+    const idempotencyKey = `web_${crypto.randomUUID()}`;
+    restoreKey.current = idempotencyKey;
+    try {
+      const current = await getManagedConfigResource(resource.resourceId);
+      setResource(current);
+      setDraft(current.content);
+      setRestorePlan(await planManagedConfigRestore({
+        schemaVersion: current.schemaVersion,
+        operationType: "service.config_file.restore/v1",
+        sourceOperationId: source.operationId,
+        expectedContentDigest: current.contentDigest,
+        expectedMetadataDigest: current.metadataDigest,
+        idempotencyKey,
+      }));
+    } catch (error) {
+      setRestoreError(operationErrorCopy(error, "변경 전 상태를 확인하지 못했습니다."));
+    } finally {
+      setRestoreBusy(false);
+    }
+  }
+
+  async function applyRestore(): Promise<void> {
+    if (
+      restoreBusy ||
+      restoreAccepted !== null ||
+      restorePlan === null ||
+      restoreKey.current === null ||
+      resource === null ||
+      draft !== resource.content
+    ) {
+      return;
+    }
+    setRestoreBusy(true);
+    setRestoreError(null);
+    try {
+      setRestoreAccepted(await approveManagedConfig({
+        schemaVersion: restorePlan.schemaVersion,
+        planId: restorePlan.planId,
+        planHash: restorePlan.planHash,
+        idempotencyKey: restoreKey.current,
+        reauthToken: null,
+        additionalAuthClaim: null,
+        approvalIntent: {
+          validationConfirmed: true,
+          serviceActionConfirmed: true,
+        },
+      }));
+    } catch (error) {
+      setRestoreError(operationErrorCopy(error, "설정을 복원하지 못했습니다."));
+    } finally {
+      setRestoreBusy(false);
+    }
+  }
+
+  function cancelRestore(): void {
+    if (restoreAccepted !== null) return;
+    resetRestore();
+  }
+
+  function resetRestore(): void {
+    setRestoreSource(null);
+    setRestorePlan(null);
+    setRestoreReceipt(null);
+    setRestoreError(null);
+    restoreKey.current = null;
+  }
+
   function close(): void {
     setResource(null);
     setDraft("");
     resetResult();
+    cancelRestore();
   }
 
   function resetResult(): void {
@@ -195,10 +352,27 @@ export function useManagedConfigWorkflow(refreshQueryKey: readonly unknown[]) {
     planning,
     executing,
     errorMessage,
+    history: (activity.data?.operations ?? []).filter(
+      (operation) =>
+        operation.resourceId === resource?.resourceId &&
+        operation.restoreAvailable &&
+        operation.terminalState === "SUCCEEDED",
+    ),
+    historyLoading: activity.isPending && resource !== null,
+    historyError: activity.isError,
+    restoreSource,
+    restorePlan,
+    restoreAccepted,
+    restoreReceipt,
+    restoreBusy,
+    restoreError,
     open,
     save,
     changeDraft,
     revise,
+    selectRestore,
+    applyRestore,
+    cancelRestore,
     close,
   };
 }

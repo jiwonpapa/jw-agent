@@ -181,11 +181,23 @@ export function ServiceConfigScreen({
                 executing={workflow.executing}
                 errorMessage={workflow.errorMessage}
                 diagnosticLine={workflow.diagnosticLine}
+                history={workflow.history}
+                historyLoading={workflow.historyLoading}
+                historyError={workflow.historyError}
+                restoreSource={workflow.restoreSource}
+                restorePlan={workflow.restorePlan}
+                restoreAccepted={workflow.restoreAccepted}
+                restoreReceipt={workflow.restoreReceipt}
+                restoreBusy={workflow.restoreBusy}
+                restoreError={workflow.restoreError}
                 serviceAction={selected.serviceActive ? "reload" : "validate_only"}
                 onDraftChange={workflow.changeDraft}
                 onBack={closeEditor}
                 onSave={() => void workflow.save(toCapability(selected))}
                 onRevise={workflow.revise}
+                onSelectRestore={(source) => void workflow.selectRestore(source)}
+                onApplyRestore={() => void workflow.applyRestore()}
+                onCancelRestore={workflow.cancelRestore}
               />
             ) : (
               <div className="grid min-h-[60vh] place-items-center">
