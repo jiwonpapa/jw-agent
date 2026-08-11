@@ -3,7 +3,7 @@
 Status: Accepted  
 Authority: Index  
 Owner: Maintainers  
-Last reviewed: 2026-07-21
+Last reviewed: 2026-08-11
 
 문서는 책임별로 나눕니다. 같은 규칙을 여러 문서에 복사하지 않고 링크합니다.
 
@@ -76,5 +76,6 @@ Last reviewed: 2026-07-21
 - [Definition of Done](80-delivery/definition-of-done.md)
 - [시험 전략](80-delivery/test-strategy.md)
 - [패키징과 릴리스](80-delivery/packaging-release.md)
+- [버전과 변경 기록 정책](80-delivery/versioning-and-changelog.md)
 - [고정·미결정 항목](80-delivery/decision-register.md)
 - [Spec index](90-specs/README.md)

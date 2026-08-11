@@ -2,9 +2,11 @@
 
 mod edge_boundary;
 mod process;
+mod release_policy;
 mod sftp_boundary;
 mod source_policy;
 use edge_boundary::gate_p2_independent_edge_boundary;
+use release_policy::gate_release_policy;
 use sftp_boundary::gate_p2_sftp_boundary;
 mod vm;
 mod web;
@@ -88,6 +90,7 @@ const VM_LANES: &[Lane] = &[Lane::P1Vm, Lane::P2Vm];
 const P2_VM_LANES: &[Lane] = &[Lane::P2Vm];
 
 const REQUIRED_FOUNDATION_PATHS: &[&str] = &[
+    "CHANGELOG.md",
     "README.md",
     "AGENTS.md",
     "CONSTITUTION.md",
@@ -120,6 +123,7 @@ const REQUIRED_FOUNDATION_PATHS: &[&str] = &[
     "docs/70-security/logging-and-forensics.md",
     "docs/70-security/JW-agent-threat-model.md",
     "docs/80-delivery/roadmap.md",
+    "docs/80-delivery/versioning-and-changelog.md",
     "docs/80-delivery/definition-of-done.md",
     "docs/80-delivery/test-strategy.md",
     "docs/80-delivery/decision-register.md",
@@ -149,6 +153,7 @@ const REQUIRED_FOUNDATION_PATHS: &[&str] = &[
     "docs/90-specs/adr/0013-system-openssh-client.md",
     "docs/90-specs/adr/0016-totp-crypto-and-enrollment-boundary.md",
     "docs/90-specs/adr/0018-independent-rust-management-edge.md",
+    "docs/90-specs/adr/0021-semver-and-keep-a-changelog.md",
     "tests/spec-fixtures/nginx-site-state-set-v1.json",
 ];
 
@@ -347,6 +352,17 @@ const GATES: &[Gate] = &[
         evidence: "GateId and metadata are unique and complete",
         failure_policy: "fail lane on duplicate or incomplete metadata",
         run: gate_registry_integrity,
+    },
+    Gate {
+        id: "GOV-008",
+        owner: "Release Maintainer",
+        scope: "product SemVer and Keep a Changelog policy",
+        inputs: "workspace manifests, Cargo.lock, web package, Debian changelog, and root changelog",
+        lanes: GOVERNANCE_LANES,
+        timeout_seconds: 2,
+        evidence: "product versions agree and changelog structure is valid",
+        failure_policy: "fail lane on version drift, invalid SemVer or changelog contract",
+        run: gate_release_policy,
     },
     Gate {
         id: "P1-STRUCTURE",

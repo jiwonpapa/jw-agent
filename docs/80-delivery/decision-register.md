@@ -3,7 +3,7 @@
 Status: Accepted  
 Authority: Delivery  
 Owner: Maintainers  
-Last reviewed: 2026-07-24
+Last reviewed: 2026-08-11
 
 ## 고정
 
@@ -27,6 +27,7 @@ Last reviewed: 2026-07-24
 - additional auth policy values `disabled | risky_operations | all_mutations`
 - P1 default `disabled`, UI recommendation `risky_operations`; provider status is explicit
 - local-only verification, no GitHub Actions
+- Semantic Versioning 2.0.0 제품 version과 Keep a Changelog 1.1.0 root changelog
 - desktop managed config와 SFTP text mutation은 lazy-loaded Monaco 하나를 사용하고
   mobile·tablet은 read-only 상태만 제공
 - first write operation Nginx site enable/disable

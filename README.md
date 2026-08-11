@@ -31,11 +31,12 @@ Ubuntu 24.04 LTS 서버의 **범용 서비스 설정·유지보수 작업을 안
 ## 읽는 순서
 
 1. [헌법](CONSTITUTION.md)
-2. [문서 지도](docs/README.md)
-3. [제품 경계](docs/10-product/product-boundary.md)
-4. [MVP 범위](docs/10-product/mvp-scope.md)
-5. [시스템 구조](docs/20-architecture/system-context.md)
-6. [개발 단계](docs/80-delivery/roadmap.md)
+2. [변경 기록](CHANGELOG.md)
+3. [문서 지도](docs/README.md)
+4. [제품 경계](docs/10-product/product-boundary.md)
+5. [MVP 범위](docs/10-product/mvp-scope.md)
+6. [시스템 구조](docs/20-architecture/system-context.md)
+7. [개발 단계](docs/80-delivery/roadmap.md)
 
 ## P2 검증
 

@@ -3,7 +3,7 @@
 Status: Accepted  
 Authority: Delivery  
 Owner: Delivery Maintainer  
-Last reviewed: 2026-07-21
+Last reviewed: 2026-08-11
 
 ## 모든 작업
 
@@ -71,8 +71,11 @@ Last reviewed: 2026-07-21
 
 ## Release
 
+- 공개 API 변화에 맞는 SemVer와 workspace·web·lockfile·Debian version 일치
+- Keep a Changelog 형식의 `Unreleased` 완료, ISO date, comparison link
 - clean checkout, pinned toolchain/lockfile
 - full + VM + release required gates PASS
 - signed package/checksum/SBOM/evidence
 - install/upgrade/recovery proof
 - known limitations and rollback guarantee published
+- 이미 공개한 tag·artifact를 덮어쓰지 않음

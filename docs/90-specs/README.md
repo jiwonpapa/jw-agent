@@ -3,7 +3,7 @@
 Status: Accepted  
 Authority: Specification Index  
 Owner: Maintainers  
-Last reviewed: 2026-07-22
+Last reviewed: 2026-08-11
 
 ## Operation specs
 
@@ -64,6 +64,7 @@ Last reviewed: 2026-07-22
 - [ADR-0018 Independent Rust management edge](adr/0018-independent-rust-management-edge.md) — Accepted
 - [ADR-0019 Managed service config and firewall boundary](adr/0019-managed-service-config-and-firewall-boundary.md) — Accepted
 - [ADR-0020 Monaco desktop configuration workspace](adr/0020-monaco-desktop-config-workspace.md) — Accepted
+- [ADR-0021 Semantic Versioning and Keep a Changelog](adr/0021-semver-and-keep-a-changelog.md) — Accepted
 
 ## Spec template requirements
 

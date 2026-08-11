@@ -3,7 +3,7 @@
 Status: Accepted  
 Authority: Supreme  
 Owner: Maintainers  
-Last reviewed: 2026-07-21
+Last reviewed: 2026-08-11
 
 이 문서는 제품·문서·검증·릴리스보다 높은 권위를 가집니다. 예외는 제12조 절차를 따릅니다.
 
@@ -106,6 +106,10 @@ Last reviewed: 2026-07-21
 2. 서명된 로컬 release evidence와 artifact가 최종 신뢰 기준입니다.
 3. `.deb`, checksum, SBOM, signature, install·upgrade·recovery 증거를 함께 배포합니다.
 4. 기존 제품의 crate·DB·protocol·installer·release 체계를 공유하지 않습니다.
+5. 공개 제품 version은 Semantic Versioning 2.0.0을 따르고 공개 API 경계를 문서화합니다.
+6. 사용자용 root `CHANGELOG.md`는 Keep a Changelog 1.1.0 형식을 따릅니다.
+7. 공개한 version·tag·artifact를 덮어쓰지 않으며 변경은 새 version으로만 배포합니다.
+8. 공개 API 비호환 변경을 하위 version 증가나 changelog 누락으로 숨기지 않습니다.
 
 ## 제12조 — 개정과 예외
 

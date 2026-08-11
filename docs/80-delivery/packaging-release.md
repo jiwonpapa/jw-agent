@@ -3,7 +3,10 @@
 Status: Draft  
 Authority: Delivery  
 Owner: Release Maintainer  
-Last reviewed: 2026-07-21
+Last reviewed: 2026-08-11
+
+제품 version, 공개 API, changelog와 Debian package mapping은
+[Versioning and Changelog Policy](versioning-and-changelog.md)를 따릅니다.
 
 ## Package contents
 
@@ -31,7 +34,7 @@ Last reviewed: 2026-07-21
 ## Release command target
 
 ```text
-cargo xtask verify release --version X.Y.Z
+cargo xtask verify release --version X.Y.Z[-PRERELEASE]
 ```
 
 P3 전에는 이 command를 구현하거나 성공했다고 표시하지 않습니다.
@@ -39,6 +42,8 @@ P3 전에는 이 command를 구현하거나 성공했다고 표시하지 않습�
 ## Required evidence
 
 - toolchain, lockfile, source commit and clean status
+- valid SemVer, completed `Unreleased` changelog, version comparison link
+- workspace·web·lockfile·Debian package version consistency
 - full and VM gate results
 - artifact and SBOM hashes
 - package signature

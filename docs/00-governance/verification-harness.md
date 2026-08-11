@@ -3,7 +3,7 @@
 Status: Accepted  
 Authority: Governance  
 Owner: Verification Maintainer  
-Last reviewed: 2026-07-22
+Last reviewed: 2026-08-11
 
 ## 유일한 입구
 
@@ -26,7 +26,7 @@ cargo xtask verify p2-vm
 
 | Lane | 목적 | 증거 수준 |
 |---|---|---|
-| governance | 문서·정책·dependency source·원격 Actions 경계 | DOC/AUTO |
+| governance | 문서·정책·dependency source·제품 version·changelog·원격 Actions 경계 | DOC/AUTO |
 | p1-local / p2-local | governance + 단계별 Rust policy/fmt/clippy/test + OpenAPI drift + 웹 type/lint/unit/build | LOCAL_PASS |
 | p1-browser / p2-browser | governance + mock API 브라우저 세션·반응형·접근성 | LOCAL_PASS |
 | p1-vm / p2-vm | 실제 Ubuntu package·권한·PAM·공개 edge·typed operation·OpenSSH fault scenario | VM_PASS |
