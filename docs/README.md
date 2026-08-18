@@ -11,6 +11,8 @@ Last reviewed: 2026-08-11
 
 - [문서 권위와 소유권](00-governance/document-authority.md)
 - [Spec lifecycle](00-governance/specification-lifecycle.md)
+- [Capability registry](00-governance/capability-registry.md)
+- [OpenAPI Node runtime ADR](90-specs/adr/0023-openapi-node-runtime.md)
 - [빌드·의존성 정책](00-governance/build-and-dependency-policy.md)
 - [단일 검증 하네스](00-governance/verification-harness.md)
 - [증거 수준](00-governance/evidence-levels.md)
@@ -21,6 +23,7 @@ Last reviewed: 2026-08-11
 - [제품 경계](10-product/product-boundary.md)
 - [MVP 범위](10-product/mvp-scope.md)
 - [지원표](10-product/support-matrix.md)
+- [현재 capability 상태](10-product/capability-status.md)
 - [비목표](10-product/non-goals.md)
 - [핵심 사용자 흐름](10-product/user-workflows.md)
 - [배포 모델과 책임 고지](10-product/distribution-liability.md)

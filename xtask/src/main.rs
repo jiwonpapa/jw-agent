@@ -1,6 +1,9 @@
 #![forbid(unsafe_code)]
 
+mod capability_registry;
 mod edge_boundary;
+mod foundation_paths;
+mod openapi_policy;
 mod process;
 mod release_policy;
 mod sftp_boundary;
@@ -88,74 +91,6 @@ const P2_LOCAL_LANES: &[Lane] = &[Lane::P2Local];
 const BROWSER_LANES: &[Lane] = &[Lane::P1Browser, Lane::P2Browser];
 const VM_LANES: &[Lane] = &[Lane::P1Vm, Lane::P2Vm];
 const P2_VM_LANES: &[Lane] = &[Lane::P2Vm];
-
-const REQUIRED_FOUNDATION_PATHS: &[&str] = &[
-    "CHANGELOG.md",
-    "README.md",
-    "AGENTS.md",
-    "CONSTITUTION.md",
-    "docs/README.md",
-    "docs/00-governance/document-authority.md",
-    "docs/00-governance/specification-lifecycle.md",
-    "docs/00-governance/build-and-dependency-policy.md",
-    "docs/00-governance/verification-harness.md",
-    "docs/00-governance/evidence-levels.md",
-    "docs/00-governance/clean-room-policy.md",
-    "docs/10-product/product-boundary.md",
-    "docs/10-product/mvp-scope.md",
-    "docs/10-product/support-matrix.md",
-    "docs/10-product/non-goals.md",
-    "docs/20-architecture/system-context.md",
-    "docs/20-architecture/workspace-layout.md",
-    "docs/20-architecture/state-ownership.md",
-    "docs/20-architecture/public-ingress.md",
-    "docs/30-domain/domain-map.md",
-    "docs/30-domain/service-adapter-contract.md",
-    "docs/30-domain/safe-operation.md",
-    "docs/40-contracts/operation-lifecycle.md",
-    "docs/40-contracts/assurance-levels.md",
-    "docs/60-ui-ux/web-stack.md",
-    "docs/60-ui-ux/information-architecture.md",
-    "docs/60-ui-ux/design-system-dashboard.md",
-    "docs/70-security/privilege-and-auth.md",
-    "docs/70-security/pam-authentication.md",
-    "docs/70-security/public-access.md",
-    "docs/70-security/logging-and-forensics.md",
-    "docs/70-security/JW-agent-threat-model.md",
-    "docs/80-delivery/roadmap.md",
-    "docs/80-delivery/versioning-and-changelog.md",
-    "docs/80-delivery/definition-of-done.md",
-    "docs/80-delivery/test-strategy.md",
-    "docs/80-delivery/decision-register.md",
-    "docs/90-specs/README.md",
-    "docs/90-specs/operations/nginx-site-state-set-v1.md",
-    "docs/90-specs/operations/public-access-profile-v1.md",
-    "docs/90-specs/operations/managed-config-file-v1.md",
-    "docs/90-specs/operations/certbot-certificate-v1.md",
-    "docs/90-specs/access/openssh-terminal-sftp-v1.md",
-    "docs/90-specs/access/openssh-password-broker-v1.md",
-    "docs/90-specs/access/openssh-sftp-readonly-v1.md",
-    "docs/90-specs/access/openssh-sftp-atomic-upload-v1.md",
-    "docs/90-specs/auth/pam-login-v1.md",
-    "docs/90-specs/auth/totp-step-up-v1.md",
-    "docs/90-specs/observability/service-inventory-v1.md",
-    "docs/90-specs/ui/overview-v1.md",
-    "docs/90-specs/ui/login-session-v1.md",
-    "docs/90-specs/ui/responsive-shell-v1.md",
-    "docs/90-specs/ui/rollback-assurance-v1.md",
-    "docs/90-specs/ui/integration-catalog-v1.md",
-    "docs/90-specs/adr/0007-public-https-pam-boundary.md",
-    "docs/90-specs/adr/0008-p1-storage-and-contract-generation.md",
-    "docs/90-specs/adr/0009-p2-safety-kernel-decisions.md",
-    "docs/90-specs/adr/0010-local-maintenance-surfaces.md",
-    "docs/90-specs/adr/0011-certbot-network-runner.md",
-    "docs/90-specs/adr/0012-loopback-tls-verifier.md",
-    "docs/90-specs/adr/0013-system-openssh-client.md",
-    "docs/90-specs/adr/0016-totp-crypto-and-enrollment-boundary.md",
-    "docs/90-specs/adr/0018-independent-rust-management-edge.md",
-    "docs/90-specs/adr/0021-semver-and-keep-a-changelog.md",
-    "tests/spec-fixtures/nginx-site-state-set-v1.json",
-];
 
 const P1_REQUIRED_PATHS: &[&str] = &[
     "api/openapi.json",
@@ -365,6 +300,17 @@ const GATES: &[Gate] = &[
         run: gate_release_policy,
     },
     Gate {
+        id: "GOV-009",
+        owner: "Product Maintainer",
+        scope: "capability implementation, support, evidence, and exclusion registry",
+        inputs: "capabilities-v1.json, OpenAPI, typed operation constants, GateIds, spec index, and generated snapshot",
+        lanes: GOVERNANCE_LANES,
+        timeout_seconds: 3,
+        evidence: "capability states are unique, source-backed, indexed, and projection-clean",
+        failure_policy: "fail lane on state drift, unsupported claim, missing evidence, or stale generated status",
+        run: capability_registry::gate_capability_registry,
+    },
+    Gate {
         id: "P1-STRUCTURE",
         owner: "P1 Maintainers",
         scope: "P1 source, generated contracts, packaging, VM scenarios",
@@ -483,7 +429,7 @@ const GATES: &[Gate] = &[
         timeout_seconds: 180,
         evidence: "committed API artifacts match generators",
         failure_policy: "fail lane on generator error, timeout, or byte drift",
-        run: gate_openapi_drift,
+        run: openapi_policy::gate_openapi_drift,
     },
     Gate {
         id: "WEB-TYPECHECK",
@@ -804,13 +750,14 @@ fn execute() -> Result<(), String> {
         (Some("verify-gate"), Some(gate_id)) if arguments.next().is_none() => {
             verify_gate(&root, gate_id)
         }
+        (Some("render-capabilities"), None) => capability_registry::write_generated_document(&root),
         _ => Err(usage()),
     }
 }
 
 fn usage() -> String {
     String::from(
-        "usage: cargo xtask list | cargo xtask verify-gate GATE-ID | cargo xtask verify governance|p1-local|p2-local|p1-browser|p2-browser|p1-vm|p2-vm",
+        "usage: cargo xtask list | cargo xtask render-capabilities | cargo xtask verify-gate GATE-ID | cargo xtask verify governance|p1-local|p2-local|p1-browser|p2-browser|p1-vm|p2-vm",
     )
 }
 
@@ -899,7 +846,7 @@ fn verify_gate(root: &Path, gate_id: &str) -> Result<(), String> {
 }
 
 fn gate_required_documents(root: &Path, _timeout: Duration) -> Result<(), String> {
-    let missing: Vec<&str> = REQUIRED_FOUNDATION_PATHS
+    let missing: Vec<&str> = foundation_paths::REQUIRED_FOUNDATION_PATHS
         .iter()
         .copied()
         .filter(|relative| !root.join(relative).is_file())
@@ -1344,77 +1291,6 @@ fn gate_rust_clippy(root: &Path, timeout: Duration) -> Result<(), String> {
 
 fn gate_rust_test(root: &Path, timeout: Duration) -> Result<(), String> {
     run_command(root, "cargo", ["test", "--workspace", "--locked"], timeout)
-}
-
-fn gate_openapi_drift(root: &Path, timeout: Duration) -> Result<(), String> {
-    let temporary = root
-        .join("target")
-        .join(format!("xtask-openapi-{}", std::process::id()));
-    fs::create_dir_all(root.join("target")).map_err(|error| error.to_string())?;
-    fs::create_dir(&temporary).map_err(|error| {
-        format!(
-            "cannot create contract evidence directory {}: {error}",
-            temporary.display()
-        )
-    })?;
-    let result = generate_and_compare_contracts(root, &temporary, timeout);
-    let cleanup = fs::remove_dir_all(&temporary).map_err(|error| {
-        format!(
-            "cannot remove contract evidence directory {}: {error}",
-            temporary.display()
-        )
-    });
-    match (result, cleanup) {
-        (Err(error), _) => Err(error),
-        (Ok(()), Err(error)) => Err(error),
-        (Ok(()), Ok(())) => Ok(()),
-    }
-}
-
-fn generate_and_compare_contracts(
-    root: &Path,
-    temporary: &Path,
-    timeout: Duration,
-) -> Result<(), String> {
-    let generated_openapi = temporary.join("openapi.json");
-    let generated_schema = temporary.join("schema.d.ts");
-    run_command_os(
-        root,
-        OsStr::new("cargo"),
-        &[
-            OsString::from("run"),
-            OsString::from("--locked"),
-            OsString::from("--quiet"),
-            OsString::from("-p"),
-            OsString::from("jw-agentd"),
-            OsString::from("--"),
-            OsString::from("openapi"),
-            generated_openapi.as_os_str().to_owned(),
-        ],
-        timeout,
-    )?;
-    let generator = root.join("apps/web/node_modules/.bin/openapi-typescript");
-    if !generator.is_file() {
-        return Err(String::from(
-            "OpenAPI generator missing; run bun install in apps/web",
-        ));
-    }
-    run_command_os(
-        root,
-        generator.as_os_str(),
-        &[
-            generated_openapi.as_os_str().to_owned(),
-            OsString::from("-o"),
-            generated_schema.as_os_str().to_owned(),
-        ],
-        timeout,
-    )?;
-    compare_files(root, &generated_openapi, &root.join("api/openapi.json"))?;
-    compare_files(
-        root,
-        &generated_schema,
-        &root.join("apps/web/src/shared/api/generated/schema.d.ts"),
-    )
 }
 
 fn gate_web_typecheck(root: &Path, timeout: Duration) -> Result<(), String> {

@@ -3,7 +3,7 @@
 Status: Accepted  
 Authority: Delivery  
 Owner: Delivery Maintainer  
-Last reviewed: 2026-08-03
+Last reviewed: 2026-08-18
 
 ## P0 — Foundation
 
@@ -72,8 +72,12 @@ P1 public profile 범위는 existing certificate와 administrator-owned opt-in t
 
 현재 기준선:
 
-- `p2-local` 23개, `p2-browser` 8개 gate와 Playwright 45개 scenario가 PASS했습니다.
-- `p2-vm` 28개 gate에서 독립 Rust management edge, Nginx·Apache·PHP-FPM 서비스 lifecycle과 설정 fault matrix, UFW 제품 소유 규칙, forensic lockdown, Certbot lifecycle, non-root OpenSSH terminal, home-scoped SFTP G0/G1과 TOTP step-up을 검증했습니다.
+- 최신 구현·support·evidence 상태는 생성된
+  [Capability Status](../10-product/capability-status.md)가 소유합니다. GateId와 lane
+  구성은 `cargo xtask list`로 조회하며 이 문서에 개수를 복사하지 않습니다.
+- `p2-vm`은 독립 Rust management edge, Nginx·Apache·PHP-FPM 서비스 lifecycle과
+  설정 fault matrix, UFW 제품 소유 규칙, forensic lockdown, Certbot lifecycle,
+  non-root OpenSSH terminal, home-scoped SFTP G0/G1과 TOTP step-up을 검증했습니다.
 - Ubuntu 24.04 VM에 `jw-agent_0.2.0~p2.24_amd64.deb`를 설치했고 SHA-256은 `9c3779180facc4cd4d4e83a17b773bb77488b401d8d138aa131bfb4cfd3d2ffc`입니다.
 - `jw-edge`가 비권한 9443 기본 관리 ingress를 소유하며, edge 부재 시 Nginx stop은 차단되고 Nginx 중단 뒤에도 `:9443` UI·API가 유지됩니다.
 - 공개 HTTPS 실브라우저에서 grouped navigation, account drawer, 자원 meter, 서비스 family card, SFTP 3-pane, terminal-first surface와 desktop Monaco 설정 workspace를 확인했습니다.
@@ -171,10 +175,13 @@ VM에서 `risky_operations` 정책 활성화, PAM+TOTP 관리 모드 진입, 그
 
 구현:
 
-- limited logs, failed units, SSL expiry, security update count
-- MySQL/MariaDB와 Redis read-only adapters
-- forensic lockdown, evidence export, update/recovery UX
+- limited logs와 security update count
+- MySQL/MariaDB와 Redis 상세 read-only adapters
+- backup freshness, evidence export, update/recovery UX
 - signed `.deb`, SBOM, checksum, docs
+
+failed unit·SSL expiry 관찰과 forensic lockdown은 P2 구현·VM evidence에 포함됩니다.
+남은 P3 범위와 blocker는 Capability Status에서 관리합니다.
 
 완료 증거:
 

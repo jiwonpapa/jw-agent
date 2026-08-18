@@ -3,7 +3,7 @@
 Status: Accepted  
 Authority: Governance  
 Owner: Build Maintainer  
-Last reviewed: 2026-07-22
+Last reviewed: 2026-08-18
 
 ## 고정 기준
 
@@ -11,9 +11,14 @@ Last reviewed: 2026-07-22
 - MSRV: root workspace `rust-version`
 - Rust edition: 2024, virtual workspace `resolver = "3"`
 - JavaScript runtime·package manager: Bun 하나
+- OpenAPI upstream CLI compatibility runtime: Node 22–24
 - 배포 target: Ubuntu 24.04 LTS amd64 glibc `.deb`
 
 현재 1.96.0은 이 작업공간에서 실제 확인된 toolchain이라 P0에 고정했습니다. 변경은 작은 upgrade 작업과 gate 증거로만 수행합니다.
+
+Node는 [ADR-0023](../90-specs/adr/0023-openapi-node-runtime.md)에 따라
+`openapi-typescript` 실행에만 사용합니다. package 설치·일반 웹 script는 계속 Bun이
+단독 소유하며 npm·pnpm·Yarn을 추가하지 않습니다.
 
 Rust 2024 virtual workspace는 resolver를 자동 추론할 루트 package가 없으므로 `resolver = "3"`을 명시합니다. [Rust Edition Guide](https://doc.rust-lang.org/edition-guide/rust-2024/cargo-resolver.html)
 

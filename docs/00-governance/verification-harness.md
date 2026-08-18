@@ -3,7 +3,7 @@
 Status: Accepted  
 Authority: Governance  
 Owner: Verification Maintainer  
-Last reviewed: 2026-08-11
+Last reviewed: 2026-08-18
 
 ## 유일한 입구
 
@@ -11,6 +11,7 @@ Last reviewed: 2026-08-11
 
 ```bash
 cargo xtask list
+cargo xtask render-capabilities
 cargo xtask verify-gate WEB-TYPECHECK
 cargo xtask verify governance
 cargo xtask verify p2-local
@@ -43,6 +44,18 @@ browser lane은 UI 계약 검증이며 실제 PAM·systemd·Nginx 통합 증거�
 - `failure_policy`
 
 결과는 `PASS`, `FAIL`, `BLOCKED`, `SKIPPED`입니다. Release 필수 gate는 `SKIPPED`일 수 없습니다.
+
+`GOV-009`는 [Capability Registry](capability-registry.md)의 상태 주장이 실제 OpenAPI,
+typed operation, GateId와 spec index를 가리키는지 검증합니다. capability 상태 문서
+생성은 별도 검증 하네스가 아니며 같은 `xtask` 구현을 사용합니다.
+
+`OPENAPI-DRIFT`는 [ADR-0023](../90-specs/adr/0023-openapi-node-runtime.md)의 Node
+22–24 compatibility runtime으로 고정된 upstream generator를 실행합니다. 웹 package
+설치와 나머지 script는 계속 Bun만 사용합니다.
+
+generator가 I/O timeout되면 timeout을 늘리지 않습니다. 먼저 현재 lockfile을 유지한
+채 `apps/web`에서 `bun install --frozen-lockfile`로 dependency tree를 재구성하고 같은
+GateId를 다시 실행합니다. 새 설치가 통과해야만 기존 cache 손상으로 판정합니다.
 
 ## 중복 방지
 

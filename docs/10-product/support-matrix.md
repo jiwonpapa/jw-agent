@@ -3,7 +3,11 @@
 Status: Accepted  
 Authority: Product  
 Owner: Support Maintainer  
-Last reviewed: 2026-07-22
+Last reviewed: 2026-08-18
+
+구현·부분 구현·미구현·제외 상태와 evidence의 권위 원본은
+[Capability Status](capability-status.md)입니다. 이 표는 지원 환경과 layout 경계만
+소유하며 gate 개수나 진행 상태를 복제하지 않습니다.
 
 | Surface | MVP support | Mode |
 |---|---|---|
@@ -15,14 +19,14 @@ Last reviewed: 2026-07-22
 | MySQL/MariaDB | apt-installed units | Observe |
 | Redis | apt-installed unit | Observe |
 | Certificate/Certbot | Ubuntu apt Certbot + Nginx webroot | lineage/timer observe + renewal dry-run `G1 VM_PASS`; guided issue failure-safe `VM_PASS`; protected-vhost attach `G2 VM_PASS`; public CA success pending |
-| UFW | installed status | Observe |
+| UFW | Ubuntu apt UFW + 제품 소유 규칙 | Observe + typed allow/delete G2 `VM_PASS` |
 | Linux identity | Ubuntu local `pam_unix` account | Supported |
 | Product role | explicit `jw-agent-*` Linux groups | Supported |
 | Public browser | Nginx+Certbot HTTPS 443 → agentd UDS | Opt-in supported |
 | Recovery browser | loopback through SSH tunnel | Required fallback |
 | Responsive web | 320px mobile through desktop | Supported |
 | Web terminal | existing OpenSSH, non-root Linux user | P2 `G1 VM_PASS`; loopback password auth required |
-| SFTP | existing OpenSSH subsystem, non-root Linux user home | G0 list/stat/text-read/download `VM_PASS`; planned regular-file create/replace `G1 VM_PASS` |
+| SFTP | existing OpenSSH subsystem, non-root Linux user home | G0 list/stat/text-read/download + bounded regular-file create/replace G1 `VM_PASS` |
 | Managed config | adapter allowlisted resource | Nginx active + PHP 8.3 FPM resources G2; receipt-based restore after gate |
 | Direct agentd Internet bind | any TCP port | Unsupported |
 
@@ -39,7 +43,7 @@ Last reviewed: 2026-07-22
 - terminal은 OpenSSH 발견, non-root account, same-origin WSS와 session policy가 모두 충족될 때만 capability를 반환합니다. package는 기존 sshd 인증 정책을 자동 변경하지 않습니다.
 - SFTP G0는 terminal 증거를 재사용하지 않고 별도 VM gate에서 canonical home, traversal·absolute path·외부 symlink·size·session 격리·logout와 metadata-only audit를 검증했습니다. G1은 같은 홈 경계 안의 일반 파일 create/replace만 exact plan·PAM 재인증·fsync·원자 교체·mode/size/digest read-back으로 검증했습니다. delete·move·chmod·mkdir와 root/system path 쓰기는 `UNIMPLEMENTED`입니다.
 - 관찰 실패, 미설치, 지원 불가, 권한 부족을 서로 다른 상태로 표시합니다.
-- 지원표는 구현 단계에서 capability registry로 이전하고 문서를 생성합니다.
+- 구현·검증 상태는 capability registry에서만 변경합니다.
 
 ## 보류
 

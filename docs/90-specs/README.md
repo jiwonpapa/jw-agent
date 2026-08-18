@@ -3,17 +3,18 @@
 Status: Accepted  
 Authority: Specification Index  
 Owner: Maintainers  
-Last reviewed: 2026-08-11
+Last reviewed: 2026-08-18
 
 ## Operation specs
 
 - [OPS-NGINX-SITE-STATE-V1](operations/nginx-site-state-set-v1.md) — Accepted, P2 active implementation
 - [OPS-PUBLIC-ACCESS-PROFILE-V1](operations/public-access-profile-v1.md) — Accepted
 - [OPS-MANAGED-CONFIG-FILE-V1](operations/managed-config-file-v1.md) — Accepted, bounded service-root config tree and reversible file mutation
-- [OPS-PHP-FPM-CONFIG-V1](operations/php-fpm-config-v1.md) — Accepted, strict multi-resource profile pending current VM gate
+- [OPS-PHP-FPM-CONFIG-V1](operations/php-fpm-config-v1.md) — Accepted, Ubuntu 24.04 PHP 8.3 FPM managed resources `VM_PASS`
 - [OPS-MANAGED-CONFIG-RESTORE-V1](operations/managed-config-restore-v1.md) — Accepted
+- [OPS-MANAGED-CONFIG-DIAGNOSTIC-V1](operations/managed-config-diagnostic-v1.md) — Accepted, official validator location·changed-line mapping `VM_PASS`
 - [OPS-SERVICE-CONTROL-V1](operations/service-control-v1.md) — Accepted
-- [OPS-UFW-RULE-V1](operations/ufw-rule-v1.md) — Accepted, typed product-owned rule 구현·VM gate 대기
+- [OPS-UFW-RULE-V1](operations/ufw-rule-v1.md) — Accepted, typed product-owned allow/delete와 self-lockout guard `VM_PASS`
 - [OPS-CERTBOT-CERTIFICATE-V1](operations/certbot-certificate-v1.md) — Accepted, runner/inventory/renew-test, private-LAN issuance failure and protected-vhost attach rollback `VM_PASS`; public-CA success pending
 
 ## Access specs
@@ -65,6 +66,8 @@ Last reviewed: 2026-08-11
 - [ADR-0019 Managed service config and firewall boundary](adr/0019-managed-service-config-and-firewall-boundary.md) — Accepted
 - [ADR-0020 Monaco desktop configuration workspace](adr/0020-monaco-desktop-config-workspace.md) — Accepted
 - [ADR-0021 Semantic Versioning and Keep a Changelog](adr/0021-semver-and-keep-a-changelog.md) — Accepted
+- [ADR-0022 Capability Registry and Generated Status](adr/0022-capability-registry.md) — Accepted
+- [ADR-0023 OpenAPI Node Compatibility Runtime](adr/0023-openapi-node-runtime.md) — Accepted
 
 ## Spec template requirements
 

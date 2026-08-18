@@ -13,7 +13,7 @@ const LEGACY_BUDGETS: &[(&str, usize)] = &[
     ("crates/jw-opsd/src/engine.rs", 4_396),
     ("xtask/src/vm.rs", 4_081),
     ("crates/jw-agentd/src/api.rs", 3_284),
-    ("xtask/src/main.rs", 1_650),
+    ("xtask/src/main.rs", 1_504),
     ("crates/jw-opsd/src/ledger.rs", 1_503),
     (
         "apps/web/src/features/certificates/certificates-screen.tsx",
